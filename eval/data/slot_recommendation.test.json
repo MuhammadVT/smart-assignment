@@ -1,0 +1,19 @@
+{
+  "eval_set_id": "slot_recommendation_basic",
+  "name": "Slot recommendation: basic feasible-option ranking",
+  "description": "[PLACEHOLDER] Golden dataset for the slot_recommendation workflow. Replace eval_cases below with real customer profiles + mocked route data + the known-good expected recommendation, captured via the ADK Web UI's trajectory recording feature once real route data is available. See README.md and https://google.github.io/adk-docs/evaluate/ for the full workflow.",
+  "eval_cases": [
+    {
+      "eval_case_id": "placeholder_case_1",
+      "comment": "[ASSUMPTION] Not a real eval case yet -- no real route/capacity data was available to build a golden dataset against. This file exists to establish the expected eval/ structure; populate before relying on automated regression detection.",
+      "prompt": {
+        "role": "user",
+        "parts": [
+          {
+            "text": "New customer: Riverside Diner, 150 cases/week, mixed temp zone, prefers Tue/Wed mornings."
+          }
+        ]
+      }
+    }
+  ]
+}
