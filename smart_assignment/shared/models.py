@@ -53,10 +53,13 @@ class CustomerProfile:
     """
     New-customer intake (spec: address, order quantity, optional window).
 
-    `location` is populated by the geocoding step; it is None until then.
+    `customer_number` is the Sysco identifier in ``NNN-NNNNNN`` form (site/OpCo
+    + per-site number); see `shared/customer.py`. `location` is populated by the
+    geocoding step; it is None until then. `name` is descriptive only — the
+    workflow identifies customers by `customer_number`, never by name.
     """
 
-    customer_id: str
+    customer_number: str
     name: str
     address: str
     order_quantity_cases: int
@@ -73,7 +76,7 @@ class CustomerProfile:
 class RouteStop:
     """An existing account already committed to a route's schedule."""
 
-    customer_id: str
+    customer_number: str  # Sysco customer number (NNN-NNNNNN)
     location: GeoPoint
     case_volume: int
 
@@ -171,7 +174,7 @@ class Decision(str, Enum):
 class SlotRecommendation:
     """The explainable output of the workflow for one customer."""
 
-    customer_id: str
+    customer_number: str
     customer_name: str
     decision: Decision
     confidence: float

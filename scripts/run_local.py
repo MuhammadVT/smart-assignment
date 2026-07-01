@@ -11,8 +11,8 @@ layer, which automatically falls back to a deterministic trace when no
 GOOGLE_API_KEY / Vertex credentials are configured.
 
 Run:
-    python3 scripts/run_local.py                 # all sample customers
-    python3 scripts/run_local.py --customer CUST-NEW-9002
+    python3 scripts/run_local.py                       # all sample customers
+    python3 scripts/run_local.py --customer 067-100002 # one, by customer number
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ def _print_result(result: RecommendationResult) -> None:
     pref = fmt_window(c.preferred_window) if c.preferred_window else "any"
 
     print(_RULE)
-    print(f"CUSTOMER  {c.name} ({c.customer_id})")
+    print(f"CUSTOMER  {c.name} ({c.customer_number})")
     print(f"  intake    address={c.address!r}")
     print(f"            order={c.order_quantity_cases} cases, preferred_window={pref}")
     loc = c.location
@@ -81,15 +81,15 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run the Smart Assignment workflow on mock data")
     parser.add_argument(
         "--customer",
-        help="Only run for this customer_id (default: all sample customers)",
+        help="Only run for this customer number, e.g. 067-100002 (default: all)",
     )
     args = parser.parse_args()
 
     customers = SAMPLE_CUSTOMERS
     if args.customer:
-        customers = [c for c in customers if c.customer_id == args.customer]
+        customers = [c for c in customers if c.customer_number == args.customer]
         if not customers:
-            raise SystemExit(f"No sample customer with id {args.customer!r}")
+            raise SystemExit(f"No sample customer with customer number {args.customer!r}")
 
     print(_RULE)
     print("SMART ASSIGNMENT - slot_recommendation workflow (mock Sysco data)")

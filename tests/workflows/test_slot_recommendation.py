@@ -29,7 +29,7 @@ def _run(customer, config=None):
 
 def test_clear_case_is_recommended():
     customer = CustomerProfile(
-        customer_id="C1",
+        customer_number="067-100001",
         name="Bayou City Bistro",
         address="1200 McKinney St, Houston, TX 77010",
         order_quantity_cases=90,
@@ -43,7 +43,7 @@ def test_clear_case_is_recommended():
 
 def test_unserviceable_customer_escalates_no_feasible_slot():
     customer = CustomerProfile(
-        customer_id="C3",
+        customer_number="067-100003",
         name="Katy Prairie Steakhouse",
         address="24600 Katy Fwy, Katy, TX 77494",
         order_quantity_cases=260,
@@ -55,9 +55,22 @@ def test_unserviceable_customer_escalates_no_feasible_slot():
     assert rec.requires_human_review is True
 
 
+def test_malformed_customer_number_is_rejected():
+    import pytest
+
+    customer = CustomerProfile(
+        customer_number="CUST-NEW-9001",  # not the NNN-NNNNNN format
+        name="Bad Number Diner",
+        address="1200 McKinney St, Houston, TX 77010",
+        order_quantity_cases=90,
+    )
+    with pytest.raises(ValueError):
+        _run(customer)
+
+
 def test_near_tie_escalates_low_confidence():
     customer = CustomerProfile(
-        customer_id="C2",
+        customer_number="067-100002",
         name="Galleria Grill & Catering",
         address="5085 Westheimer Rd, Houston, TX 77056",
         order_quantity_cases=140,
@@ -113,7 +126,7 @@ def _rec(decision):
     from smart_assignment.shared.models import SlotRecommendation
 
     return SlotRecommendation(
-        customer_id="C",
+        customer_number="067-100000",
         customer_name="n",
         decision=decision,
         confidence=0.9,

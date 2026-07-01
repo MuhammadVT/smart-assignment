@@ -8,9 +8,10 @@ graph wiring itself lives in `graph.py`.
 
 Input note: `adk run` / `adk web` hand the workflow a free-text user message.
 The entry node therefore accepts `str` and resolves it to one of the mock
-Sysco customers (by customer_id or name) — e.g. type `CUST-NEW-9002` or
-`Galleria`. Replace `resolve_customer` with real intake parsing / a form when
-wiring this to a real front end.
+Sysco customers **by customer number only** (format ``NNN-NNNNNN``) — e.g.
+type `067-100002`. Names are never accepted as input. Replace
+`resolve_customer` with real intake parsing / a form when wiring this to a real
+front end.
 
 Node flow (mirrors pipeline.py):
   intake_node -> constraint_and_score_node -> route_on_feasibility
@@ -30,6 +31,7 @@ from smart_assignment.integrations.geocoding_client import MockGeocoder
 from smart_assignment.integrations.route_capacity_client import fetch_candidate_routes
 from smart_assignment.mock_customers import SAMPLE_CUSTOMERS
 from smart_assignment.shared.config import DEFAULT_CONFIG
+from smart_assignment.shared.customer import normalize_customer_number
 from smart_assignment.shared.models import (
     CustomerProfile,
     Decision,
@@ -51,19 +53,22 @@ _DECISION_MARK = {
 
 
 def resolve_customer(user_text: str) -> CustomerProfile:
-    """Map a typed message (customer_id or name fragment) to a mock customer."""
-    query = (user_text or "").strip().lower()
+    """Map a typed customer number (``NNN-NNNNNN``) to a mock customer.
+
+    Names are not accepted — Sysco identifies customers by customer number.
+    Unknown/blank input falls back to the first sample so the demo still runs.
+    """
+    query = normalize_customer_number(user_text)
     if query:
         for customer in SAMPLE_CUSTOMERS:
-            if query == customer.customer_id.lower() or query in customer.name.lower():
+            if query == customer.customer_number:
                 return customer
-    # Unknown / empty input -> default to the first sample so the demo still runs.
     return SAMPLE_CUSTOMERS[0]
 
 
 def _render(rec: SlotRecommendation) -> types.Content:
     lines = [
-        f"Customer: {rec.customer_name} ({rec.customer_id})",
+        f"Customer: {rec.customer_name} ({rec.customer_number})",
         f"Decision: {_DECISION_MARK[rec.decision]}  |  confidence {rec.confidence:.0%}",
     ]
     if rec.recommended_route_id:
@@ -84,9 +89,9 @@ def _render(rec: SlotRecommendation) -> types.Content:
 
 
 # NOTE: ADK persists session *state* as JSON, so state may hold only
-# JSON-serializable values. We stash the customer_id (a string) and re-resolve
-# the (module-level, already-geocoded) CustomerProfile in later nodes; the
-# richer evaluation objects are passed node-to-node via Event.output instead.
+# JSON-serializable values. We stash the customer_number (a string) and
+# re-resolve the (module-level, already-geocoded) CustomerProfile in later
+# nodes; richer evaluation objects are passed node-to-node via Event.output.
 
 
 # --- Step 1 + 2: intake + geo-lookup (entry node, receives user text) ------
@@ -95,14 +100,14 @@ def _render(rec: SlotRecommendation) -> types.Content:
 def intake_node(node_input: str) -> Event:
     customer = intake(resolve_customer(node_input))
     candidates = geo_lookup(customer, fetch_candidate_routes(), MockGeocoder(), DEFAULT_CONFIG)
-    return Event(output=candidates, state={"customer_id": customer.customer_id})
+    return Event(output=candidates, state={"customer_number": customer.customer_number})
 
 
 # --- Step 3 + 4: hard constraints then weighted scoring --------------------
 
 
 def constraint_and_score_node(node_input: list, ctx: Context) -> Event:
-    customer = resolve_customer(ctx.state["customer_id"])
+    customer = resolve_customer(ctx.state["customer_number"])
     evaluations = evaluate_candidates(customer, node_input, DEFAULT_CONFIG)
     return Event(output=evaluations)
 
@@ -117,7 +122,7 @@ def route_on_feasibility(node_input: list) -> Event:
 
 def escalate_no_feasible_slot(node_input: list, ctx: Context) -> types.Content:
     """Terminal: no slot satisfied the hard constraints (would page a specialist)."""
-    customer = resolve_customer(ctx.state["customer_id"])
+    customer = resolve_customer(ctx.state["customer_number"])
     rec = decide(customer, node_input, LLMReasoner(DEFAULT_CONFIG), DEFAULT_CONFIG)
     return _render(rec)
 
@@ -126,7 +131,7 @@ def escalate_no_feasible_slot(node_input: list, ctx: Context) -> types.Content:
 
 
 def build_recommendation_node(node_input: list, ctx: Context) -> Event:
-    customer = resolve_customer(ctx.state["customer_id"])
+    customer = resolve_customer(ctx.state["customer_number"])
     rec = decide(customer, node_input, LLMReasoner(DEFAULT_CONFIG), DEFAULT_CONFIG)
     return Event(output=rec)
 
