@@ -35,7 +35,10 @@ or escalates to a human specialist when nothing fits or the call is too close.
 |---|---|
 | Geographic serviceability | customer within the route's service radius (and a global mileage cap) |
 | Route capacity | utilization stays `<= 90%` after adding the order |
-| Delivery-window compatibility | route has a window overlapping the customer's preference (if stated) |
+
+The customer's **preferred delivery window is a soft preference, not a hard
+constraint** — it never eliminates a route; it only feeds the `window_match`
+scoring factor below.
 
 **Scoring factors (step 4) — weighted, in priority order:**
 
@@ -43,7 +46,7 @@ or escalates to a human specialist when nothing fits or the call is too close.
 |---|---|---|
 | `geographic_clustering` | 0.45 | how tightly the customer clusters with the route's existing stops |
 | `capacity_buffer` | 0.30 | headroom left on the truck after the add (resilience) |
-| `window_match` | 0.25 | how much of the preferred window the route can cover |
+| `window_match` | 0.25 | how much of the preferred window the route can cover (soft preference) |
 
 Constraints and scoring are **deterministic Python** — reproducible and
 auditable. An LLM is *structurally unable* to place a customer onto a full

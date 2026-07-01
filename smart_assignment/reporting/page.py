@@ -51,7 +51,6 @@ FACTOR_LABEL = {
 CONSTRAINT_LABEL = {
     "geographic_serviceability": "serviceability",
     "route_capacity": "capacity",
-    "delivery_window_compatibility": "window",
 }
 DECISION_PILL = {
     Decision.RECOMMENDED: ("rec", "✔ Recommended"),
@@ -140,6 +139,16 @@ _STYLE = """
   .formula { font-family: var(--mono); background: #f4f7fc; border: 1px solid #dde6f2; border-radius: 9px;
     padding: 11px 13px; font-size: 12.5px; color: #22364f; margin-top: 12px; overflow-x: auto; }
   .formula b { color: var(--navy); }
+  .srccard h4 { display: flex; align-items: center; gap: 8px; }
+  .srccard .badge { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 999px; }
+  .srccard .badge.cfg { background: var(--blue-soft); color: var(--blue); }
+  .srccard .badge.route { background: #eef7ef; color: var(--green); }
+  .srccard .badge.intake { background: var(--violet-soft); color: var(--violet); }
+  .srclist { margin: 10px 0 0; padding: 0; list-style: none; display: grid; gap: 7px; font-size: 12.5px; }
+  .srclist li { display: flex; justify-content: space-between; gap: 10px; }
+  .srclist .k { color: #33415c; }
+  .srclist .v { font-family: var(--mono); color: var(--navy); font-weight: 600; white-space: nowrap; }
+  .srclist .src { color: var(--muted); }
   .arch { background: #fff; border: 1px solid var(--line); border-radius: var(--radius);
     padding: 20px; box-shadow: var(--shadow); }
   .arch svg { width: 100%; height: auto; display: block; }
@@ -158,14 +167,21 @@ _STYLE = """
   .sim-controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
   .sim input { font-size: 15px; padding: 11px 13px; border: 1px solid var(--line); border-radius: 9px;
     min-width: 200px; font-family: var(--mono); }
-  .sim button { background: var(--blue); color: #fff; border: 0; border-radius: 9px; padding: 12px 18px;
-    font-weight: 700; font-size: 14px; cursor: pointer; }
-  .sim button:disabled { opacity: .55; cursor: default; }
-  .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
-  .chip-btn { font-family: var(--mono); font-size: 12px; border: 1px solid var(--line); background: #f5f8fc;
-    color: var(--blue); border-radius: 999px; padding: 6px 11px; cursor: pointer; }
+  .sim button.run { background: var(--blue); color: #fff; border: 0; border-radius: 9px; padding: 12px 20px;
+    font-weight: 700; font-size: 14.5px; cursor: pointer; box-shadow: 0 2px 6px rgba(18,87,166,.25); }
+  .sim button.run:disabled { opacity: .55; cursor: default; box-shadow: none; }
+  .sim input.flash { animation: flash .8s ease; }
+  @keyframes flash { 0% { box-shadow: 0 0 0 3px rgba(18,87,166,.45); border-color: var(--blue); }
+    100% { box-shadow: 0 0 0 0 rgba(18,87,166,0); } }
+  .picker { margin-top: 16px; padding: 14px 16px; border: 1px dashed #c7d6ea; border-radius: 11px; background: #fbfcfe; }
+  .picker-label { display: block; font-size: 12.5px; color: var(--muted); font-weight: 600; margin-bottom: 10px; }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; }
+  .chip-btn { font-family: var(--mono); font-size: 12px; border: 1px solid #c7d6ea; background: #fff;
+    color: var(--blue); border-radius: 8px; padding: 7px 11px; cursor: pointer; }
   .chip-btn:hover { background: var(--blue-soft); }
-  .sim-error { color: var(--red); font-size: 13px; margin-top: 10px; min-height: 16px; }
+  .chip-btn.selected { background: var(--blue); color: #fff; border-color: var(--blue); }
+  .sim-hint { margin-top: 10px; font-size: 12.5px; color: var(--green); min-height: 16px; font-weight: 600; }
+  .sim-error { color: var(--red); font-size: 13px; margin-top: 6px; min-height: 16px; }
   .sim-cust { margin: 14px 0 4px; font-size: 14.5px; }
   .sim-cust .cnum { font-family: var(--mono); color: var(--muted); font-size: 12px; }
   .sim-step { display: grid; grid-template-columns: 26px 1fr; gap: 12px; padding: 11px 0; border-top: 1px solid var(--line); }
@@ -247,7 +263,7 @@ _ARCH_SVG = """
   </defs>
 
   <rect x="350" y="12" width="280" height="40" rx="20" fill="#0b2e59"/>
-  <text x="490" y="38" text-anchor="middle" fill="#fff" font-size="14" font-weight="600">New customer · 067-NNNNNN</text>
+  <text x="490" y="38" text-anchor="middle" fill="#fff" font-size="14" font-weight="600">New customer · 067-123456</text>
   <line x1="490" y1="52" x2="490" y2="86" stroke="#1257a6" stroke-width="2" marker-end="url(#arw)"/>
 
   <rect x="24" y="88" width="620" height="440" rx="18" fill="#eef5fd" stroke="#1257a6" stroke-width="2"/>
@@ -318,13 +334,26 @@ _SIM_JS = """
   var stepsEl = document.getElementById('sim-steps');
   var outEl = document.getElementById('sim-output');
   var errEl = document.getElementById('sim-error');
+  var hintEl = document.getElementById('sim-hint');
   var nums = Object.keys(DATA);
 
   nums.forEach(function (num) {
     var b = document.createElement('button');
     b.className = 'chip-btn';
     b.innerHTML = num + ' · ' + DATA[num].name;
-    b.addEventListener('click', function () { input.value = num; run(); });
+    // Clicking a sample loads it INTO the input box (it does not run) so the
+    // relationship is obvious; the user then presses Run.
+    b.addEventListener('click', function () {
+      input.value = num;
+      chipsEl.querySelectorAll('.chip-btn').forEach(function (x) { x.classList.remove('selected'); });
+      b.classList.add('selected');
+      input.classList.remove('flash');
+      void input.offsetWidth;  // restart the flash animation
+      input.classList.add('flash');
+      input.focus();
+      errEl.textContent = '';
+      hintEl.textContent = 'Loaded ' + num + ' into the box above — now press “Run agent workflow”.';
+    });
     chipsEl.appendChild(b);
   });
 
@@ -332,7 +361,7 @@ _SIM_JS = """
 
   async function run() {
     var num = (input.value || '').trim();
-    errEl.textContent = ''; outEl.innerHTML = ''; stepsEl.innerHTML = '';
+    errEl.textContent = ''; hintEl.textContent = ''; outEl.innerHTML = ''; stepsEl.innerHTML = '';
     var d = DATA[num];
     if (!d) { errEl.textContent = 'Enter a valid mock customer number: ' + nums.join(', '); return; }
     runBtn.disabled = true;
@@ -617,7 +646,7 @@ def _sim_steps(result: RecommendationResult, config: Config) -> list[dict]:
         },
         {
             "title": "Constraint Check",
-            "action": "The agent applies every hard rule and removes infeasible routes.",
+            "action": "The agent applies the two hard rules (serviceability, capacity) and removes infeasible routes.",
             "lines": con,
         },
         {
@@ -660,7 +689,8 @@ def _scoring_section(config: Config) -> str:
         <div class="formula">score = clamp( <b>cases_remaining_after_add</b> ÷ <b>vehicle_capacity</b> , 0, 1 )</div>
         <p style="margin-top:8px;font-size:12.5px">Remaining = capacity − already-committed cases − this order.</p></div>
       <div class="card"><div class="icon">🎯</div><h3>Window match · weight {ww:.2f}</h3>
-        <p>How much of the customer's preferred window the route's window can cover.</p>
+        <p>How much of the customer's preferred window the route's window can cover. This is a <b>soft
+          preference</b> — it shapes the score but never eliminates a route.</p>
         <div class="formula">score = clamp( <b>overlap_minutes</b> ÷ <b>preferred_window_minutes</b> , 0, 1 )</div>
         <p style="margin-top:8px;font-size:12.5px">If the customer states no window, a neutral {neutral:.2f} is used
           instead.</p></div>
@@ -677,6 +707,71 @@ def _scoring_section(config: Config) -> str:
 <br/>single option: confidence = 0.5 + 0.5·<b>top</b> &#160;&#160;·&#160;&#160; no feasible option: confidence = 0</div>
       <p style="margin-top:12px;font-size:12.5px;color:var(--muted)">A strong, clearly-separated winner scores high;
         a mediocre option or a near-tie scores low and trips the {thr:.0%} threshold.</p>
+    </div>"""
+
+
+def _config_sources(config: Config, results: list[RecommendationResult]) -> str:
+    """A 'where do these numbers come from' section, sourced from config + mock data."""
+    gw = config.factor_weights[FACTOR_GEO_CLUSTERING]
+    cw = config.factor_weights[FACTOR_CAPACITY_BUFFER]
+    ww = config.factor_weights[FACTOR_WINDOW_MATCH]
+
+    routes = {}
+    for r in results:
+        for e in r.candidates_considered:
+            routes[(e.route.route_id, e.route.day.value)] = e.route
+    caps = sorted({rt.vehicle_capacity_cases for rt in routes.values()})
+    radii = sorted({rt.service_radius_miles for rt in routes.values()})
+    cap_range = f"{caps[0]}–{caps[-1]}" if len(caps) > 1 else f"{caps[0]}"
+    radius_range = f"{radii[0]:.0f}–{radii[-1]:.0f}" if len(radii) > 1 else f"{radii[0]:.0f}"
+
+    def row(k: str, v: str, src: str) -> str:
+        return f'<li><span class="k">{k} <span class="src">— {src}</span></span><span class="v">{v}</span></li>'
+
+    cfg_rows = "".join(
+        [
+            row("Route capacity ceiling", f"{config.max_utilization_after_assignment:.0%}", "max_utilization_after_assignment"),
+            row("Clustering reference (score→0)", f"{config.cluster_reference_miles:.0f} mi", "cluster_reference_miles"),
+            row("No-window neutral score", f"{config.window_neutral_score:.2f}", "window_neutral_score"),
+            row("Scoring weights (geo/cap/win)", f"{gw:.2f} / {cw:.2f} / {ww:.2f}", "factor_weights"),
+            row("Confidence threshold", f"{config.confidence_threshold:.0%}", "confidence_threshold"),
+            row("Confidence separation ref", f"{config.confidence_separation_ref:.2f}", "confidence_separation_ref"),
+            row("Serviceability hard cap", f"{config.max_service_distance_miles:.0f} mi", "max_service_distance_miles"),
+            row("Candidates evaluated", f"Top-{config.top_n_candidate_routes}", "top_n_candidate_routes"),
+        ]
+    )
+    route_rows = "".join(
+        [
+            row("Vehicle capacity per route", f"{cap_range} cases", "the “÷ 900 cases” in scoring"),
+            row("Service radius per route", f"{radius_range} mi", "the serviceability limit"),
+            row("Committed stops + locations", "varies", "drive clustering & used capacity"),
+            row("Available delivery windows", "varies", "window overlap"),
+        ]
+    )
+    intake_rows = "".join(
+        [
+            row("Address → geocoded point", "per customer", "geocoding"),
+            row("Order quantity", "cases", "capacity math"),
+            row("Preferred window (optional)", "soft", "window scoring only"),
+        ]
+    )
+    return f"""
+    <span class="eyebrow">Where the numbers come from</span>
+    <h2>Every threshold, and its source</h2>
+    <p class="sub">The formulas above use real values from three places. Config defaults are tunable in
+      <span style="font-family:var(--mono)">shared/config.py</span>; per-route numbers (capacity, radius)
+      are mock data standing in for a real routing system; the rest comes from the customer's intake.</p>
+    <div class="grid-3">
+      <div class="card srccard"><h4>⚙️ Config defaults <span class="badge cfg">shared/config.py</span></h4>
+        <ul class="srclist">{cfg_rows}</ul></div>
+      <div class="card srccard"><h4>🗄️ Route data <span class="badge route">mocked TMS</span></h4>
+        <ul class="srclist">{route_rows}</ul>
+        <p style="margin-top:10px;font-size:12px;color:var(--muted)">From
+          <span style="font-family:var(--mono)">integrations/route_capacity_client.py</span>.</p></div>
+      <div class="card srccard"><h4>🧾 Customer intake <span class="badge intake">new customer</span></h4>
+        <ul class="srclist">{intake_rows}</ul>
+        <p style="margin-top:10px;font-size:12px;color:var(--muted)">Env vars can override any config default
+          (e.g. <span style="font-family:var(--mono)">SMART_ASSIGNMENT_MAX_UTILIZATION</span>).</p></div>
     </div>"""
 
 
@@ -756,15 +851,15 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
       <span class="eyebrow">How the agent works</span>
       <h2>Five steps, executed autonomously by the agent</h2>
       <div class="agent-banner"><span class="big">🤖</span>
-        <div><b>Every step below is performed by the AI agent — no human in the loop.</b>
-        The agent orchestrates the whole flow end-to-end; a person is involved only if the agent
-        decides to escalate at the final step.</div></div>
+        <div><b>A single AI agent performs all five stages below in one end-to-end run</b> — these are
+        phases of the same agent's workflow, not five separate agents. A person is involved only if the
+        agent decides to escalate at the final stage.</div></div>
       <div class="flow">
-        <div class="step"><span class="abadge">🤖 Agent</span><div class="num">1</div><h3>Intake</h3><p>Capture the customer's address, order quantity (cases), and preferred window.</p><p class="action">Agent validates the number &amp; builds the profile.</p></div>
-        <div class="step"><span class="abadge">🤖 Agent</span><div class="num">2</div><h3>Geo-Lookup</h3><p>Geocode the address and find the nearest candidate routes.</p><p class="action">Agent geocodes &amp; picks the Top-{top_n}.</p></div>
-        <div class="step"><span class="abadge">🤖 Agent</span><div class="num">3</div><h3>Constraint Check</h3><p>Drop any route that fails a hard rule.</p><p class="action">Agent enforces serviceability, capacity, window.</p></div>
-        <div class="step"><span class="abadge">🤖 Agent</span><div class="num">4</div><h3>Score &amp; Rank</h3><p>Rank survivors on weighted business factors.</p><p class="action">Agent scores &amp; orders the options.</p></div>
-        <div class="step"><span class="abadge">🤖 Agent</span><div class="num">5</div><h3>Recommend</h3><p>Return the top slot with a reasoning trace — or escalate.</p><p class="action">Agent self-scores confidence &amp; decides.</p></div>
+        <div class="step"><div class="num">1</div><h3>Intake</h3><p>Capture the customer's address, order quantity (cases), and preferred window.</p><p class="action">Validate the number &amp; build the profile.</p></div>
+        <div class="step"><div class="num">2</div><h3>Geo-Lookup</h3><p>Geocode the address and find the nearest candidate routes.</p><p class="action">Geocode &amp; pick the Top-{top_n} nearest.</p></div>
+        <div class="step"><div class="num">3</div><h3>Constraint Check</h3><p>Drop any route that fails a hard rule.</p><p class="action">Enforce serviceability &amp; capacity.</p></div>
+        <div class="step"><div class="num">4</div><h3>Score &amp; Rank</h3><p>Rank survivors on weighted business factors.</p><p class="action">Score &amp; order the options.</p></div>
+        <div class="step"><div class="num">5</div><h3>Recommend</h3><p>Return the top slot with a reasoning trace — or escalate.</p><p class="action">Self-score confidence &amp; decide.</p></div>
       </div>
     </div>
   </section>
@@ -773,14 +868,17 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
     <div class="wrap">
       <span class="eyebrow">The rules the agent enforces</span>
       <h2>Hard constraints — non-negotiable, checked in code</h2>
-      <p class="sub">These are objective facts, not judgment calls. The agent removes any route that fails
-        one before ranking — it can never "reason" a customer onto a full truck or outside the
-        serviceable area. (See the <b>Simulator</b> tab for exactly how the surviving routes are scored.)</p>
-      <div class="grid-3">
+      <p class="sub">Just <b>two</b> objective facts gate feasibility — not judgment calls. The agent removes
+        any route that fails one before ranking; it can never "reason" a customer onto a full truck or
+        outside the serviceable area. (See the <b>Simulator</b> tab for exactly how the surviving routes
+        are scored.)</p>
+      <div class="grid-2">
         <div class="card"><div class="icon">\U0001f4cd</div><h3>Geographic serviceability</h3><p>The customer must fall within the route's serviceable radius.</p></div>
         <div class="card"><div class="icon">\U0001f4e6</div><h3>Route capacity</h3><p>The truck stays at or below {config.max_utilization_after_assignment:.0%} capacity after adding this order.</p></div>
-        <div class="card"><div class="icon">\U0001f551</div><h3>Delivery-window fit</h3><p>The route offers a window overlapping the customer's preference, if stated.</p></div>
       </div>
+      <p class="sub" style="margin-top:18px">🕑 <b>The preferred delivery window is a soft preference, not a hard
+        constraint</b> — it never eliminates a route. Instead it feeds the <em>window match</em> scoring
+        factor, so a route that misses the window can still win if it's the best overall fit.</p>
     </div>
   </section>
 
@@ -840,7 +938,13 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
     </div>
   </section>
 
-  <section style="background:#fff; border-top:1px solid var(--line); border-bottom:1px solid var(--line);" id="try">
+  <section style="background:#fff; border-top:1px solid var(--line);">
+    <div class="wrap">
+      {_config_sources(config, results)}
+    </div>
+  </section>
+
+  <section style="border-top:1px solid var(--line); border-bottom:1px solid var(--line);" id="try">
     <div class="wrap">
       <span class="eyebrow">Try it yourself</span>
       <h2>Run the agent on a customer</h2>
@@ -850,10 +954,14 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
       <div class="sim">
         <div class="sim-controls">
           <input id="cust-input" placeholder="e.g. 067-100002" aria-label="Customer number" autocomplete="off" />
-          <button id="run-btn">▶ Run agent workflow</button>
+          <button id="run-btn" class="run">▶ Run agent workflow</button>
         </div>
-        <div class="chips" id="chips"></div>
+        <div class="sim-hint" id="sim-hint"></div>
         <div class="sim-error" id="sim-error"></div>
+        <div class="picker">
+          <span class="picker-label">Sample customer numbers — click one to load it into the box above, then press <b>Run agent workflow</b>:</span>
+          <div class="chips" id="chips"></div>
+        </div>
         <div id="sim-steps"></div>
         <div class="sim-output" id="sim-output"></div>
       </div>

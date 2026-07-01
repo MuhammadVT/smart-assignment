@@ -61,8 +61,26 @@ def test_page_has_architecture_and_agent_emphasis():
     html = build_page(_results(config), config)
     assert "<svg" in html  # architecture diagram
     assert "AI AGENT" in html
-    assert "🤖 Agent" in html  # per-step agent badge
     assert "executed autonomously by the agent" in html
+    # A single agent runs all steps — no per-step "agent" badge implying many agents.
+    assert "single AI agent performs all five stages" in html
+    assert '<span class="abadge">' not in html
+
+
+def test_delivery_window_is_soft_not_a_hard_constraint():
+    config = Config()
+    html = build_page(_results(config), config)
+    assert "Delivery-window fit" not in html  # removed from hard constraints
+    assert "soft preference" in html  # window is now a scoring-only preference
+
+
+def test_page_states_number_sources():
+    config = Config()
+    html = build_page(_results(config), config)
+    assert "Where the numbers come from" in html
+    assert "cluster_reference_miles" in html
+    assert "max_utilization_after_assignment" in html
+    assert "shared/config.py" in html
 
 
 def test_page_has_three_tabs():
