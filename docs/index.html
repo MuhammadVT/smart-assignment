@@ -13,6 +13,7 @@
     --green: #1a7f37; --green-soft: #e7f4ea; --amber: #9a6700; --amber-soft: #fdf3d8;
     --red: #b42318; --red-soft: #fbe9e7; --violet: #5b3fb0; --violet-soft: #efeafb;
     --radius: 14px; --shadow: 0 1px 2px rgba(16,32,64,.06), 0 6px 20px rgba(16,32,64,.06);
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
   * { box-sizing: border-box; }
   html { scroll-behavior: smooth; }
@@ -24,11 +25,21 @@
   .chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600;
     letter-spacing: .02em; padding: 5px 11px; border-radius: 999px; background: rgba(255,255,255,.15);
     border: 1px solid rgba(255,255,255,.3); }
-  header.hero { background: linear-gradient(135deg, var(--navy), var(--blue)); color: #fff; padding: 54px 0 60px; }
+  header.hero { background: linear-gradient(135deg, var(--navy), var(--blue)); color: #fff; padding: 48px 0 52px; }
   .hero h1 { margin: 14px 0 8px; font-size: 40px; line-height: 1.1; letter-spacing: -.02em; }
   .hero p.lead { margin: 0; font-size: 18px; max-width: 660px; color: #dbe6f5; }
   .hero .meta { margin-top: 22px; display: flex; flex-wrap: wrap; gap: 10px; }
-  section { padding: 48px 0; }
+  /* tabs */
+  .tabbar { position: sticky; top: 0; z-index: 30; background: #fff; border-bottom: 1px solid var(--line);
+    box-shadow: 0 2px 8px rgba(16,32,64,.04); }
+  .tabbar .wrap { display: flex; gap: 4px; }
+  .tabbtn { appearance: none; border: 0; background: transparent; padding: 15px 18px; font-size: 14.5px;
+    font-weight: 700; color: var(--muted); cursor: pointer; border-bottom: 3px solid transparent; }
+  .tabbtn:hover { color: var(--ink); }
+  .tabbtn.active { color: var(--blue); border-bottom-color: var(--blue); }
+  .tabpanel { display: none; }
+  .tabpanel.active { display: block; }
+  section { padding: 46px 0; }
   section h2 { font-size: 26px; letter-spacing: -.01em; margin: 0 0 6px; }
   section .sub { color: var(--muted); margin: 0 0 26px; max-width: 720px; }
   .eyebrow { color: var(--blue); font-weight: 700; font-size: 13px; letter-spacing: .08em; text-transform: uppercase; }
@@ -46,23 +57,27 @@
   .step h3 { margin: 0 0 4px; font-size: 15px; }
   .step p { margin: 0; font-size: 13px; color: var(--muted); }
   .step .action { margin-top: 8px; font-size: 12px; color: var(--violet); font-weight: 600; }
+  .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
   .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
     padding: 20px; box-shadow: var(--shadow); }
   .card .icon { font-size: 22px; }
   .card h3 { margin: 8px 0 4px; font-size: 16px; }
+  .card h4 { margin: 4px 0 3px; font-size: 14px; }
   .card p { margin: 0; font-size: 14px; color: var(--muted); }
   .tag { display: inline-block; font-size: 11px; font-weight: 700; color: var(--blue);
     background: var(--blue-soft); padding: 3px 8px; border-radius: 6px; margin-top: 10px; }
   .bar { height: 8px; border-radius: 6px; background: #eef1f6; overflow: hidden; margin-top: 8px; }
   .bar > span { display: block; height: 100%; background: var(--blue); border-radius: 6px; }
+  .formula { font-family: var(--mono); background: #f4f7fc; border: 1px solid #dde6f2; border-radius: 9px;
+    padding: 11px 13px; font-size: 12.5px; color: #22364f; margin-top: 12px; overflow-x: auto; }
+  .formula b { color: var(--navy); }
   .arch { background: #fff; border: 1px solid var(--line); border-radius: var(--radius);
     padding: 20px; box-shadow: var(--shadow); }
   .arch svg { width: 100%; height: auto; display: block; }
   .arch-legend { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-top: 22px; }
   .arch-legend .card { padding: 16px; }
-  .arch-legend h4 { margin: 6px 0 3px; font-size: 14px; }
-  .arch-legend p { margin: 0; font-size: 12.5px; color: var(--muted); }
+  .arch-legend p { font-size: 12.5px; }
   .legend { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
   .pill { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; font-size: 13px;
     padding: 6px 12px; border-radius: 999px; }
@@ -74,18 +89,17 @@
     box-shadow: var(--shadow); padding: 22px; }
   .sim-controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
   .sim input { font-size: 15px; padding: 11px 13px; border: 1px solid var(--line); border-radius: 9px;
-    min-width: 200px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    min-width: 200px; font-family: var(--mono); }
   .sim button { background: var(--blue); color: #fff; border: 0; border-radius: 9px; padding: 12px 18px;
     font-weight: 700; font-size: 14px; cursor: pointer; }
   .sim button:disabled { opacity: .55; cursor: default; }
   .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
-  .chip-btn { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
-    border: 1px solid var(--line); background: #f5f8fc; color: var(--blue); border-radius: 999px;
-    padding: 6px 11px; cursor: pointer; }
+  .chip-btn { font-family: var(--mono); font-size: 12px; border: 1px solid var(--line); background: #f5f8fc;
+    color: var(--blue); border-radius: 999px; padding: 6px 11px; cursor: pointer; }
   .chip-btn:hover { background: var(--blue-soft); }
   .sim-error { color: var(--red); font-size: 13px; margin-top: 10px; min-height: 16px; }
   .sim-cust { margin: 14px 0 4px; font-size: 14.5px; }
-  .sim-cust .cnum { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); font-size: 12px; }
+  .sim-cust .cnum { font-family: var(--mono); color: var(--muted); font-size: 12px; }
   .sim-step { display: grid; grid-template-columns: 26px 1fr; gap: 12px; padding: 11px 0; border-top: 1px solid var(--line); }
   .sim-dot { width: 18px; height: 18px; border-radius: 50%; margin-top: 3px; border: 2px solid var(--line); background: #fff; }
   .sim-step.running .sim-dot { border-color: var(--blue); animation: pulse 1s infinite; }
@@ -98,12 +112,14 @@
   .sim-lines { margin-top: 7px; font-size: 12.5px; color: #33415c; display: grid; gap: 3px; }
   .sim-line .ok { color: var(--green); font-weight: 700; }
   .sim-line .no { color: var(--red); font-weight: 700; }
+  .sim-line .calc { font-family: var(--mono); font-size: 11.5px; color: #5b6675; }
+  .sim-line .calc b { color: var(--navy); }
   .sim-output { margin-top: 18px; }
   .examples { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; }
   .result { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
     box-shadow: var(--shadow); overflow: hidden; }
   .result .rhead { padding: 18px 20px; border-bottom: 1px solid var(--line); }
-  .result .cnum { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--muted); }
+  .result .cnum { font-family: var(--mono); font-size: 12px; color: var(--muted); }
   .result h3 { margin: 2px 0 2px; font-size: 18px; }
   .result .addr { font-size: 13px; color: var(--muted); }
   .result .facts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
@@ -144,10 +160,11 @@
   footer a { text-decoration: none; }
   @media (max-width: 860px) {
     .flow { grid-template-columns: repeat(2, 1fr); }
-    .grid-3, .legend, .arch-legend { grid-template-columns: 1fr; }
+    .grid-2, .grid-3, .legend, .arch-legend { grid-template-columns: 1fr; }
     .examples { grid-template-columns: 1fr; }
     .hero h1 { font-size: 32px; }
     .factor { grid-template-columns: 120px 1fr 40px; }
+    .tabbar .wrap { overflow-x: auto; }
   }
 </style>
 </head>
@@ -155,7 +172,7 @@
 
 <header class="hero">
   <div class="wrap">
-    <span class="chip">🤖 Agentic workflow · Sysco foodservice</span>
+    <span class="chip">🤖 Agentic workflow · Sysco</span>
     <h1>Smart Assignment</h1>
     <p class="lead">An <strong>AI agent</strong> that autonomously recommends the best delivery day &amp;
       time slot for a <strong>new customer</strong> — running every step end-to-end, enforcing hard
@@ -170,45 +187,86 @@
   </div>
 </header>
 
-<section>
+<nav class="tabbar" role="tablist" aria-label="Sections">
   <div class="wrap">
-    <span class="eyebrow">The problem</span>
-    <h2>Onboarding a new account, every time, the same way</h2>
-    <p class="sub">When a new foodservice customer signs on, someone has to decide which delivery route
-      and time window they should join. That decision balances truck capacity, geography, and the
-      customer's preference — and it needs to be consistent, explainable, and fast. The Smart
-      Assignment agent makes that call automatically, and flags the tricky ones for a specialist
-      instead of guessing.</p>
+    <button class="tabbtn active" data-tab="overview" role="tab" aria-selected="true">Overview</button>
+    <button class="tabbtn" data-tab="architecture" role="tab" aria-selected="false">Architecture</button>
+    <button class="tabbtn" data-tab="simulator" role="tab" aria-selected="false">Simulator</button>
   </div>
-</section>
+</nav>
 
-<section style="background:#fff; border-top:1px solid var(--line); border-bottom:1px solid var(--line);">
-  <div class="wrap">
-    <span class="eyebrow">How the agent works</span>
-    <h2>Five steps, executed autonomously by the agent</h2>
-    <div class="agent-banner"><span class="big">🤖</span>
-      <div><b>Every step below is performed by the AI agent — no human in the loop.</b>
-      The agent orchestrates the whole flow end-to-end; a person is involved only if the agent
-      decides to escalate at the final step.</div></div>
-    <div class="flow">
-      <div class="step"><span class="abadge">🤖 Agent</span><div class="num">1</div><h3>Intake</h3><p>Capture the customer's address, order quantity (cases), and preferred window.</p><p class="action">Agent validates the number &amp; builds the profile.</p></div>
-      <div class="step"><span class="abadge">🤖 Agent</span><div class="num">2</div><h3>Geo-Lookup</h3><p>Geocode the address and find the nearest candidate routes.</p><p class="action">Agent geocodes &amp; picks the Top-3.</p></div>
-      <div class="step"><span class="abadge">🤖 Agent</span><div class="num">3</div><h3>Constraint Check</h3><p>Drop any route that fails a hard rule.</p><p class="action">Agent enforces serviceability, capacity, window.</p></div>
-      <div class="step"><span class="abadge">🤖 Agent</span><div class="num">4</div><h3>Score &amp; Rank</h3><p>Rank survivors on weighted business factors.</p><p class="action">Agent scores &amp; orders the options.</p></div>
-      <div class="step"><span class="abadge">🤖 Agent</span><div class="num">5</div><h3>Recommend</h3><p>Return the top slot with a reasoning trace — or escalate.</p><p class="action">Agent self-scores confidence &amp; decides.</p></div>
+<main>
+
+<div class="tabpanel active" id="tab-overview" role="tabpanel">
+  <section>
+    <div class="wrap">
+      <span class="eyebrow">The problem</span>
+      <h2>Onboarding a new account, every time, the same way</h2>
+      <p class="sub">When a new customer signs on, someone has to decide which delivery route and time
+        window they should join. That decision balances truck capacity, geography, and the customer's
+        preference — and it needs to be consistent, explainable, and fast. The Smart Assignment agent
+        makes that call automatically, and flags the tricky ones for a specialist instead of guessing.</p>
     </div>
-  </div>
-</section>
+  </section>
 
-<section>
-  <div class="wrap">
-    <span class="eyebrow">Architecture</span>
-    <h2>The agentic workflow, end to end</h2>
-    <p class="sub">The agent is a Google ADK <em>Workflow</em> that orchestrates the five steps. It calls
-      deterministic tools for the objective checks and an LLM only to narrate its decision — the
-      decision itself is code, so it's reproducible and auditable.</p>
-    <div class="arch">
-      
+  <section style="background:#fff; border-top:1px solid var(--line); border-bottom:1px solid var(--line);">
+    <div class="wrap">
+      <span class="eyebrow">How the agent works</span>
+      <h2>Five steps, executed autonomously by the agent</h2>
+      <div class="agent-banner"><span class="big">🤖</span>
+        <div><b>Every step below is performed by the AI agent — no human in the loop.</b>
+        The agent orchestrates the whole flow end-to-end; a person is involved only if the agent
+        decides to escalate at the final step.</div></div>
+      <div class="flow">
+        <div class="step"><span class="abadge">🤖 Agent</span><div class="num">1</div><h3>Intake</h3><p>Capture the customer's address, order quantity (cases), and preferred window.</p><p class="action">Agent validates the number &amp; builds the profile.</p></div>
+        <div class="step"><span class="abadge">🤖 Agent</span><div class="num">2</div><h3>Geo-Lookup</h3><p>Geocode the address and find the nearest candidate routes.</p><p class="action">Agent geocodes &amp; picks the Top-3.</p></div>
+        <div class="step"><span class="abadge">🤖 Agent</span><div class="num">3</div><h3>Constraint Check</h3><p>Drop any route that fails a hard rule.</p><p class="action">Agent enforces serviceability, capacity, window.</p></div>
+        <div class="step"><span class="abadge">🤖 Agent</span><div class="num">4</div><h3>Score &amp; Rank</h3><p>Rank survivors on weighted business factors.</p><p class="action">Agent scores &amp; orders the options.</p></div>
+        <div class="step"><span class="abadge">🤖 Agent</span><div class="num">5</div><h3>Recommend</h3><p>Return the top slot with a reasoning trace — or escalate.</p><p class="action">Agent self-scores confidence &amp; decides.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <span class="eyebrow">The rules the agent enforces</span>
+      <h2>Hard constraints — non-negotiable, checked in code</h2>
+      <p class="sub">These are objective facts, not judgment calls. The agent removes any route that fails
+        one before ranking — it can never "reason" a customer onto a full truck or outside the
+        serviceable area. (See the <b>Simulator</b> tab for exactly how the surviving routes are scored.)</p>
+      <div class="grid-3">
+        <div class="card"><div class="icon">📍</div><h3>Geographic serviceability</h3><p>The customer must fall within the route's serviceable radius.</p></div>
+        <div class="card"><div class="icon">📦</div><h3>Route capacity</h3><p>The truck stays at or below 90% capacity after adding this order.</p></div>
+        <div class="card"><div class="icon">🕑</div><h3>Delivery-window fit</h3><p>The route offers a window overlapping the customer's preference, if stated.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section style="background:#fff; border-top:1px solid var(--line); border-bottom:1px solid var(--line);">
+    <div class="wrap">
+      <span class="eyebrow">The outcome</span>
+      <h2>Three possible agent decisions</h2>
+      <p class="sub">Every run ends in one of three states. Anything below a 70% confidence
+        threshold, or with no valid slot at all, the agent hands to a human — with full context attached.</p>
+      <div class="legend">
+        <div class="card"><span class="pill rec">✔ Recommended</span><p style="margin-top:12px">A clear winner above the confidence threshold — the agent auto-assigns.</p></div>
+        <div class="card"><span class="pill low">⚠ Low confidence</span><p style="margin-top:12px">A slot is proposed, but the options are close — the agent asks a specialist to confirm.</p></div>
+        <div class="card"><span class="pill no">✖ No feasible slot</span><p style="margin-top:12px">Every candidate failed a hard rule — the agent routes it to a specialist.</p></div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div class="tabpanel" id="tab-architecture" role="tabpanel">
+  <section>
+    <div class="wrap">
+      <span class="eyebrow">Architecture</span>
+      <h2>The agentic workflow, end to end</h2>
+      <p class="sub">The agent is a Google ADK <em>Workflow</em> that orchestrates the five steps. It calls
+        deterministic tools for the objective checks and an LLM only to narrate its decision — the
+        decision itself is code, so it's reproducible and auditable.</p>
+      <div class="arch">
+        
 <svg viewBox="0 0 980 668" role="img" aria-label="Agentic workflow architecture diagram">
   <defs>
     <marker id="arw" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#1257a6"/></marker>
@@ -278,78 +336,99 @@
   <text x="24" y="656" font-size="11.5" fill="#5b6675">→ agent flow &#160;&#160;·&#160;&#160; ⇢ agent calls a service &#160;&#160;·&#160;&#160; ◇ agent's own decision point</text>
 </svg>
 
-      <div class="arch-legend">
-        <div class="card"><div class="icon">🤖</div><h4>Agent orchestrator</h4><p>An ADK Workflow drives all five steps and the branching, autonomously.</p></div>
-        <div class="card"><div class="icon">🧭</div><h4>Deterministic tools</h4><p>Geo, hard constraints, and weighted scoring — plain code the agent calls.</p></div>
-        <div class="card"><div class="icon">🧠</div><h4>LLM reasoner</h4><p>Gemini turns the agent's decision into a plain-English rationale (optional).</p></div>
-        <div class="card"><div class="icon">🙋</div><h4>Human-in-the-loop</h4><p>Only engaged when the agent escalates — low confidence or no feasible slot.</p></div>
+        <div class="arch-legend">
+          <div class="card"><div class="icon">🤖</div><h4>Agent orchestrator</h4><p>An ADK Workflow drives all five steps and the branching, autonomously.</p></div>
+          <div class="card"><div class="icon">🧭</div><h4>Deterministic tools</h4><p>Geo, hard constraints, and weighted scoring — plain code the agent calls.</p></div>
+          <div class="card"><div class="icon">🧠</div><h4>LLM reasoner</h4><p>Gemini turns the agent's decision into a plain-English rationale (optional).</p></div>
+          <div class="card"><div class="icon">🙋</div><h4>Human-in-the-loop</h4><p>Only engaged when the agent escalates — low confidence or no feasible slot.</p></div>
+        </div>
       </div>
     </div>
-  </div>
-</section>
+  </section>
 
-<section style="background:#fff; border-top:1px solid var(--line); border-bottom:1px solid var(--line);">
-  <div class="wrap">
-    <span class="eyebrow">The rules the agent enforces</span>
-    <h2>Hard constraints — non-negotiable, checked in code</h2>
-    <p class="sub">These are objective facts, not judgment calls. The agent removes any route that fails
-      one before ranking — it can never "reason" a customer onto a full truck or outside the
-      serviceable area.</p>
+  <section style="background:#fff; border-top:1px solid var(--line);">
+    <div class="wrap">
+      <span class="eyebrow">Key mechanics</span>
+      <h2>What makes it trustworthy</h2>
+      <div class="grid-2">
+        <div class="card"><h4>🤖 One agent, five steps</h4><p>A single ADK Workflow runs Intake → Geo-Lookup → Constraint Check → Score &amp; Rank → Decide, and branches to escalate.</p></div>
+        <div class="card"><h4>✅ Decisions are code, not vibes</h4><p>Constraints and scoring are deterministic Python, so identical inputs always yield the identical recommendation.</p></div>
+        <div class="card"><h4>🧠 The LLM only narrates</h4><p>Gemini writes the human-readable rationale; it never changes the decision, and falls back to a deterministic explanation.</p></div>
+        <div class="card"><h4>🙋 Human-in-the-loop on escalation</h4><p>A specialist is engaged only when the agent finds no feasible slot or isn't confident enough to auto-assign.</p></div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div class="tabpanel" id="tab-simulator" role="tabpanel">
+  <section>
+    <div class="wrap">
+      
+    <span class="eyebrow">How the agent scores &amp; ranks</span>
+    <h2>Exactly how each dimension is scored</h2>
+    <p class="sub">Only routes that pass every hard rule reach this stage. The agent scores each on three
+      dimensions, normalizes each to 0–1 (<span style="font-family:var(--mono)">clamp</span> keeps it in
+      range), and combines them by weight. This is deterministic Python — the same inputs always give the
+      same score.</p>
     <div class="grid-3">
-      <div class="card"><div class="icon">📍</div><h3>Geographic serviceability</h3><p>The customer must fall within the route's serviceable radius.</p></div>
-      <div class="card"><div class="icon">📦</div><h3>Route capacity</h3><p>The truck stays at or below 90% capacity after adding this order.</p></div>
-      <div class="card"><div class="icon">🕑</div><h3>Delivery-window fit</h3><p>The route offers a window overlapping the customer's preference, if stated.</p></div>
+      <div class="card"><div class="icon">🧭</div><h3>Geographic clustering · weight 0.45</h3>
+        <p>How tightly the customer sits within the route's existing cluster of stops. Closer = higher.</p>
+        <div class="formula">score = clamp( 1 − <b>avg_miles_to_stops</b> ÷ 15 , 0, 1 )</div>
+        <p style="margin-top:8px;font-size:12.5px">Distance is the average great-circle miles to the route's
+          committed stops; at 15 mi the score reaches 0.</p></div>
+      <div class="card"><div class="icon">🛡️</div><h3>Capacity buffer · weight 0.30</h3>
+        <p>How much headroom is left on the truck once this order is added. More buffer = more resilient.</p>
+        <div class="formula">score = clamp( <b>cases_remaining_after_add</b> ÷ <b>vehicle_capacity</b> , 0, 1 )</div>
+        <p style="margin-top:8px;font-size:12.5px">Remaining = capacity − already-committed cases − this order.</p></div>
+      <div class="card"><div class="icon">🎯</div><h3>Window match · weight 0.25</h3>
+        <p>How much of the customer's preferred window the route's window can cover.</p>
+        <div class="formula">score = clamp( <b>overlap_minutes</b> ÷ <b>preferred_window_minutes</b> , 0, 1 )</div>
+        <p style="margin-top:8px;font-size:12.5px">If the customer states no window, a neutral 0.60 is used
+          instead.</p></div>
     </div>
 
-    <div style="height:34px"></div>
-    <span class="eyebrow">How the agent ranks the rest</span>
-    <h2>Weighted scoring factors</h2>
-    <p class="sub">Among the routes that pass every hard rule, the agent uses these weighted factors to
-      decide the winner. Weights reflect priority and are fully configurable.</p>
-    <div class="grid-3"><div class="card"><div class="icon">🧭</div><h3>Geographic clustering</h3><p>How tightly the customer clusters with the route's existing stops — tighter clusters mean more predictable arrivals.</p><div class="bar"><span style="width:45%"></span></div><span class="tag">weight 0.45</span></div><div class="card"><div class="icon">🛡️</div><h3>Capacity buffer</h3><p>How much headroom is left after the add — more buffer means a route that's resilient to day-of disruption.</p><div class="bar"><span style="width:30%"></span></div><span class="tag">weight 0.30</span></div><div class="card"><div class="icon">🎯</div><h3>Window match</h3><p>How well the route's window covers the customer's stated preference.</p><div class="bar"><span style="width:25%"></span></div><span class="tag">weight 0.25</span></div></div>
-  </div>
-</section>
-
-<section>
-  <div class="wrap">
-    <span class="eyebrow">The outcome</span>
-    <h2>Three possible agent decisions</h2>
-    <p class="sub">Every run ends in one of three states. Anything below a 70% confidence
-      threshold, or with no valid slot at all, the agent hands to a human — with full context attached.</p>
-    <div class="legend">
-      <div class="card"><span class="pill rec">✔ Recommended</span><p style="margin-top:12px">A clear winner above the confidence threshold — the agent auto-assigns.</p></div>
-      <div class="card"><span class="pill low">⚠ Low confidence</span><p style="margin-top:12px">A slot is proposed, but the options are close — the agent asks a specialist to confirm.</p></div>
-      <div class="card"><span class="pill no">✖ No feasible slot</span><p style="margin-top:12px">Every candidate failed a hard rule — the agent routes it to a specialist.</p></div>
+    <div style="height:16px"></div>
+    <div class="card">
+      <h3 style="margin-top:0">Final score, then the agent's own confidence</h3>
+      <p>The overall score is the weighted average of the three dimensions:</p>
+      <div class="formula">total = ( 0.45·clustering + 0.30·capacity + 0.25·window ) ÷ 1.00</div>
+      <p style="margin-top:14px">The agent ranks feasible routes by <em>total</em>, then scores how confident it
+        is in the winner. It <b>auto-assigns</b> when confidence ≥ 70%; otherwise it <b>escalates</b>:</p>
+      <div class="formula">two or more options: confidence = 0.6·<b>top</b> + 0.4·clamp( (top − runner_up) ÷ 0.15 , 0, 1 )
+<br/>single option: confidence = 0.5 + 0.5·<b>top</b> &#160;&#160;·&#160;&#160; no feasible option: confidence = 0</div>
+      <p style="margin-top:12px;font-size:12.5px;color:var(--muted)">A strong, clearly-separated winner scores high;
+        a mediocre option or a near-tie scores low and trips the 70% threshold.</p>
     </div>
-  </div>
-</section>
+    </div>
+  </section>
 
-<section style="background:#fff; border-top:1px solid var(--line); border-bottom:1px solid var(--line);" id="try">
-  <div class="wrap">
-    <span class="eyebrow">Try it yourself</span>
-    <h2>Run the agent on a customer</h2>
-    <p class="sub">Enter a mock customer number (or pick one below) and watch the agent execute each step,
-      then render its recommendation. Everything runs in your browser — no data leaves the page.</p>
-    <div class="sim">
-      <div class="sim-controls">
-        <input id="cust-input" placeholder="e.g. 067-100002" aria-label="Customer number" autocomplete="off" />
-        <button id="run-btn">▶ Run agent workflow</button>
+  <section style="background:#fff; border-top:1px solid var(--line); border-bottom:1px solid var(--line);" id="try">
+    <div class="wrap">
+      <span class="eyebrow">Try it yourself</span>
+      <h2>Run the agent on a customer</h2>
+      <p class="sub">Enter a mock customer number (or pick one below) and watch the agent execute each step —
+        including the scoring math for every feasible route — then render its recommendation. Everything
+        runs in your browser; no data leaves the page.</p>
+      <div class="sim">
+        <div class="sim-controls">
+          <input id="cust-input" placeholder="e.g. 067-100002" aria-label="Customer number" autocomplete="off" />
+          <button id="run-btn">▶ Run agent workflow</button>
+        </div>
+        <div class="chips" id="chips"></div>
+        <div class="sim-error" id="sim-error"></div>
+        <div id="sim-steps"></div>
+        <div class="sim-output" id="sim-output"></div>
       </div>
-      <div class="chips" id="chips"></div>
-      <div class="sim-error" id="sim-error"></div>
-      <div id="sim-steps"></div>
-      <div class="sim-output" id="sim-output"></div>
     </div>
-  </div>
-</section>
+  </section>
 
-<section>
-  <div class="wrap">
-    <span class="eyebrow">All outcomes at a glance</span>
-    <h2>What the agent decided for each mock customer</h2>
-    <p class="sub">These cards are generated straight from the agent's output. Each customer lands on a
-      different outcome; expand <em>“Routes the agent evaluated”</em> to audit the full decision.</p>
-    <div class="examples">
+  <section>
+    <div class="wrap">
+      <span class="eyebrow">All outcomes at a glance</span>
+      <h2>What the agent decided for each mock customer</h2>
+      <p class="sub">These cards are generated straight from the agent's output. Each customer lands on a
+        different outcome; expand <em>“Routes the agent evaluated”</em> to audit the full decision.</p>
+      <div class="examples">
       <article class="result">
         <div class="rhead">
           <div class="cnum">067-100001</div>
@@ -454,20 +533,23 @@
           </details>
         </div>
       </article>
+      </div>
     </div>
-  </div>
-</section>
+  </section>
 
-<section style="padding-top:0;">
-  <div class="wrap">
-    <div class="note">
-      <strong>About this data.</strong> The agent runs on <strong>mock</strong> Houston-area routes and
-      geocoding so the workflow can be demonstrated end-to-end. Capacities, service radii, scoring
-      weights, and thresholds are illustrative starting points — not validated Sysco policy. The route
-      source and geocoder are designed to be swapped for real systems without changing the agent's logic.
+  <section style="padding-top:0;">
+    <div class="wrap">
+      <div class="note">
+        <strong>About this data.</strong> The agent runs on <strong>mock</strong> Houston-area routes and
+        geocoding so the workflow can be demonstrated end-to-end. Capacities, service radii, scoring
+        weights, and thresholds are illustrative starting points — not validated Sysco policy. The route
+        source and geocoder are designed to be swapped for real systems without changing the agent's logic.
+      </div>
     </div>
-  </div>
-</section>
+  </section>
+</div>
+
+</main>
 
 <footer>
   <div class="wrap">
@@ -478,7 +560,7 @@
   </div>
 </footer>
 
-<script type="application/json" id="workflow-data">{"067-100001": {"name": "Bayou City Bistro", "steps": [{"title": "Intake", "action": "The agent validates the customer number and captures the intake profile.", "lines": ["Customer number <b>067-100001</b> <span class=\"ok\">✓ valid</span>", "Order quantity: <b>90</b> cases", "Preferred window: <b>07:00–10:00</b>"]}, {"title": "Geo-Lookup", "action": "The agent geocodes the address and selects the nearest candidate routes.", "lines": ["Geocoded address → <b>(29.7570, -95.3670)</b>", "Selected the 3 nearest routes:", "• RTE-4100 · Central Houston — 0.1 mi", "• RTE-4200 · West Houston / Energy Corridor — 14.7 mi", "• RTE-4400 · Southwest / Sugar Land — 18.7 mi"]}, {"title": "Constraint Check", "action": "The agent applies every hard rule and removes infeasible routes.", "lines": ["1 of 3 routes passed every hard rule:", "• RTE-4100: <span class=\"ok\">FEASIBLE</span>", "• RTE-4200: <span class=\"no\">INFEASIBLE</span> — failed serviceability", "• RTE-4400: <span class=\"no\">INFEASIBLE</span> — failed serviceability, capacity"]}, {"title": "Score & Rank", "action": "The agent scores each feasible route on the weighted factors and ranks them.", "lines": ["Weighted scores (higher is better):", "• RTE-4100: score <b>0.77</b> — clustering 0.94, buffer 0.32, window 1.00"]}, {"title": "Recommend / Decide", "action": "The agent picks the best slot, scores its own confidence, and decides to auto-assign or escalate.", "lines": ["Decision: <b>Recommended — auto-assign</b>", "Agent self-assessed confidence: <b>89%</b>", "Proposed slot: <b>RTE-4100 · TUE · 07:00–10:00</b>"]}], "resultHtml": "\n      <article class=\"result\">\n        <div class=\"rhead\">\n          <div class=\"cnum\">067-100001</div>\n          <h3>Bayou City Bistro</h3>\n          <div class=\"addr\">1200 McKinney St, Houston, TX 77010</div>\n          <div class=\"facts\">\n            <span class=\"fact\">90 cases</span>\n            <span class=\"fact\">prefers 07:00–10:00</span>\n            <span class=\"fact\">3 routes evaluated</span>\n          </div>\n        </div>\n        <div class=\"rbody\">\n          <div class=\"decision-row\">\n            <span class=\"pill rec\">✔ Recommended</span>\n            <span style=\"font-size:13px;color:var(--muted)\">agent confidence\n              <b style=\"color:var(--green)\">89%</b></span>\n          </div>\n          <div class=\"conf\"><div class=\"bar\"><span class=\"g\" style=\"width:89%\"></span></div></div>\n          <p class=\"slot\">→ <b>RTE-4100 · Central Houston</b> · TUE · <b>07:00–10:00</b> <small style=\"color:var(--muted)\">(score 0.77)</small></p>\n          <div class=\"factors\"><div class=\"factor\"><span class=\"fname\">Geographic clustering</span><div class=\"bar\"><span style=\"width:94%\"></span></div><span class=\"fval\">0.94</span></div><div class=\"factor\"><span class=\"fname\">Capacity buffer</span><div class=\"bar\"><span style=\"width:32%\"></span></div><span class=\"fval\">0.32</span></div><div class=\"factor\"><span class=\"fname\">Window match</span><div class=\"bar\"><span style=\"width:100%\"></span></div><span class=\"fval\">1.00</span></div></div>\n          <div class=\"reason\"><span class=\"lbl\">Why the agent chose this</span>Recommending RTE-4100 (Central Houston) on TUE, window 07:00-10:00, score 0.77. Key factors: geographic_clustering (avg 0.8 mi to existing stops); window_match (180/180 min of preferred window covered); capacity_buffer (290 cases headroom (68% utilized post-add)). Confidence 89%.</div>\n          <details class=\"routes\"><summary>Routes the agent evaluated (3)</summary>\n            <div class=\"routelist\"><div class=\"route\"><div class=\"rtitle\"><span>RTE-4100 · Central Houston · TUE · 0.1 mi</span><span class=\"status ok\">FEASIBLE · 0.77</span></div><ul class=\"checks\"><li><span class=\"ok\">✓</span> serviceability: 0.1 mi from route center (limit 12.0 mi)</li><li><span class=\"ok\">✓</span> capacity: utilization 68% post-add (limit 90%), 290 cases headroom</li><li><span class=\"ok\">✓</span> window: 180 min overlap with preferred window (best route window 07:00-10:00)</li></ul></div><div class=\"route\"><div class=\"rtitle\"><span>RTE-4200 · West Houston / Energy Corridor · WED · 14.7 mi</span><span class=\"status bad\">INFEASIBLE</span></div><ul class=\"checks\"><li><span class=\"no\">✗</span> serviceability: 14.7 mi from route center (limit 12.0 mi)</li><li><span class=\"ok\">✓</span> capacity: utilization 52% post-add (limit 90%), 460 cases headroom</li><li><span class=\"ok\">✓</span> window: 150 min overlap with preferred window (best route window 07:30-11:00)</li></ul></div><div class=\"route\"><div class=\"rtitle\"><span>RTE-4400 · Southwest / Sugar Land · TUE · 18.7 mi</span><span class=\"status bad\">INFEASIBLE</span></div><ul class=\"checks\"><li><span class=\"no\">✗</span> serviceability: 18.7 mi from route center (limit 12.0 mi)</li><li><span class=\"no\">✗</span> capacity: utilization 101% post-add (limit 90%), -10 cases headroom</li><li><span class=\"ok\">✓</span> window: 120 min overlap with preferred window (best route window 06:00-09:00)</li></ul></div></div>\n          </details>\n        </div>\n      </article>"}, "067-100002": {"name": "Galleria Grill &amp; Catering", "steps": [{"title": "Intake", "action": "The agent validates the customer number and captures the intake profile.", "lines": ["Customer number <b>067-100002</b> <span class=\"ok\">✓ valid</span>", "Order quantity: <b>140</b> cases", "Preferred window: <b>any</b>"]}, {"title": "Geo-Lookup", "action": "The agent geocodes the address and selects the nearest candidate routes.", "lines": ["Geocoded address → <b>(29.7400, -95.4630)</b>", "Selected the 3 nearest routes:", "• RTE-4100 · Central Houston — 5.9 mi", "• RTE-4200 · West Houston / Energy Corridor — 9.3 mi", "• RTE-4400 · Southwest / Sugar Land — 13.3 mi"]}, {"title": "Constraint Check", "action": "The agent applies every hard rule and removes infeasible routes.", "lines": ["2 of 3 routes passed every hard rule:", "• RTE-4100: <span class=\"ok\">FEASIBLE</span>", "• RTE-4200: <span class=\"ok\">FEASIBLE</span>", "• RTE-4400: <span class=\"no\">INFEASIBLE</span> — failed serviceability, capacity"]}, {"title": "Score & Rank", "action": "The agent scores each feasible route on the weighted factors and ranks them.", "lines": ["Weighted scores (higher is better):", "• RTE-4200: score <b>0.58</b> — clustering 0.67, buffer 0.43, window 0.60", "• RTE-4100: score <b>0.52</b> — clustering 0.64, buffer 0.27, window 0.60"]}, {"title": "Recommend / Decide", "action": "The agent picks the best slot, scores its own confidence, and decides to auto-assign or escalate.", "lines": ["Decision: <b>Escalate — low confidence</b>", "Agent self-assessed confidence: <b>51%</b>", "Proposed slot: <b>RTE-4200 · WED · 07:30–11:00</b>"]}], "resultHtml": "\n      <article class=\"result\">\n        <div class=\"rhead\">\n          <div class=\"cnum\">067-100002</div>\n          <h3>Galleria Grill &amp; Catering</h3>\n          <div class=\"addr\">5085 Westheimer Rd, Houston, TX 77056</div>\n          <div class=\"facts\">\n            <span class=\"fact\">140 cases</span>\n            <span class=\"fact\">no window preference</span>\n            <span class=\"fact\">3 routes evaluated</span>\n          </div>\n        </div>\n        <div class=\"rbody\">\n          <div class=\"decision-row\">\n            <span class=\"pill low\">⚠ Low confidence — human review</span>\n            <span style=\"font-size:13px;color:var(--muted)\">agent confidence\n              <b style=\"color:var(--amber)\">51%</b></span>\n          </div>\n          <div class=\"conf\"><div class=\"bar\"><span class=\"a\" style=\"width:51%\"></span></div><small>below the confidence threshold</small></div>\n          <p class=\"slot\">→ proposed: <b>RTE-4200 · West Houston / Energy Corridor</b> · WED · <b>07:30–11:00</b> <small style=\"color:var(--muted)\">(score 0.58)</small></p>\n          <div class=\"factors\"><div class=\"factor\"><span class=\"fname\">Geographic clustering</span><div class=\"bar\"><span style=\"width:67%\"></span></div><span class=\"fval\">0.67</span></div><div class=\"factor\"><span class=\"fname\">Capacity buffer</span><div class=\"bar\"><span style=\"width:43%\"></span></div><span class=\"fval\">0.43</span></div><div class=\"factor\"><span class=\"fname\">Window match</span><div class=\"bar\"><span style=\"width:60%\"></span></div><span class=\"fval\">0.60</span></div></div>\n          <div class=\"reason\"><span class=\"lbl\">Why the agent escalated</span>Recommending RTE-4200 (West Houston / Energy Corridor) on WED, window 07:30-11:00, score 0.58. Key factors: geographic_clustering (avg 5.0 mi to existing stops); window_match (no stated preference (neutral score)); capacity_buffer (410 cases headroom (57% utilized post-add)). Passed over: RTE-4100/TUE scored 0.52 (−0.06). Confidence 51% is below the 70% threshold (options are close / scores modest) — flagging for human review before committing.</div>\n          <details class=\"routes\"><summary>Routes the agent evaluated (3)</summary>\n            <div class=\"routelist\"><div class=\"route\"><div class=\"rtitle\"><span>RTE-4100 · Central Houston · TUE · 5.9 mi</span><span class=\"status ok\">FEASIBLE · 0.52</span></div><ul class=\"checks\"><li><span class=\"ok\">✓</span> serviceability: 5.9 mi from route center (limit 12.0 mi)</li><li><span class=\"ok\">✓</span> capacity: utilization 73% post-add (limit 90%), 240 cases headroom</li><li><span class=\"ok\">✓</span> window: no stated preference; any available window acceptable</li></ul></div><div class=\"route\"><div class=\"rtitle\"><span>RTE-4200 · West Houston / Energy Corridor · WED · 9.3 mi</span><span class=\"status ok\">FEASIBLE · 0.58</span></div><ul class=\"checks\"><li><span class=\"ok\">✓</span> serviceability: 9.3 mi from route center (limit 12.0 mi)</li><li><span class=\"ok\">✓</span> capacity: utilization 57% post-add (limit 90%), 410 cases headroom</li><li><span class=\"ok\">✓</span> window: no stated preference; any available window acceptable</li></ul></div><div class=\"route\"><div class=\"rtitle\"><span>RTE-4400 · Southwest / Sugar Land · TUE · 13.3 mi</span><span class=\"status bad\">INFEASIBLE</span></div><ul class=\"checks\"><li><span class=\"no\">✗</span> serviceability: 13.3 mi from route center (limit 12.0 mi)</li><li><span class=\"no\">✗</span> capacity: utilization 109% post-add (limit 90%), -60 cases headroom</li><li><span class=\"ok\">✓</span> window: no stated preference; any available window acceptable</li></ul></div></div>\n          </details>\n        </div>\n      </article>"}, "067-100003": {"name": "Katy Prairie Steakhouse", "steps": [{"title": "Intake", "action": "The agent validates the customer number and captures the intake profile.", "lines": ["Customer number <b>067-100003</b> <span class=\"ok\">✓ valid</span>", "Order quantity: <b>260</b> cases", "Preferred window: <b>06:00–08:00</b>"]}, {"title": "Geo-Lookup", "action": "The agent geocodes the address and selects the nearest candidate routes.", "lines": ["Geocoded address → <b>(29.7830, -95.8240)</b>", "Selected the 3 nearest routes:", "• RTE-4200 · West Houston / Energy Corridor — 12.8 mi", "• RTE-4400 · Southwest / Sugar Land — 16.0 mi", "• RTE-4100 · Central Houston — 27.4 mi"]}, {"title": "Constraint Check", "action": "The agent applies every hard rule and removes infeasible routes.", "lines": ["0 of 3 routes passed every hard rule:", "• RTE-4200: <span class=\"no\">INFEASIBLE</span> — failed serviceability", "• RTE-4400: <span class=\"no\">INFEASIBLE</span> — failed serviceability, capacity", "• RTE-4100: <span class=\"no\">INFEASIBLE</span> — failed serviceability"]}, {"title": "Score & Rank", "action": "The agent scores each feasible route on the weighted factors and ranks them.", "lines": ["No feasible routes survived — nothing to score."]}, {"title": "Recommend / Decide", "action": "The agent picks the best slot, scores its own confidence, and decides to auto-assign or escalate.", "lines": ["Decision: <b>Escalate — no feasible slot</b>", "Agent self-assessed confidence: <b>0%</b>", "No valid slot — routing specialist required."]}], "resultHtml": "\n      <article class=\"result\">\n        <div class=\"rhead\">\n          <div class=\"cnum\">067-100003</div>\n          <h3>Katy Prairie Steakhouse</h3>\n          <div class=\"addr\">24600 Katy Fwy, Katy, TX 77494</div>\n          <div class=\"facts\">\n            <span class=\"fact\">260 cases</span>\n            <span class=\"fact\">prefers 06:00–08:00</span>\n            <span class=\"fact\">3 routes evaluated</span>\n          </div>\n        </div>\n        <div class=\"rbody\">\n          <div class=\"decision-row\">\n            <span class=\"pill no\">✖ No feasible slot — specialist</span>\n            <span style=\"font-size:13px;color:var(--muted)\">agent confidence\n              <b style=\"color:var(--red)\">0%</b></span>\n          </div>\n          <div class=\"conf\"><div class=\"bar\"><span class=\"r\" style=\"width:100%\"></span></div><small>no candidate passed the hard rules</small></div>\n          \n          \n          <div class=\"reason\"><span class=\"lbl\">Why the agent escalated</span>No feasible slot for Katy Prairie Steakhouse: every candidate route was ruled out by a hard constraint [RTE-4200 (WED): failed geographic_serviceability; RTE-4400 (TUE): failed geographic_serviceability, route_capacity; RTE-4100 (TUE): failed geographic_serviceability]. Escalating to a routing specialist for a manual decision (new route, schedule change, or capacity reallocation).</div>\n          <details class=\"routes\"><summary>Routes the agent evaluated (3)</summary>\n            <div class=\"routelist\"><div class=\"route\"><div class=\"rtitle\"><span>RTE-4200 · West Houston / Energy Corridor · WED · 12.8 mi</span><span class=\"status bad\">INFEASIBLE</span></div><ul class=\"checks\"><li><span class=\"no\">✗</span> serviceability: 12.8 mi from route center (limit 12.0 mi)</li><li><span class=\"ok\">✓</span> capacity: utilization 69% post-add (limit 90%), 290 cases headroom</li><li><span class=\"ok\">✓</span> window: 30 min overlap with preferred window (best route window 07:30-11:00)</li></ul></div><div class=\"route\"><div class=\"rtitle\"><span>RTE-4400 · Southwest / Sugar Land · TUE · 16.0 mi</span><span class=\"status bad\">INFEASIBLE</span></div><ul class=\"checks\"><li><span class=\"no\">✗</span> serviceability: 16.0 mi from route center (limit 12.0 mi)</li><li><span class=\"no\">✗</span> capacity: utilization 126% post-add (limit 90%), -180 cases headroom</li><li><span class=\"ok\">✓</span> window: 120 min overlap with preferred window (best route window 06:00-09:00)</li></ul></div><div class=\"route\"><div class=\"rtitle\"><span>RTE-4100 · Central Houston · TUE · 27.4 mi</span><span class=\"status bad\">INFEASIBLE</span></div><ul class=\"checks\"><li><span class=\"no\">✗</span> serviceability: 27.4 mi from route center (limit 12.0 mi)</li><li><span class=\"ok\">✓</span> capacity: utilization 87% post-add (limit 90%), 120 cases headroom</li><li><span class=\"ok\">✓</span> window: 60 min overlap with preferred window (best route window 07:00-10:00)</li></ul></div></div>\n          </details>\n        </div>\n      </article>"}, "067-100004": {"name": "Woodlands Fresh Cafe", "steps": [{"title": "Intake", "action": "The agent validates the customer number and captures the intake profile.", "lines": ["Customer number <b>067-100004</b> <span class=\"ok\">✓ valid</span>", "Order quantity: <b>150</b> cases", "Preferred window: <b>09:00–12:00</b>"]}, {"title": "Geo-Lookup", "action": "The agent geocodes the address and selects the nearest candidate routes.", "lines": ["Geocoded address → <b>(30.1620, -95.4590)</b>", "Selected the 3 nearest routes:", "• RTE-4300 · North Houston / The Woodlands — 0.3 mi", "• RTE-4200 · West Houston / Energy Corridor — 27.7 mi", "• RTE-4100 · Central Houston — 28.4 mi"]}, {"title": "Constraint Check", "action": "The agent applies every hard rule and removes infeasible routes.", "lines": ["1 of 3 routes passed every hard rule:", "• RTE-4300: <span class=\"ok\">FEASIBLE</span>", "• RTE-4200: <span class=\"no\">INFEASIBLE</span> — failed serviceability", "• RTE-4100: <span class=\"no\">INFEASIBLE</span> — failed serviceability"]}, {"title": "Score & Rank", "action": "The agent scores each feasible route on the weighted factors and ranks them.", "lines": ["Weighted scores (higher is better):", "• RTE-4300: score <b>0.85</b> — clustering 0.96, buffer 0.56, window 1.00"]}, {"title": "Recommend / Decide", "action": "The agent picks the best slot, scores its own confidence, and decides to auto-assign or escalate.", "lines": ["Decision: <b>Recommended — auto-assign</b>", "Agent self-assessed confidence: <b>93%</b>", "Proposed slot: <b>RTE-4300 · THU · 08:00–12:00</b>"]}], "resultHtml": "\n      <article class=\"result\">\n        <div class=\"rhead\">\n          <div class=\"cnum\">067-100004</div>\n          <h3>Woodlands Fresh Cafe</h3>\n          <div class=\"addr\">1201 Lake Woodlands Dr, The Woodlands, TX 77380</div>\n          <div class=\"facts\">\n            <span class=\"fact\">150 cases</span>\n            <span class=\"fact\">prefers 09:00–12:00</span>\n            <span class=\"fact\">3 routes evaluated</span>\n          </div>\n        </div>\n        <div class=\"rbody\">\n          <div class=\"decision-row\">\n            <span class=\"pill rec\">✔ Recommended</span>\n            <span style=\"font-size:13px;color:var(--muted)\">agent confidence\n              <b style=\"color:var(--green)\">93%</b></span>\n          </div>\n          <div class=\"conf\"><div class=\"bar\"><span class=\"g\" style=\"width:93%\"></span></div></div>\n          <p class=\"slot\">→ <b>RTE-4300 · North Houston / The Woodlands</b> · THU · <b>08:00–12:00</b> <small style=\"color:var(--muted)\">(score 0.85)</small></p>\n          <div class=\"factors\"><div class=\"factor\"><span class=\"fname\">Geographic clustering</span><div class=\"bar\"><span style=\"width:96%\"></span></div><span class=\"fval\">0.96</span></div><div class=\"factor\"><span class=\"fname\">Capacity buffer</span><div class=\"bar\"><span style=\"width:56%\"></span></div><span class=\"fval\">0.56</span></div><div class=\"factor\"><span class=\"fname\">Window match</span><div class=\"bar\"><span style=\"width:100%\"></span></div><span class=\"fval\">1.00</span></div></div>\n          <div class=\"reason\"><span class=\"lbl\">Why the agent chose this</span>Recommending RTE-4300 (North Houston / The Woodlands) on THU, window 08:00-12:00, score 0.85. Key factors: geographic_clustering (avg 0.6 mi to existing stops); window_match (180/180 min of preferred window covered); capacity_buffer (450 cases headroom (44% utilized post-add)). Confidence 93%.</div>\n          <details class=\"routes\"><summary>Routes the agent evaluated (3)</summary>\n            <div class=\"routelist\"><div class=\"route\"><div class=\"rtitle\"><span>RTE-4300 · North Houston / The Woodlands · THU · 0.3 mi</span><span class=\"status ok\">FEASIBLE · 0.85</span></div><ul class=\"checks\"><li><span class=\"ok\">✓</span> serviceability: 0.3 mi from route center (limit 16.0 mi)</li><li><span class=\"ok\">✓</span> capacity: utilization 44% post-add (limit 90%), 450 cases headroom</li><li><span class=\"ok\">✓</span> window: 180 min overlap with preferred window (best route window 08:00-12:00)</li></ul></div><div class=\"route\"><div class=\"rtitle\"><span>RTE-4200 · West Houston / Energy Corridor · WED · 27.7 mi</span><span class=\"status bad\">INFEASIBLE</span></div><ul class=\"checks\"><li><span class=\"no\">✗</span> serviceability: 27.7 mi from route center (limit 12.0 mi)</li><li><span class=\"ok\">✓</span> capacity: utilization 58% post-add (limit 90%), 400 cases headroom</li><li><span class=\"ok\">✓</span> window: 120 min overlap with preferred window (best route window 07:30-11:00)</li></ul></div><div class=\"route\"><div class=\"rtitle\"><span>RTE-4100 · Central Houston · TUE · 28.4 mi</span><span class=\"status bad\">INFEASIBLE</span></div><ul class=\"checks\"><li><span class=\"no\">✗</span> serviceability: 28.4 mi from route center (limit 12.0 mi)</li><li><span class=\"ok\">✓</span> capacity: utilization 74% post-add (limit 90%), 230 cases headroom</li><li><span class=\"ok\">✓</span> window: 90 min overlap with preferred window (best route window 10:30-12:30)</li></ul></div></div>\n          </details>\n        </div>\n      </article>"}}</script>
+<script type="application/json" id="workflow-data">{"067-100001": {"name": "Bayou City Bistro", "steps": [{"title": "Intake", "action": "The agent validates the customer number and captures the intake profile.", "lines": ["Customer number <b>067-100001</b> <span class=\"ok\">✓ valid</span>", "Order quantity: <b>90</b> cases", "Preferred window: <b>07:00–10:00</b>"]}, {"title": "Geo-Lookup", "action": "The agent geocodes the address and selects the nearest candidate routes.", "lines": ["Geocoded address → <b>(29.7570, -95.3670)</b>", "Selected the 3 nearest routes:", "• RTE-4100 · Central Houston — 0.1 mi", "• RTE-4200 · West Houston / Energy Corridor — 14.7 mi", "• RTE-4400 · Southwest / Sugar Land — 18.7 mi"]}, {"title": "Constraint Check", "action": "The agent applies every hard rule and removes infeasible routes.", "lines": ["1 of 3 routes passed every hard rule:", "• RTE-4100: <span class=\"ok\">FEASIBLE</span>", "• RTE-4200: <span class=\"no\">INFEASIBLE</span> — failed serviceability", "• RTE-4400: <span class=\"no\">INFEASIBLE</span> — failed serviceability, capacity"]}, {"title": "Score & Rank", "action": "The agent scores each feasible route on the weighted factors (with the math) and ranks them.", "lines": ["Each dimension is normalized to 0–1, then combined by weight:", "• <b>RTE-4100 · Central Houston</b> → weighted score <b>0.77</b>", "<span class=\"calc\">↳ clustering = clamp(1 − 0.8 ÷ 15 mi) = <b>0.94</b> · weight 0.45</span>", "<span class=\"calc\">↳ capacity buffer = clamp(290 ÷ 900 cases) = <b>0.32</b> · weight 0.30</span>", "<span class=\"calc\">↳ window match = clamp(180 ÷ 180 min) = <b>1.00</b> · weight 0.25</span>", "<span class=\"calc\">↳ total = 0.45×0.94 + 0.30×0.32 + 0.25×1.00 = <b>0.77</b></span>"]}, {"title": "Recommend / Decide", "action": "The agent picks the best slot, scores its own confidence, and decides to auto-assign or escalate.", "lines": ["Decision: <b>Recommended — auto-assign</b>", "Agent self-assessed confidence: <b>89%</b> (threshold 70%)", "Proposed slot: <b>RTE-4100 · TUE · 07:00–10:00</b>"]}], "resultHtml": "\n      <article class=\"result\">\n        <div class=\"rhead\">\n          <div class=\"cnum\">067-100001</div>\n          <h3>Bayou City Bistro</h3>\n          <div class=\"addr\">1200 McKinney St, Houston, TX 77010</div>\n          <div class=\"facts\">\n            <span class=\"fact\">90 cases</span>\n            <span class=\"fact\">prefers 07:00–10:00</span>\n            <span class=\"fact\">3 routes evaluated</span>\n          </div>\n        </div>\n        <div class=\"rbody\">\n          <div class=\"decision-row\">\n            <span class=\"pill rec\">✔ Recommended</span>\n            <span style=\"font-size:13px;color:var(--muted)\">agent confidence\n              <b style=\"color:var(--green)\">89%</b></span>\n          </div>\n          <div class=\"conf\"><div class=\"bar\"><span class=\"g\" style=\"width:89%\"></span></div></div>\n          <p class=\"slot\">→ <b>RTE-4100 · Central Houston</b> · TUE · <b>07:00–10:00</b> <small style=\"color:var(--muted)\">(score 0.77)</small></p>\n          <div class=\"factors\"><div class=\"factor\"><span class=\"fname\">Geographic clustering</span><div class=\"bar\"><span style=\"width:94%\"></span></div><span class=\"fval\">0.94</span></div><div class=\"factor\"><span class=\"fname\">Capacity buffer</span><div class=\"bar\"><span style=\"width:32%\"></span></div><span class=\"fval\">0.32</span></div><div class=\"factor\"><span class=\"fname\">Window match</span><div class=\"bar\"><span style=\"width:100%\"></span></div><span class=\"fval\">1.00</span></div></div>\n          <div class=\"reason\"><span class=\"lbl\">Why the agent chose this</span>Recommending RTE-4100 (Central Houston) on TUE, window 07:00-10:00, score 0.77. Key factors: geographic_clustering (avg 0.8 mi to existing stops); window_match (180/180 min of preferred window covered); capacity_buffer (290 cases headroom (68% utilized post-add)). Confidence 89%.</div>\n          <details class=\"routes\"><summary>Routes the agent evaluated (3)</summary>\n            <div class=\"routelist\"><div class=\"route\"><div class=\"rtitle\"><span>RTE-4100 · Central Houston · TUE · 0.1 mi</span><span class=\"status ok\">FEASIBLE · 0.77</span></div><ul class=\"checks\"><li><span class=\"ok\">✓</span> serviceability: 0.1 mi from route center (limit 12.0 mi)</li><li><span class=\"ok\">✓</span> capacity: utilization 68% post-add (limit 90%), 290 cases headroom</li><li><span class=\"ok\">✓</span> window: 180 min overlap with preferred window (best route window 07:00-10:00)</li></ul></div><div class=\"route\"><div class=\"rtitle\"><span>RTE-4200 · West Houston / Energy Corridor · WED · 14.7 mi</span><span class=\"status bad\">INFEASIBLE</span></div><ul class=\"checks\"><li><span class=\"no\">✗</span> serviceability: 14.7 mi from route center (limit 12.0 mi)</li><li><span class=\"ok\">✓</span> capacity: utilization 52% post-add (limit 90%), 460 cases headroom</li><li><span class=\"ok\">✓</span> window: 150 min overlap with preferred window (best route window 07:30-11:00)</li></ul></div><div class=\"route\"><div class=\"rtitle\"><span>RTE-4400 · Southwest / Sugar Land · TUE · 18.7 mi</span><span class=\"status bad\">INFEASIBLE</span></div><ul class=\"checks\"><li><span class=\"no\">✗</span> serviceability: 18.7 mi from route center (limit 12.0 mi)</li><li><span class=\"no\">✗</span> capacity: utilization 101% post-add (limit 90%), -10 cases headroom</li><li><span class=\"ok\">✓</span> window: 120 min overlap with preferred window (best route window 06:00-09:00)</li></ul></div></div>\n          </details>\n        </div>\n      </article>"}, "067-100002": {"name": "Galleria Grill &amp; Catering", "steps": [{"title": "Intake", "action": "The agent validates the customer number and captures the intake profile.", "lines": ["Customer number <b>067-100002</b> <span class=\"ok\">✓ valid</span>", "Order quantity: <b>140</b> cases", "Preferred window: <b>any</b>"]}, {"title": "Geo-Lookup", "action": "The agent geocodes the address and selects the nearest candidate routes.", "lines": ["Geocoded address → <b>(29.7400, -95.4630)</b>", "Selected the 3 nearest routes:", "• RTE-4100 · Central Houston — 5.9 mi", "• RTE-4200 · West Houston / Energy Corridor — 9.3 mi", "• RTE-4400 · Southwest / Sugar Land — 13.3 mi"]}, {"title": "Constraint Check", "action": "The agent applies every hard rule and removes infeasible routes.", "lines": ["2 of 3 routes passed every hard rule:", "• RTE-4100: <span class=\"ok\">FEASIBLE</span>", "• RTE-4200: <span class=\"ok\">FEASIBLE</span>", "• RTE-4400: <span class=\"no\">INFEASIBLE</span> — failed serviceability, capacity"]}, {"title": "Score & Rank", "action": "The agent scores each feasible route on the weighted factors (with the math) and ranks them.", "lines": ["Each dimension is normalized to 0–1, then combined by weight:", "• <b>RTE-4200 · West Houston / Energy Corridor</b> → weighted score <b>0.58</b>", "<span class=\"calc\">↳ clustering = clamp(1 − 5.0 ÷ 15 mi) = <b>0.67</b> · weight 0.45</span>", "<span class=\"calc\">↳ capacity buffer = clamp(410 ÷ 950 cases) = <b>0.43</b> · weight 0.30</span>", "<span class=\"calc\">↳ window match = neutral (no preferred window) = <b>0.60</b> · weight 0.25</span>", "<span class=\"calc\">↳ total = 0.45×0.67 + 0.30×0.43 + 0.25×0.60 = <b>0.58</b></span>", "• <b>RTE-4100 · Central Houston</b> → weighted score <b>0.52</b>", "<span class=\"calc\">↳ clustering = clamp(1 − 5.4 ÷ 15 mi) = <b>0.64</b> · weight 0.45</span>", "<span class=\"calc\">↳ capacity buffer = clamp(240 ÷ 900 cases) = <b>0.27</b> · weight 0.30</span>", "<span class=\"calc\">↳ window match = neutral (no preferred window) = <b>0.60</b> · weight 0.25</span>", "<span class=\"calc\">↳ total = 0.45×0.64 + 0.30×0.27 + 0.25×0.60 = <b>0.52</b></span>"]}, {"title": "Recommend / Decide", "action": "The agent picks the best slot, scores its own confidence, and decides to auto-assign or escalate.", "lines": ["Decision: <b>Escalate — low confidence</b>", "Agent self-assessed confidence: <b>51%</b> (threshold 70%)", "Proposed slot: <b>RTE-4200 · WED · 07:30–11:00</b>"]}], "resultHtml": "\n      <article class=\"result\">\n        <div class=\"rhead\">\n          <div class=\"cnum\">067-100002</div>\n          <h3>Galleria Grill &amp; Catering</h3>\n          <div class=\"addr\">5085 Westheimer Rd, Houston, TX 77056</div>\n          <div class=\"facts\">\n            <span class=\"fact\">140 cases</span>\n            <span class=\"fact\">no window preference</span>\n            <span class=\"fact\">3 routes evaluated</span>\n          </div>\n        </div>\n        <div class=\"rbody\">\n          <div class=\"decision-row\">\n            <span class=\"pill low\">⚠ Low confidence — human review</span>\n            <span style=\"font-size:13px;color:var(--muted)\">agent confidence\n              <b style=\"color:var(--amber)\">51%</b></span>\n          </div>\n          <div class=\"conf\"><div class=\"bar\"><span class=\"a\" style=\"width:51%\"></span></div><small>below the confidence threshold</small></div>\n          <p class=\"slot\">→ proposed: <b>RTE-4200 · West Houston / Energy Corridor</b> · WED · <b>07:30–11:00</b> <small style=\"color:var(--muted)\">(score 0.58)</small></p>\n          <div class=\"factors\"><div class=\"factor\"><span class=\"fname\">Geographic clustering</span><div class=\"bar\"><span style=\"width:67%\"></span></div><span class=\"fval\">0.67</span></div><div class=\"factor\"><span class=\"fname\">Capacity buffer</span><div class=\"bar\"><span style=\"width:43%\"></span></div><span class=\"fval\">0.43</span></div><div class=\"factor\"><span class=\"fname\">Window match</span><div class=\"bar\"><span style=\"width:60%\"></span></div><span class=\"fval\">0.60</span></div></div>\n          <div class=\"reason\"><span class=\"lbl\">Why the agent escalated</span>Recommending RTE-4200 (West Houston / Energy Corridor) on WED, window 07:30-11:00, score 0.58. Key factors: geographic_clustering (avg 5.0 mi to existing stops); window_match (no stated preference (neutral score)); capacity_buffer (410 cases headroom (57% utilized post-add)). Passed over: RTE-4100/TUE scored 0.52 (−0.06). Confidence 51% is below the 70% threshold (options are close / scores modest) — flagging for human review before committing.</div>\n          <details class=\"routes\"><summary>Routes the agent evaluated (3)</summary>\n            <div class=\"routelist\"><div class=\"route\"><div class=\"rtitle\"><span>RTE-4100 · Central Houston · TUE · 5.9 mi</span><span class=\"status ok\">FEASIBLE · 0.52</span></div><ul class=\"checks\"><li><span class=\"ok\">✓</span> serviceability: 5.9 mi from route center (limit 12.0 mi)</li><li><span class=\"ok\">✓</span> capacity: utilization 73% post-add (limit 90%), 240 cases headroom</li><li><span class=\"ok\">✓</span> window: no stated preference; any available window acceptable</li></ul></div><div class=\"route\"><div class=\"rtitle\"><span>RTE-4200 · West Houston / Energy Corridor · WED · 9.3 mi</span><span class=\"status ok\">FEASIBLE · 0.58</span></div><ul class=\"checks\"><li><span class=\"ok\">✓</span> serviceability: 9.3 mi from route center (limit 12.0 mi)</li><li><span class=\"ok\">✓</span> capacity: utilization 57% post-add (limit 90%), 410 cases headroom</li><li><span class=\"ok\">✓</span> window: no stated preference; any available window acceptable</li></ul></div><div class=\"route\"><div class=\"rtitle\"><span>RTE-4400 · Southwest / Sugar Land · TUE · 13.3 mi</span><span class=\"status bad\">INFEASIBLE</span></div><ul class=\"checks\"><li><span class=\"no\">✗</span> serviceability: 13.3 mi from route center (limit 12.0 mi)</li><li><span class=\"no\">✗</span> capacity: utilization 109% post-add (limit 90%), -60 cases headroom</li><li><span class=\"ok\">✓</span> window: no stated preference; any available window acceptable</li></ul></div></div>\n          </details>\n        </div>\n      </article>"}, "067-100003": {"name": "Katy Prairie Steakhouse", "steps": [{"title": "Intake", "action": "The agent validates the customer number and captures the intake profile.", "lines": ["Customer number <b>067-100003</b> <span class=\"ok\">✓ valid</span>", "Order quantity: <b>260</b> cases", "Preferred window: <b>06:00–08:00</b>"]}, {"title": "Geo-Lookup", "action": "The agent geocodes the address and selects the nearest candidate routes.", "lines": ["Geocoded address → <b>(29.7830, -95.8240)</b>", "Selected the 3 nearest routes:", "• RTE-4200 · West Houston / Energy Corridor — 12.8 mi", "• RTE-4400 · Southwest / Sugar Land — 16.0 mi", "• RTE-4100 · Central Houston — 27.4 mi"]}, {"title": "Constraint Check", "action": "The agent applies every hard rule and removes infeasible routes.", "lines": ["0 of 3 routes passed every hard rule:", "• RTE-4200: <span class=\"no\">INFEASIBLE</span> — failed serviceability", "• RTE-4400: <span class=\"no\">INFEASIBLE</span> — failed serviceability, capacity", "• RTE-4100: <span class=\"no\">INFEASIBLE</span> — failed serviceability"]}, {"title": "Score & Rank", "action": "The agent scores each feasible route on the weighted factors (with the math) and ranks them.", "lines": ["No feasible routes survived the hard rules — nothing to score."]}, {"title": "Recommend / Decide", "action": "The agent picks the best slot, scores its own confidence, and decides to auto-assign or escalate.", "lines": ["Decision: <b>Escalate — no feasible slot</b>", "Agent self-assessed confidence: <b>0%</b> (threshold 70%)", "No valid slot — routing specialist required."]}], "resultHtml": "\n      <article class=\"result\">\n        <div class=\"rhead\">\n          <div class=\"cnum\">067-100003</div>\n          <h3>Katy Prairie Steakhouse</h3>\n          <div class=\"addr\">24600 Katy Fwy, Katy, TX 77494</div>\n          <div class=\"facts\">\n            <span class=\"fact\">260 cases</span>\n            <span class=\"fact\">prefers 06:00–08:00</span>\n            <span class=\"fact\">3 routes evaluated</span>\n          </div>\n        </div>\n        <div class=\"rbody\">\n          <div class=\"decision-row\">\n            <span class=\"pill no\">✖ No feasible slot — specialist</span>\n            <span style=\"font-size:13px;color:var(--muted)\">agent confidence\n              <b style=\"color:var(--red)\">0%</b></span>\n          </div>\n          <div class=\"conf\"><div class=\"bar\"><span class=\"r\" style=\"width:100%\"></span></div><small>no candidate passed the hard rules</small></div>\n          \n          \n          <div class=\"reason\"><span class=\"lbl\">Why the agent escalated</span>No feasible slot for Katy Prairie Steakhouse: every candidate route was ruled out by a hard constraint [RTE-4200 (WED): failed geographic_serviceability; RTE-4400 (TUE): failed geographic_serviceability, route_capacity; RTE-4100 (TUE): failed geographic_serviceability]. Escalating to a routing specialist for a manual decision (new route, schedule change, or capacity reallocation).</div>\n          <details class=\"routes\"><summary>Routes the agent evaluated (3)</summary>\n            <div class=\"routelist\"><div class=\"route\"><div class=\"rtitle\"><span>RTE-4200 · West Houston / Energy Corridor · WED · 12.8 mi</span><span class=\"status bad\">INFEASIBLE</span></div><ul class=\"checks\"><li><span class=\"no\">✗</span> serviceability: 12.8 mi from route center (limit 12.0 mi)</li><li><span class=\"ok\">✓</span> capacity: utilization 69% post-add (limit 90%), 290 cases headroom</li><li><span class=\"ok\">✓</span> window: 30 min overlap with preferred window (best route window 07:30-11:00)</li></ul></div><div class=\"route\"><div class=\"rtitle\"><span>RTE-4400 · Southwest / Sugar Land · TUE · 16.0 mi</span><span class=\"status bad\">INFEASIBLE</span></div><ul class=\"checks\"><li><span class=\"no\">✗</span> serviceability: 16.0 mi from route center (limit 12.0 mi)</li><li><span class=\"no\">✗</span> capacity: utilization 126% post-add (limit 90%), -180 cases headroom</li><li><span class=\"ok\">✓</span> window: 120 min overlap with preferred window (best route window 06:00-09:00)</li></ul></div><div class=\"route\"><div class=\"rtitle\"><span>RTE-4100 · Central Houston · TUE · 27.4 mi</span><span class=\"status bad\">INFEASIBLE</span></div><ul class=\"checks\"><li><span class=\"no\">✗</span> serviceability: 27.4 mi from route center (limit 12.0 mi)</li><li><span class=\"ok\">✓</span> capacity: utilization 87% post-add (limit 90%), 120 cases headroom</li><li><span class=\"ok\">✓</span> window: 60 min overlap with preferred window (best route window 07:00-10:00)</li></ul></div></div>\n          </details>\n        </div>\n      </article>"}, "067-100004": {"name": "Woodlands Fresh Cafe", "steps": [{"title": "Intake", "action": "The agent validates the customer number and captures the intake profile.", "lines": ["Customer number <b>067-100004</b> <span class=\"ok\">✓ valid</span>", "Order quantity: <b>150</b> cases", "Preferred window: <b>09:00–12:00</b>"]}, {"title": "Geo-Lookup", "action": "The agent geocodes the address and selects the nearest candidate routes.", "lines": ["Geocoded address → <b>(30.1620, -95.4590)</b>", "Selected the 3 nearest routes:", "• RTE-4300 · North Houston / The Woodlands — 0.3 mi", "• RTE-4200 · West Houston / Energy Corridor — 27.7 mi", "• RTE-4100 · Central Houston — 28.4 mi"]}, {"title": "Constraint Check", "action": "The agent applies every hard rule and removes infeasible routes.", "lines": ["1 of 3 routes passed every hard rule:", "• RTE-4300: <span class=\"ok\">FEASIBLE</span>", "• RTE-4200: <span class=\"no\">INFEASIBLE</span> — failed serviceability", "• RTE-4100: <span class=\"no\">INFEASIBLE</span> — failed serviceability"]}, {"title": "Score & Rank", "action": "The agent scores each feasible route on the weighted factors (with the math) and ranks them.", "lines": ["Each dimension is normalized to 0–1, then combined by weight:", "• <b>RTE-4300 · North Houston / The Woodlands</b> → weighted score <b>0.85</b>", "<span class=\"calc\">↳ clustering = clamp(1 − 0.6 ÷ 15 mi) = <b>0.96</b> · weight 0.45</span>", "<span class=\"calc\">↳ capacity buffer = clamp(450 ÷ 800 cases) = <b>0.56</b> · weight 0.30</span>", "<span class=\"calc\">↳ window match = clamp(180 ÷ 180 min) = <b>1.00</b> · weight 0.25</span>", "<span class=\"calc\">↳ total = 0.45×0.96 + 0.30×0.56 + 0.25×1.00 = <b>0.85</b></span>"]}, {"title": "Recommend / Decide", "action": "The agent picks the best slot, scores its own confidence, and decides to auto-assign or escalate.", "lines": ["Decision: <b>Recommended — auto-assign</b>", "Agent self-assessed confidence: <b>93%</b> (threshold 70%)", "Proposed slot: <b>RTE-4300 · THU · 08:00–12:00</b>"]}], "resultHtml": "\n      <article class=\"result\">\n        <div class=\"rhead\">\n          <div class=\"cnum\">067-100004</div>\n          <h3>Woodlands Fresh Cafe</h3>\n          <div class=\"addr\">1201 Lake Woodlands Dr, The Woodlands, TX 77380</div>\n          <div class=\"facts\">\n            <span class=\"fact\">150 cases</span>\n            <span class=\"fact\">prefers 09:00–12:00</span>\n            <span class=\"fact\">3 routes evaluated</span>\n          </div>\n        </div>\n        <div class=\"rbody\">\n          <div class=\"decision-row\">\n            <span class=\"pill rec\">✔ Recommended</span>\n            <span style=\"font-size:13px;color:var(--muted)\">agent confidence\n              <b style=\"color:var(--green)\">93%</b></span>\n          </div>\n          <div class=\"conf\"><div class=\"bar\"><span class=\"g\" style=\"width:93%\"></span></div></div>\n          <p class=\"slot\">→ <b>RTE-4300 · North Houston / The Woodlands</b> · THU · <b>08:00–12:00</b> <small style=\"color:var(--muted)\">(score 0.85)</small></p>\n          <div class=\"factors\"><div class=\"factor\"><span class=\"fname\">Geographic clustering</span><div class=\"bar\"><span style=\"width:96%\"></span></div><span class=\"fval\">0.96</span></div><div class=\"factor\"><span class=\"fname\">Capacity buffer</span><div class=\"bar\"><span style=\"width:56%\"></span></div><span class=\"fval\">0.56</span></div><div class=\"factor\"><span class=\"fname\">Window match</span><div class=\"bar\"><span style=\"width:100%\"></span></div><span class=\"fval\">1.00</span></div></div>\n          <div class=\"reason\"><span class=\"lbl\">Why the agent chose this</span>Recommending RTE-4300 (North Houston / The Woodlands) on THU, window 08:00-12:00, score 0.85. Key factors: geographic_clustering (avg 0.6 mi to existing stops); window_match (180/180 min of preferred window covered); capacity_buffer (450 cases headroom (44% utilized post-add)). Confidence 93%.</div>\n          <details class=\"routes\"><summary>Routes the agent evaluated (3)</summary>\n            <div class=\"routelist\"><div class=\"route\"><div class=\"rtitle\"><span>RTE-4300 · North Houston / The Woodlands · THU · 0.3 mi</span><span class=\"status ok\">FEASIBLE · 0.85</span></div><ul class=\"checks\"><li><span class=\"ok\">✓</span> serviceability: 0.3 mi from route center (limit 16.0 mi)</li><li><span class=\"ok\">✓</span> capacity: utilization 44% post-add (limit 90%), 450 cases headroom</li><li><span class=\"ok\">✓</span> window: 180 min overlap with preferred window (best route window 08:00-12:00)</li></ul></div><div class=\"route\"><div class=\"rtitle\"><span>RTE-4200 · West Houston / Energy Corridor · WED · 27.7 mi</span><span class=\"status bad\">INFEASIBLE</span></div><ul class=\"checks\"><li><span class=\"no\">✗</span> serviceability: 27.7 mi from route center (limit 12.0 mi)</li><li><span class=\"ok\">✓</span> capacity: utilization 58% post-add (limit 90%), 400 cases headroom</li><li><span class=\"ok\">✓</span> window: 120 min overlap with preferred window (best route window 07:30-11:00)</li></ul></div><div class=\"route\"><div class=\"rtitle\"><span>RTE-4100 · Central Houston · TUE · 28.4 mi</span><span class=\"status bad\">INFEASIBLE</span></div><ul class=\"checks\"><li><span class=\"no\">✗</span> serviceability: 28.4 mi from route center (limit 12.0 mi)</li><li><span class=\"ok\">✓</span> capacity: utilization 74% post-add (limit 90%), 230 cases headroom</li><li><span class=\"ok\">✓</span> window: 90 min overlap with preferred window (best route window 10:30-12:30)</li></ul></div></div>\n          </details>\n        </div>\n      </article>"}}</script>
 <script>
 (function () {
   var DATA = JSON.parse(document.getElementById('workflow-data').textContent);
@@ -533,6 +615,33 @@
 
   runBtn.addEventListener('click', run);
   input.addEventListener('keydown', function (e) { if (e.key === 'Enter') { run(); } });
+})();
+
+(function () {
+  var btns = document.querySelectorAll('.tabbtn');
+  var panels = document.querySelectorAll('.tabpanel');
+  var valid = { overview: 1, architecture: 1, simulator: 1 };
+  function activate(name, scroll) {
+    btns.forEach(function (b) {
+      var on = b.getAttribute('data-tab') === name;
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
+    panels.forEach(function (p) { p.classList.toggle('active', p.id === 'tab-' + name); });
+    if (scroll) {
+      var bar = document.querySelector('.tabbar');
+      if (bar) { window.scrollTo({ top: bar.offsetTop, behavior: 'smooth' }); }
+    }
+  }
+  btns.forEach(function (b) {
+    b.addEventListener('click', function () {
+      var n = b.getAttribute('data-tab');
+      activate(n, true);
+      history.replaceState(null, '', '#' + n);
+    });
+  });
+  var initial = (location.hash || '').replace('#', '');
+  if (valid[initial]) { activate(initial, false); }
 })();
 </script>
 </body>

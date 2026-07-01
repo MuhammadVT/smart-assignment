@@ -1,7 +1,7 @@
 # smart-assignment
 
 Agentic workflow for automated delivery **slot assignment** for new
-foodservice customers (Sysco context), built on Google's
+customers (Sysco context), built on Google's
 [Agent Development Kit (ADK)](https://google.github.io/adk-docs/) and verified
 against **google-adk 2.3.0**.
 
@@ -9,11 +9,11 @@ Given a new customer (address, order quantity in cases, optional delivery
 window), the workflow finds the delivery route+day that best serves them —
 or escalates to a human specialist when nothing fits or the call is too close.
 
-> 📊 **Overview page for product owners:** a visual walkthrough published via
-> GitHub Pages at **https://muhammadvt.github.io/smart-assignment/**. It
-> emphasizes that this is an **agent-automated** flow, includes an **agentic
-> architecture diagram**, and lets viewers **run the agent interactively** by
-> entering a mock customer number and watching it work each step. The page
+> 📊 **Overview page for product owners:** a visual, tabbed walkthrough
+> published via GitHub Pages at **https://muhammadvt.github.io/smart-assignment/** —
+> an **Overview** tab, an **Architecture** tab (agentic workflow diagram), and a
+> **Simulator** tab that spells out the scoring math and lets viewers **run the
+> agent interactively** on a mock customer number. The page
 > ([`docs/index.html`](docs/index.html)) is **generated from live workflow
 > output** so it can't drift — regenerate it with
 > `python3 scripts/generate_page.py` after changing mock data, rules, or config.

@@ -65,6 +65,37 @@ def test_page_has_architecture_and_agent_emphasis():
     assert "executed autonomously by the agent" in html
 
 
+def test_page_has_three_tabs():
+    config = Config()
+    html = build_page(_results(config), config)
+    for tab in ("overview", "architecture", "simulator"):
+        assert f'data-tab="{tab}"' in html
+        assert f'id="tab-{tab}"' in html
+
+
+def test_scoring_section_shows_real_formulas():
+    config = Config()
+    html = build_page(_results(config), config)
+    # The scoring dimensions and their code formulas are spelled out.
+    assert "Exactly how each dimension is scored" in html
+    assert "avg_miles_to_stops" in html
+    assert "cases_remaining_after_add" in html
+    assert "preferred_window_minutes" in html
+    # The confidence formula from reasoning.compute_confidence is shown.
+    assert "0.6·" in html and "0.5 + 0.5·" in html
+
+    # The per-step simulator payload shows the scoring arithmetic for a scored route.
+    marker = '<script type="application/json" id="workflow-data">'
+    start = html.index(marker) + len(marker)
+    payload = json.loads(html[start : html.index("</script>", start)])
+    # 067-100001 (Bayou City Bistro) has a feasible, scored route.
+    score_step = payload["067-100001"]["steps"][3]
+    assert score_step["title"] == "Score & Rank"
+    joined = " ".join(score_step["lines"])
+    assert "clustering = clamp(" in joined
+    assert "total =" in joined
+
+
 def test_page_has_interactive_simulator_with_payload():
     config = Config()
     html = build_page(_results(config), config)
