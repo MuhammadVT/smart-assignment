@@ -25,7 +25,7 @@ def config() -> Config:
 def sample_customer() -> CustomerProfile:
     """A geocoded downtown-Houston customer with a morning preference."""
     return CustomerProfile(
-        customer_id="CUST-NEW-9001",
+        customer_number="067-100001",
         name="Riverside Diner",
         address="1200 McKinney St, Houston, TX 77010",
         order_quantity_cases=90,
@@ -46,7 +46,7 @@ def open_route() -> Route:
         vehicle_capacity_cases=1000,
         available_windows=[(time(7, 0), time(10, 0))],
         committed_stops=[
-            RouteStop("CUST-EX-1", GeoPoint(29.7560, -95.3650), 120),
+            RouteStop("067-090001", GeoPoint(29.7560, -95.3650), 120),
         ],
     )
 
@@ -63,7 +63,7 @@ def full_route() -> Route:
         vehicle_capacity_cases=500,
         available_windows=[(time(7, 0), time(10, 0))],
         committed_stops=[
-            RouteStop("CUST-EX-2", GeoPoint(29.7560, -95.3650), 470),
+            RouteStop("067-090002", GeoPoint(29.7560, -95.3650), 470),
         ],
     )
 

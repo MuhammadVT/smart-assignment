@@ -70,6 +70,7 @@ smart-assignment/
 │   ├── mock_customers.py               # [MOCK] sample Sysco new-customer intakes
 │   ├── shared/                         # cross-workflow, framework-agnostic core
 │   │   ├── models.py                   # data contracts (CustomerProfile, Route, ...)
+│   │   ├── customer.py                 # Sysco customer-number format (NNN-NNNNNN)
 │   │   ├── geo.py                      # haversine + Geocoder protocol
 │   │   ├── timeutils.py                # delivery-window overlap helpers
 │   │   ├── constraints.py              # pluggable HARD constraints (step 3)
@@ -113,18 +114,21 @@ auditable trace for each — geocoding, the Top-N candidate routes, every
 constraint outcome, the weighted score breakdown, and the final decision:
 
 ```bash
-python3 scripts/run_local.py                    # all sample customers
-python3 scripts/run_local.py --customer CUST-NEW-9002   # just one
+python3 scripts/run_local.py                        # all sample customers
+python3 scripts/run_local.py --customer 067-100002  # just one, by customer number
 ```
 
-The four bundled customers each exercise a different branch:
+Customers are identified by a **Sysco customer number** in the form
+`NNN-NNNNNN` (3-digit site/OpCo + 6-digit per-site number); see
+`shared/customer.py`. The four bundled customers (all on mock site `067`) each
+exercise a different branch:
 
-| Customer | Situation | Outcome |
-|---|---|---|
-| Bayou City Bistro (downtown) | sits in the dense Central route, morning window | **RECOMMENDED** (~89%) |
-| Galleria Grill & Catering | two routes plausible, scores close | **ESCALATE – low confidence** (~51%) |
-| Katy Prairie Steakhouse (far west) | all routes out of range / over capacity | **ESCALATE – no feasible slot** |
-| Woodlands Fresh Cafe | lightly-booked North route fits cleanly | **RECOMMENDED** (~93%) |
+| Customer number | Customer | Situation | Outcome |
+|---|---|---|---|
+| `067-100001` | Bayou City Bistro (downtown) | sits in the dense Central route, morning window | **RECOMMENDED** (~89%) |
+| `067-100002` | Galleria Grill & Catering | two routes plausible, scores close | **ESCALATE – low confidence** (~51%) |
+| `067-100003` | Katy Prairie Steakhouse (far west) | all routes out of range / over capacity | **ESCALATE – no feasible slot** |
+| `067-100004` | Woodlands Fresh Cafe | lightly-booked North route fits cleanly | **RECOMMENDED** (~93%) |
 
 ### Reasoning: deterministic vs. LLM
 
@@ -135,17 +139,51 @@ narratives, `cp .env.example .env`, set `GOOGLE_API_KEY`, and re-run. To force
 the deterministic reasoner in code, pass
 `run_slot_recommendation(customer, reasoner=DeterministicReasoner())`.
 
-## ADK CLI / deployment path
+## Running on the mock examples with `adk run` / `adk web`
 
-`graph.py` wraps the same pipeline as an ADK `Workflow` (`root_agent`) for
-`adk run` / `adk web` / `adk deploy`. These invoke the LLM node and therefore
-need model credentials. Because every ADK node delegates to `pipeline.py`, the
-deployed graph and the offline demo can never disagree on business logic.
+`graph.py` wraps the same pipeline as an ADK `Workflow` (`root_agent`). Because
+`adk run`/`adk web` send the agent a free-text message, the entry node accepts
+a **customer number** (`NNN-NNNNNN`) and resolves it to one of the mock Sysco
+customers. Names are never accepted — Sysco identifies customers by number.
+Reasoning defaults to the LLM layer with a deterministic fallback, so no API
+key is required to see output.
+
+Valid inputs: `067-100001` … `067-100004` (unrecognized/blank input falls back
+to the first customer).
+
+**CLI (`adk run`)** — one-shot, prints the recommendation to the terminal:
 
 ```bash
+adk run smart_assignment "067-100001"   # RECOMMENDED (~89%)
+adk run smart_assignment "067-100002"   # ESCALATE - low confidence (~51%)
+adk run smart_assignment "067-100003"   # ESCALATE - no feasible slot
+adk run smart_assignment "067-100004"   # RECOMMENDED (~93%)
+
+# Omit the query for an interactive prompt (type a customer number, then Enter):
 adk run smart_assignment
-adk web smart_assignment
 ```
+
+**Web UI (`adk web`)** — point it directly at the agent folder, open the URL,
+pick `smart_assignment`, and type a customer number in the chat:
+
+```bash
+adk web smart_assignment          # serves http://127.0.0.1:8000
+```
+
+Sample `adk run` output (`067-100002`):
+
+```
+[smart_assignment_slot_recommendation]: Customer: Galleria Grill & Catering (067-100002)
+Decision: ESCALATE -> human review (low confidence)  |  confidence 51%
+Proposed slot: RTE-4200 (West Houston / Energy Corridor), WED, window 07:30-11:00
+Score factors: geographic_clustering=0.67(w0.45)  capacity_buffer=0.43(w0.30)  window_match=0.60(w0.25)
+Reasoning: ... Passed over: RTE-4100/TUE scored 0.52 (−0.06). Confidence 51% is below the 70% threshold ...
+```
+
+Because every ADK node delegates to `pipeline.py`, the deployed graph and the
+offline demo can never disagree on business logic. To get real Gemini
+narratives instead of the deterministic fallback, set `GOOGLE_API_KEY` in
+`.env` first. `adk deploy` uses the same `root_agent`.
 
 ## Testing
 

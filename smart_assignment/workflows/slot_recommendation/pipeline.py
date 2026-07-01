@@ -23,6 +23,7 @@ from smart_assignment.integrations.geocoding_client import MockGeocoder
 from smart_assignment.integrations.route_capacity_client import fetch_candidate_routes
 from smart_assignment.shared.config import DEFAULT_CONFIG, Config
 from smart_assignment.shared.constraints import build_context, evaluate_constraints
+from smart_assignment.shared.customer import validate_customer_number
 from smart_assignment.shared.geo import Geocoder, haversine_miles
 from smart_assignment.shared.models import (
     CandidateEvaluation,
@@ -44,9 +45,11 @@ from smart_assignment.workflows.slot_recommendation.reasoning import (
 
 
 def intake(customer: CustomerProfile) -> CustomerProfile:
+    # Enforce the Sysco customer-number format up front (raises on malformed).
+    customer.customer_number = validate_customer_number(customer.customer_number)
     if customer.order_quantity_cases <= 0:
         raise ValueError(
-            f"{customer.customer_id}: order_quantity_cases must be positive, "
+            f"{customer.customer_number}: order_quantity_cases must be positive, "
             f"got {customer.order_quantity_cases}"
         )
     return customer
@@ -126,7 +129,7 @@ def decide(
 
     if not ranked:
         return SlotRecommendation(
-            customer_id=customer.customer_id,
+            customer_number=customer.customer_number,
             customer_name=customer.name,
             decision=Decision.ESCALATED_NO_FEASIBLE_SLOT,
             confidence=confidence,
@@ -139,7 +142,7 @@ def decide(
     escalate = confidence < config.confidence_threshold
     decision = Decision.ESCALATED_LOW_CONFIDENCE if escalate else Decision.RECOMMENDED
     return SlotRecommendation(
-        customer_id=customer.customer_id,
+        customer_number=customer.customer_number,
         customer_name=customer.name,
         decision=decision,
         confidence=confidence,

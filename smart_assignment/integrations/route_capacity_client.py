@@ -38,10 +38,10 @@ def _mock_routes() -> list[Route]:
             vehicle_capacity_cases=900,
             available_windows=[(time(7, 0), time(10, 0)), (time(10, 30), time(12, 30))],
             committed_stops=[
-                RouteStop("CUST-1011", GeoPoint(29.7550, -95.3650), 140),
-                RouteStop("CUST-1012", GeoPoint(29.7620, -95.3720), 120),
-                RouteStop("CUST-1013", GeoPoint(29.7480, -95.3810), 160),
-                RouteStop("CUST-1014", GeoPoint(29.7700, -95.3900), 100),
+                RouteStop("067-011011", GeoPoint(29.7550, -95.3650), 140),
+                RouteStop("067-011012", GeoPoint(29.7620, -95.3720), 120),
+                RouteStop("067-011013", GeoPoint(29.7480, -95.3810), 160),
+                RouteStop("067-011014", GeoPoint(29.7700, -95.3900), 100),
             ],
         ),
         # West Houston / Energy Corridor — moderate load, wide capacity,
@@ -55,9 +55,9 @@ def _mock_routes() -> list[Route]:
             vehicle_capacity_cases=950,
             available_windows=[(time(7, 30), time(11, 0)), (time(12, 0), time(14, 0))],
             committed_stops=[
-                RouteStop("CUST-2021", GeoPoint(29.7450, -95.4700), 130),
-                RouteStop("CUST-2022", GeoPoint(29.7600, -95.5200), 150),
-                RouteStop("CUST-2023", GeoPoint(29.7830, -95.6350), 120),
+                RouteStop("067-022021", GeoPoint(29.7450, -95.4700), 130),
+                RouteStop("067-022022", GeoPoint(29.7600, -95.5200), 150),
+                RouteStop("067-022023", GeoPoint(29.7830, -95.6350), 120),
             ],
         ),
         # North / The Woodlands — lightly booked, plenty of room, later windows.
@@ -70,8 +70,8 @@ def _mock_routes() -> list[Route]:
             vehicle_capacity_cases=800,
             available_windows=[(time(8, 0), time(12, 0)), (time(13, 0), time(15, 0))],
             committed_stops=[
-                RouteStop("CUST-3031", GeoPoint(30.1600, -95.4550), 110),
-                RouteStop("CUST-3032", GeoPoint(30.1720, -95.4700), 90),
+                RouteStop("067-033031", GeoPoint(30.1600, -95.4550), 110),
+                RouteStop("067-033032", GeoPoint(30.1720, -95.4700), 90),
             ],
         ),
         # Southwest / Sugar Land — nearly full (near the 90% ceiling),
@@ -85,8 +85,8 @@ def _mock_routes() -> list[Route]:
             vehicle_capacity_cases=700,
             available_windows=[(time(6, 0), time(9, 0)), (time(9, 30), time(12, 0))],
             committed_stops=[
-                RouteStop("CUST-4041", GeoPoint(29.6200, -95.6300), 320),
-                RouteStop("CUST-4042", GeoPoint(29.6100, -95.6500), 300),
+                RouteStop("067-044041", GeoPoint(29.6200, -95.6300), 320),
+                RouteStop("067-044042", GeoPoint(29.6100, -95.6500), 300),
             ],
         ),
     ]
