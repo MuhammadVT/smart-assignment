@@ -1,86 +1,108 @@
 """
-Manual local smoke-test entry point. Picks a workflow by name and runs it
-against a sample customer profile. Useful for quick end-to-end checks
-without the ADK Web UI or CLI.
+Local demo / smoke test for the Smart Assignment workflow.
 
-Requires a Gemini API key (or Vertex AI credentials) to execute the LLM
-node -- set GOOGLE_API_KEY in your environment, or see
-https://google.github.io/adk-docs/get-started/google-cloud/ for Vertex
-AI auth.
+Runs the pipeline over the mock Sysco customers in
+`smart_assignment/mock_customers.py` and prints a full, auditable trace for
+each: geocoding, the Top-N candidate routes, every hard-constraint outcome,
+the weighted scoring breakdown, and the final recommendation or escalation.
+
+Runs fully OFFLINE — no API key required. Reasoning defaults to the LLM
+layer, which automatically falls back to a deterministic trace when no
+GOOGLE_API_KEY / Vertex credentials are configured.
 
 Run:
-    python3 scripts/run_local.py --workflow slot_recommendation
+    python3 scripts/run_local.py                 # all sample customers
+    python3 scripts/run_local.py --customer CUST-NEW-9002
 """
 
 from __future__ import annotations
 
 import argparse
-import asyncio
-from datetime import time
 
-from google.adk.runners import InMemoryRunner
-from google.adk.sessions import InMemorySessionService
+from smart_assignment.mock_customers import SAMPLE_CUSTOMERS
+from smart_assignment.shared.config import DEFAULT_CONFIG
+from smart_assignment.shared.models import Decision, RecommendationResult
+from smart_assignment.shared.timeutils import fmt_window
+from smart_assignment.workflows.slot_recommendation.pipeline import run_slot_recommendation
 
-from smart_assignment.shared.models import CustomerProfile, DayOfWeek
-
-APP_NAME = "smart_assignment"
-USER_ID = "local-dev-user"
-
-
-def _sample_customer() -> CustomerProfile:
-    return CustomerProfile(
-        customer_id="CUST-NEW-9001",
-        name="Riverside Diner",
-        address="123 Example St, Sample City, ST",
-        latitude=37.77,
-        longitude=-122.41,
-        weekly_order_volume_cases=150,
-        product_temp_zone="mixed",
-        requested_days=[DayOfWeek.TUE, DayOfWeek.WED],
-        requested_time_window=(time(7, 0), time(11, 0)),
-        delivery_priority="standard",
-    )
-
-
-async def run_slot_recommendation():
-    from smart_assignment.workflows.slot_recommendation import root_agent
-
-    customer = _sample_customer()
-    session_service = InMemorySessionService()
-    session = await session_service.create_session(app_name=APP_NAME, user_id=USER_ID)
-    runner = InMemoryRunner(agent=root_agent, app_name=APP_NAME)
-
-    print(f"Running slot_recommendation workflow for {customer.name}...\n")
-
-    events = runner.run_async(
-        user_id=USER_ID,
-        session_id=session.id,
-        new_message=customer,
-    )
-
-    async for event in events:
-        if event.is_final_response():
-            print("FINAL OUTPUT:")
-            print(event.content)
-
-
-WORKFLOWS = {
-    "slot_recommendation": run_slot_recommendation,
-    # Add new entries here as additional workflows are added under
-    # smart_assignment/workflows/.
+_RULE = "=" * 78
+_DECISION_MARK = {
+    Decision.RECOMMENDED: "[RECOMMENDED]",
+    Decision.ESCALATED_LOW_CONFIDENCE: "[ESCALATE - LOW CONFIDENCE]",
+    Decision.ESCALATED_NO_FEASIBLE_SLOT: "[ESCALATE - NO FEASIBLE SLOT]",
 }
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Run a smart_assignment workflow locally")
+def _print_result(result: RecommendationResult) -> None:
+    c = result.customer
+    rec = result.recommendation
+    pref = fmt_window(c.preferred_window) if c.preferred_window else "any"
+
+    print(_RULE)
+    print(f"CUSTOMER  {c.name} ({c.customer_id})")
+    print(f"  intake    address={c.address!r}")
+    print(f"            order={c.order_quantity_cases} cases, preferred_window={pref}")
+    loc = c.location
+    print(f"  geocoded  ({loc.latitude:.4f}, {loc.longitude:.4f})")
+
+    print(f"  Top-{len(result.candidates_considered)} candidate routes by proximity:")
+    for cand in result.candidates_considered:
+        status = "FEASIBLE" if cand.feasible else "infeasible"
+        print(
+            f"    - {cand.route.route_id} {cand.route.name} "
+            f"[{cand.route.day.value}] {cand.distance_miles:.1f} mi -> {status}"
+        )
+        for oc in cand.constraint_outcomes:
+            flag = "ok " if oc.passed else "FAIL"
+            print(f"        {flag} {oc.name}: {oc.detail}")
+        if cand.feasible:
+            factors = "  ".join(
+                f"{f.name}={f.value:.2f}(w{f.weight:.2f})" for f in cand.factor_scores
+            )
+            print(f"        score={cand.total_score:.2f}  [{factors}]")
+
+    print(f"\n  DECISION  {_DECISION_MARK[rec.decision]}  confidence={rec.confidence:.0%}")
+    if rec.recommended_route_id:
+        print(
+            f"            -> {rec.recommended_route_id} ({rec.recommended_route_name}), "
+            f"{rec.recommended_day}, window {rec.recommended_window}"
+        )
+    if rec.review_reason:
+        print(f"            review_reason: {rec.review_reason}")
+    print(f"  REASONING {rec.reasoning}")
+    if rec.rejected_alternatives:
+        print("  ALTERNATIVES CONSIDERED:")
+        for alt in rec.rejected_alternatives:
+            print(f"    - {alt}")
+    print()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Run the Smart Assignment workflow on mock data")
     parser.add_argument(
-        "--workflow",
-        choices=list(WORKFLOWS.keys()),
-        default="slot_recommendation",
-        help="Which workflow to run",
+        "--customer",
+        help="Only run for this customer_id (default: all sample customers)",
     )
     args = parser.parse_args()
-    asyncio.run(WORKFLOWS[args.workflow]())
+
+    customers = SAMPLE_CUSTOMERS
+    if args.customer:
+        customers = [c for c in customers if c.customer_id == args.customer]
+        if not customers:
+            raise SystemExit(f"No sample customer with id {args.customer!r}")
+
+    print(_RULE)
+    print("SMART ASSIGNMENT - slot_recommendation workflow (mock Sysco data)")
+    print(
+        f"config: top_n={DEFAULT_CONFIG.top_n_candidate_routes} "
+        f"max_util={DEFAULT_CONFIG.max_utilization_after_assignment:.0%} "
+        f"confidence_threshold={DEFAULT_CONFIG.confidence_threshold:.0%} "
+        f"weights={DEFAULT_CONFIG.factor_weights}"
+    )
+
+    for customer in customers:
+        result = run_slot_recommendation(customer)
+        _print_result(result)
 
 
 if __name__ == "__main__":
