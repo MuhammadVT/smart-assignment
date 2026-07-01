@@ -11,7 +11,10 @@ or escalates to a human specialist when nothing fits or the call is too close.
 
 > 📊 **Overview page for product owners:** a visual walkthrough of the workflow
 > and live agent outputs is published via GitHub Pages at
-> **https://muhammadvt.github.io/smart-assignment/** (source in [`docs/index.html`](docs/index.html)).
+> **https://muhammadvt.github.io/smart-assignment/**. The page
+> ([`docs/index.html`](docs/index.html)) is **generated from live workflow
+> output** so it can't drift — regenerate it with
+> `python3 scripts/generate_page.py` after changing mock data, rules, or config.
 
 ## The process (`slot_recommendation`)
 
