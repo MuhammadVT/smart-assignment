@@ -1,16 +1,18 @@
 """
-Domain models for the delivery slot recommendation workflow.
+Domain models for the Smart Assignment slot-recommendation workflow.
 
-[ASSUMPTION BLOCK — READ FIRST]
-None of Sysco's actual data schemas, capacity rules, or route systems were
-provided. Every field below is a reasonable guess at what a route/capacity
-system would expose, modeled loosely on common DSD (direct store delivery)
-/ foodservice distribution patterns. Treat this file as the contract to
-correct once real schemas (e.g., from a TMS like Roadnet, Descartes, or an
-internal system) are available. Swapping these models and the two tool
-functions in `tools.py` that populate them should be the only changes
-needed to point this workflow at real systems — the graph and the
-reasoning agent should not need to change.
+These are intentionally small, framework-agnostic dataclasses so that any
+orchestration layer (the plain-Python pipeline in
+`workflows/slot_recommendation/pipeline.py`, the ADK graph, a future
+sequential/multi-agent workflow) shares the exact same data contracts.
+
+[MOCK / ASSUMPTION]
+None of Sysco's real schemas were provided. Field choices below model a
+foodservice DSD (direct-store-delivery) domain: routes are trucks that run
+a given weekday delivering *cases* to accounts (restaurants, cafeterias,
+etc.). Swap `integrations/route_capacity_client.py` and
+`integrations/geocoding_client.py` for real systems and — as long as they
+populate these dataclasses — nothing downstream needs to change.
 """
 
 from __future__ import annotations
@@ -19,6 +21,9 @@ from dataclasses import dataclass, field
 from datetime import time
 from enum import Enum
 from typing import Optional
+
+# A delivery window is a simple (start, end) pair of clock times.
+Window = tuple[time, time]
 
 
 class DayOfWeek(str, Enum):
@@ -30,87 +35,169 @@ class DayOfWeek(str, Enum):
     SAT = "SAT"
 
 
+@dataclass(frozen=True)
+class GeoPoint:
+    """A geocoded latitude/longitude coordinate."""
+
+    latitude: float
+    longitude: float
+
+
+# ---------------------------------------------------------------------------
+# Intake
+# ---------------------------------------------------------------------------
+
+
 @dataclass
 class CustomerProfile:
     """
-    [ASSUMPTION] Minimal new-customer intake fields. In reality this likely
-    comes from a CRM / onboarding form. `weekly_order_volume_cases` and
-    `product_temp_zone` materially affect which routes/vehicles can serve
-    the account, so they're treated as required.
+    New-customer intake (spec: address, order quantity, optional window).
+
+    `location` is populated by the geocoding step; it is None until then.
     """
 
     customer_id: str
     name: str
     address: str
-    latitude: float
-    longitude: float
-    weekly_order_volume_cases: int  # estimated case volume per delivery
-    product_temp_zone: str  # [ASSUMPTION] "dry" | "refrigerated" | "frozen" | "mixed"
-    requested_days: Optional[list[DayOfWeek]] = None  # customer preference, soft constraint
-    requested_time_window: Optional[tuple[time, time]] = (
-        None  # customer preference, soft constraint
-    )
-    delivery_priority: str = "standard"  # [ASSUMPTION] "standard" | "high" (e.g. contractual SLA)
+    order_quantity_cases: int
+    preferred_window: Optional[Window] = None  # optional, soft/hard depending on constraint
+    location: Optional[GeoPoint] = None  # filled in by geo-lookup
+
+
+# ---------------------------------------------------------------------------
+# Route / capacity data
+# ---------------------------------------------------------------------------
 
 
 @dataclass
-class CommittedStop:
-    """An existing customer stop already locked into a route's schedule."""
+class RouteStop:
+    """An existing account already committed to a route's schedule."""
 
     customer_id: str
-    arrival_window: tuple[time, time]
+    location: GeoPoint
     case_volume: int
 
 
 @dataclass
-class RouteSlot:
+class Route:
     """
-    [ASSUMPTION] Represents one (route, day) instance — i.e. a specific
-    truck running a specific day of the week — with its capacity and
-    already-committed stops. A "route" in this model is recurring
-    (same route number runs every Tue, for example) but capacity and
-    committed stops are evaluated per day-instance since they vary daily.
+    One (route, weekday) instance — a specific truck running a specific day.
+
+    `service_center` + `service_radius_miles` describe the route's
+    serviceable area; `committed_stops` are the accounts already on it (used
+    for both remaining-capacity and geographic-clustering math).
     """
 
     route_id: str
+    name: str
     day: DayOfWeek
-    vehicle_id: str
+    service_center: GeoPoint
+    service_radius_miles: float
     vehicle_capacity_cases: int
-    vehicle_temp_zone: str  # must match customer's product_temp_zone (or be "mixed")
-    driver_id: str
-    driver_shift_start: time
-    driver_shift_end: time
-    service_zone_ids: list[str]  # geographic zones this route is authorized/optimized to serve
-    committed_stops: list[CommittedStop] = field(default_factory=list)
-    available_arrival_windows: list[tuple[time, time]] = field(default_factory=list)
-    # ^ [ASSUMPTION] pre-computed open windows within the shift not yet
-    #   claimed by committed stops, e.g. from a routing engine's slack report.
+    available_windows: list[Window] = field(default_factory=list)
+    committed_stops: list[RouteStop] = field(default_factory=list)
+
+    @property
+    def committed_volume_cases(self) -> int:
+        return sum(stop.case_volume for stop in self.committed_stops)
+
+
+# ---------------------------------------------------------------------------
+# Evaluation results (constraint + scoring trace)
+# ---------------------------------------------------------------------------
 
 
 @dataclass
-class FeasibleSlotOption:
-    """A RouteSlot that has passed all hard constraints, with computed fit metrics."""
+class ConstraintOutcome:
+    """Result of one hard-constraint check against one route."""
 
-    route_slot: RouteSlot
-    proposed_arrival_window: tuple[time, time]
-    remaining_capacity_after_assignment: int
-    geographic_fit_score: (
-        float  # 0-1, [ASSUMPTION] proximity/clustering with existing committed stops on this route
-    )
-    capacity_utilization_after: float  # 0-1
-    matches_customer_preference: bool
+    name: str
+    passed: bool
+    detail: str
+
+
+@dataclass
+class FactorScore:
+    """One weighted scoring factor's contribution for one route."""
+
+    name: str
+    weight: float
+    value: float  # normalized 0.0 - 1.0
+    detail: str
+
+    @property
+    def weighted(self) -> float:
+        return self.weight * self.value
+
+
+@dataclass
+class CandidateEvaluation:
+    """
+    Full evaluation trace for a single candidate route: the geo/capacity
+    facts, every hard-constraint outcome, and (if feasible) the scoring
+    breakdown. This is what makes the recommendation auditable.
+    """
+
+    route: Route
+    distance_miles: float
+    chosen_window: Optional[Window]
+    remaining_capacity_after: int
+    utilization_after: float
+    constraint_outcomes: list[ConstraintOutcome] = field(default_factory=list)
+    factor_scores: list[FactorScore] = field(default_factory=list)
+    total_score: float = 0.0
+
+    @property
+    def feasible(self) -> bool:
+        return bool(self.constraint_outcomes) and all(c.passed for c in self.constraint_outcomes)
+
+    @property
+    def failed_constraints(self) -> list[ConstraintOutcome]:
+        return [c for c in self.constraint_outcomes if not c.passed]
+
+
+# ---------------------------------------------------------------------------
+# Final output
+# ---------------------------------------------------------------------------
+
+
+class Decision(str, Enum):
+    RECOMMENDED = "RECOMMENDED"
+    ESCALATED_NO_FEASIBLE_SLOT = "ESCALATED_NO_FEASIBLE_SLOT"
+    ESCALATED_LOW_CONFIDENCE = "ESCALATED_LOW_CONFIDENCE"
 
 
 @dataclass
 class SlotRecommendation:
-    """Final explainable output of the workflow."""
+    """The explainable output of the workflow for one customer."""
 
     customer_id: str
-    recommended_route_id: Optional[str]
-    recommended_day: Optional[str]
-    recommended_window: Optional[str]
-    confidence: float  # 0-1, model-reported confidence in this recommendation
+    customer_name: str
+    decision: Decision
+    confidence: float
     reasoning: str
-    rejected_alternatives: list[str]  # human-readable reasons other slots were ruled out
-    requires_human_review: bool
+    recommended_route_id: Optional[str] = None
+    recommended_route_name: Optional[str] = None
+    recommended_day: Optional[str] = None
+    recommended_window: Optional[str] = None
+    factor_breakdown: list[FactorScore] = field(default_factory=list)
+    rejected_alternatives: list[str] = field(default_factory=list)
     review_reason: Optional[str] = None
+
+    @property
+    def requires_human_review(self) -> bool:
+        return self.decision != Decision.RECOMMENDED
+
+
+@dataclass
+class RecommendationResult:
+    """
+    Everything the workflow produced for one customer — the final
+    recommendation plus the full trace of what was considered. Carried
+    around so the CLI/UI can render an auditable decision, not just an answer.
+    """
+
+    customer: CustomerProfile
+    candidates_considered: list[CandidateEvaluation]  # top-N, with constraint outcomes
+    ranked_feasible: list[CandidateEvaluation]  # feasible options, best first
+    recommendation: SlotRecommendation

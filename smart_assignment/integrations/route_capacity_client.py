@@ -1,16 +1,16 @@
 """
-External system client(s) — code that actually talks to outside systems,
-kept separate from `shared/tools.py` so workflows depend on stable,
-testable function signatures rather than on integration details.
+[MOCK] Route/capacity data source — the single highest-priority integration
+point to replace with a real system (Sysco's TMS / routing engine, e.g.
+Roadnet, Descartes, or an internal service).
 
-[ASSUMPTION BLOCK]
-This client is entirely mocked. It stands in for whatever real system
-holds Sysco's route capacity / TMS data (no real schema was provided).
-This is the single highest-priority file to replace with a real
-integration — everything downstream (constraint filtering in
-shared/tools.py, the recommendation workflow) should not need to change
-as long as the real system's response can populate the `RouteSlot`
-dataclass in shared/models.py.
+`fetch_candidate_routes()` returns `Route` objects for the Houston metro
+(Sysco is headquartered in Houston, TX). As long as a real system's response
+can populate the `Route` / `RouteStop` dataclasses in shared/models.py, no
+downstream code (geo-lookup, constraints, scoring) needs to change.
+
+DO NOT treat these capacities, stop densities, or shift windows as
+representative of real Sysco operations — they exist only to exercise the
+workflow end-to-end.
 """
 
 from __future__ import annotations
@@ -18,81 +18,80 @@ from __future__ import annotations
 from datetime import time
 
 from smart_assignment.shared.models import (
-    CommittedStop,
-    CustomerProfile,
     DayOfWeek,
-    RouteSlot,
+    GeoPoint,
+    Route,
+    RouteStop,
 )
 
 
-def fetch_candidate_route_slots(zone_id: str, customer: CustomerProfile) -> list[RouteSlot]:
-    """
-    [STUB] Query the route capacity system for RouteSlots (route+day
-    instances) that already serve, or could serve, this zone.
-
-    [ASSUMPTION] Real version should call into Sysco's TMS/routing system
-    (e.g. via an internal API or DB query) filtering by:
-      - service_zone_ids containing `zone_id`
-      - vehicle_temp_zone compatible with customer.product_temp_zone
-      - route status = active
-
-    Below is mock data standing in for that call so workflows are
-    runnable end-to-end. DO NOT treat this data as representative of real
-    Sysco route density, shift patterns, or vehicle capacities.
-    """
-    mock_routes = [
-        RouteSlot(
-            route_id="RTE-114",
+def _mock_routes() -> list[Route]:
+    return [
+        # Dense downtown/Midtown route — lots of tightly-clustered stops,
+        # comfortable capacity headroom, morning windows.
+        Route(
+            route_id="RTE-4100",
+            name="Central Houston",
             day=DayOfWeek.TUE,
-            vehicle_id="TRK-22",
-            vehicle_capacity_cases=850,
-            vehicle_temp_zone="mixed",
-            driver_id="DRV-09",
-            driver_shift_start=time(5, 0),
-            driver_shift_end=time(14, 0),
-            service_zone_ids=[zone_id, "ZONE_ADJACENT_1"],
+            service_center=GeoPoint(29.7589, -95.3677),
+            service_radius_miles=12.0,
+            vehicle_capacity_cases=900,
+            available_windows=[(time(7, 0), time(10, 0)), (time(10, 30), time(12, 30))],
             committed_stops=[
-                CommittedStop("CUST-001", (time(7, 0), time(7, 30)), 120),
-                CommittedStop("CUST-002", (time(9, 0), time(9, 30)), 200),
-            ],
-            available_arrival_windows=[
-                (time(7, 30), time(9, 0)),
-                (time(9, 30), time(11, 0)),
-                (time(12, 0), time(13, 30)),
+                RouteStop("CUST-1011", GeoPoint(29.7550, -95.3650), 140),
+                RouteStop("CUST-1012", GeoPoint(29.7620, -95.3720), 120),
+                RouteStop("CUST-1013", GeoPoint(29.7480, -95.3810), 160),
+                RouteStop("CUST-1014", GeoPoint(29.7700, -95.3900), 100),
             ],
         ),
-        RouteSlot(
-            route_id="RTE-114",
-            day=DayOfWeek.FRI,
-            vehicle_id="TRK-22",
-            vehicle_capacity_cases=850,
-            vehicle_temp_zone="mixed",
-            driver_id="DRV-09",
-            driver_shift_start=time(5, 0),
-            driver_shift_end=time(14, 0),
-            service_zone_ids=[zone_id],
-            committed_stops=[
-                CommittedStop("CUST-003", (time(6, 30), time(7, 0)), 600),
-                CommittedStop("CUST-004", (time(8, 0), time(8, 30)), 220),
-            ],
-            available_arrival_windows=[
-                (time(11, 0), time(13, 30)),
-            ],
-        ),
-        RouteSlot(
-            route_id="RTE-208",
+        # West Houston / Energy Corridor — moderate load, wide capacity,
+        # stops trend toward the Galleria/west side.
+        Route(
+            route_id="RTE-4200",
+            name="West Houston / Energy Corridor",
             day=DayOfWeek.WED,
-            vehicle_id="TRK-31",
-            vehicle_capacity_cases=600,
-            vehicle_temp_zone="refrigerated",
-            driver_id="DRV-15",
-            driver_shift_start=time(6, 0),
-            driver_shift_end=time(13, 0),
-            service_zone_ids=[zone_id],
-            committed_stops=[],
-            available_arrival_windows=[
-                (time(6, 0), time(13, 0)),  # lightly booked route, wide open
+            service_center=GeoPoint(29.7836, -95.6100),
+            service_radius_miles=12.0,
+            vehicle_capacity_cases=950,
+            available_windows=[(time(7, 30), time(11, 0)), (time(12, 0), time(14, 0))],
+            committed_stops=[
+                RouteStop("CUST-2021", GeoPoint(29.7450, -95.4700), 130),
+                RouteStop("CUST-2022", GeoPoint(29.7600, -95.5200), 150),
+                RouteStop("CUST-2023", GeoPoint(29.7830, -95.6350), 120),
+            ],
+        ),
+        # North / The Woodlands — lightly booked, plenty of room, later windows.
+        Route(
+            route_id="RTE-4300",
+            name="North Houston / The Woodlands",
+            day=DayOfWeek.THU,
+            service_center=GeoPoint(30.1658, -95.4613),
+            service_radius_miles=16.0,
+            vehicle_capacity_cases=800,
+            available_windows=[(time(8, 0), time(12, 0)), (time(13, 0), time(15, 0))],
+            committed_stops=[
+                RouteStop("CUST-3031", GeoPoint(30.1600, -95.4550), 110),
+                RouteStop("CUST-3032", GeoPoint(30.1720, -95.4700), 90),
+            ],
+        ),
+        # Southwest / Sugar Land — nearly full (near the 90% ceiling),
+        # so most new volume won't fit.
+        Route(
+            route_id="RTE-4400",
+            name="Southwest / Sugar Land",
+            day=DayOfWeek.TUE,
+            service_center=GeoPoint(29.6197, -95.6349),
+            service_radius_miles=12.0,
+            vehicle_capacity_cases=700,
+            available_windows=[(time(6, 0), time(9, 0)), (time(9, 30), time(12, 0))],
+            committed_stops=[
+                RouteStop("CUST-4041", GeoPoint(29.6200, -95.6300), 320),
+                RouteStop("CUST-4042", GeoPoint(29.6100, -95.6500), 300),
             ],
         ),
     ]
-    return mock_routes
+
+
+def fetch_candidate_routes() -> list[Route]:
+    """[STUB] Return all active route+day instances known to the system."""
+    return _mock_routes()

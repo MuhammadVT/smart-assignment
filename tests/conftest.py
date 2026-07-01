@@ -6,55 +6,78 @@ from datetime import time
 
 import pytest
 
-from smart_assignment.shared.models import CommittedStop, CustomerProfile, DayOfWeek, RouteSlot
+from smart_assignment.shared.config import Config
+from smart_assignment.shared.models import (
+    CustomerProfile,
+    DayOfWeek,
+    GeoPoint,
+    Route,
+    RouteStop,
+)
+
+
+@pytest.fixture
+def config() -> Config:
+    return Config()
 
 
 @pytest.fixture
 def sample_customer() -> CustomerProfile:
+    """A geocoded downtown-Houston customer with a morning preference."""
     return CustomerProfile(
         customer_id="CUST-NEW-9001",
         name="Riverside Diner",
-        address="123 Example St",
-        latitude=37.77,
-        longitude=-122.41,
-        weekly_order_volume_cases=150,
-        product_temp_zone="mixed",
-        requested_days=[DayOfWeek.TUE, DayOfWeek.WED],
-        requested_time_window=(time(7, 0), time(11, 0)),
+        address="1200 McKinney St, Houston, TX 77010",
+        order_quantity_cases=90,
+        preferred_window=(time(7, 0), time(10, 0)),
+        location=GeoPoint(29.7570, -95.3670),
     )
 
 
 @pytest.fixture
-def open_route() -> RouteSlot:
-    """A route with plenty of capacity and an open window."""
-    return RouteSlot(
+def open_route() -> Route:
+    """Nearby route with plenty of capacity and an overlapping window."""
+    return Route(
         route_id="RTE-TEST-1",
+        name="Test Open Route",
         day=DayOfWeek.TUE,
-        vehicle_id="TRK-TEST",
+        service_center=GeoPoint(29.7589, -95.3677),
+        service_radius_miles=12.0,
         vehicle_capacity_cases=1000,
-        vehicle_temp_zone="mixed",
-        driver_id="DRV-TEST",
-        driver_shift_start=time(6, 0),
-        driver_shift_end=time(14, 0),
-        service_zone_ids=["ZONE_TEST"],
-        committed_stops=[],
-        available_arrival_windows=[(time(8, 0), time(10, 0))],
+        available_windows=[(time(7, 0), time(10, 0))],
+        committed_stops=[
+            RouteStop("CUST-EX-1", GeoPoint(29.7560, -95.3650), 120),
+        ],
     )
 
 
 @pytest.fixture
-def full_route() -> RouteSlot:
-    """A route already at capacity — should be filtered out."""
-    return RouteSlot(
+def full_route() -> Route:
+    """Nearby route already near the 90% capacity ceiling."""
+    return Route(
         route_id="RTE-TEST-2",
+        name="Test Full Route",
         day=DayOfWeek.WED,
-        vehicle_id="TRK-TEST-2",
+        service_center=GeoPoint(29.7589, -95.3677),
+        service_radius_miles=12.0,
         vehicle_capacity_cases=500,
-        vehicle_temp_zone="mixed",
-        driver_id="DRV-TEST-2",
-        driver_shift_start=time(6, 0),
-        driver_shift_end=time(14, 0),
-        service_zone_ids=["ZONE_TEST"],
-        committed_stops=[CommittedStop("CUST-EXISTING", (time(8, 0), time(8, 30)), 480)],
-        available_arrival_windows=[(time(9, 0), time(10, 0))],
+        available_windows=[(time(7, 0), time(10, 0))],
+        committed_stops=[
+            RouteStop("CUST-EX-2", GeoPoint(29.7560, -95.3650), 470),
+        ],
+    )
+
+
+@pytest.fixture
+def far_route() -> Route:
+    """Route whose service center is well outside serviceable range."""
+    return Route(
+        route_id="RTE-TEST-3",
+        name="Test Far Route",
+        day=DayOfWeek.THU,
+        service_center=GeoPoint(30.1658, -95.4613),  # The Woodlands, ~30 mi away
+        service_radius_miles=12.0,
+        vehicle_capacity_cases=1000,
+        available_windows=[(time(7, 0), time(10, 0))],
+        committed_stops=[],
     )

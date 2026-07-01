@@ -1,32 +1,20 @@
 """
-Graph assembly for the slot_recommendation workflow.
+ADK graph assembly for the slot_recommendation workflow — the deployable
+(`adk run` / `adk web` / `adk deploy`) wrapper around the pipeline.
 
     START
-      -> geocode_and_cluster_customer        (code)
-      -> fetch_candidate_slots_node           (code)
-      -> filter_feasible_slots_node           (code)
-      -> route_on_feasibility                 (code, conditional router)
-           "NO_OPTIONS"  -> escalate_no_feasible_slot   (human input)
-           "HAS_OPTIONS" -> recommend_slot_agent        (LLM)
-                              -> confidence_gate          (code, conditional router)
-                                   "LOW_CONFIDENCE" -> escalate_low_confidence (human input)
-                                   "HIGH_CONFIDENCE" -> format_output          (code)
+      -> geo_lookup_node            (intake + geocode + Top-N nearest routes)
+      -> constraint_and_score_node  (hard constraints, then weighted scoring)
+      -> route_on_feasibility       (conditional router)
+           "NO_OPTIONS"  -> escalate_no_feasible_slot    (human input)
+           "HAS_OPTIONS" -> build_recommendation_node
+                              -> confidence_gate           (conditional router)
+                                   "LOW_CONFIDENCE"  -> escalate_low_confidence (human input)
+                                   "HIGH_CONFIDENCE" -> format_output
 
-Design rationale:
-  - Constraint checking (capacity, hours, temp zone, overtime) is 100%
-    deterministic code -- enforced structurally by the graph, not just by
-    prompting. See shared/tools.py.
-  - Exactly one LLM call happens, ONLY over the already-feasible options,
-    to make the judgment call that genuinely benefits from reasoning.
-  - Two distinct human escalation paths are modeled because they're
-    operationally different problems: no feasible slot at all (likely
-    needs a manual routing decision) vs. a feasible slot the model isn't
-    confident about (needs a sanity check, not a redesign).
-
-Data flow note [VERIFIED against ADK 2.0 graph data-handling docs]:
-  - `Event.output` passes data ONLY to the immediately next node.
-  - `Event.state` persists across the whole session/graph run -- used here
-    to carry the customer profile across the LLM hop.
+All node logic delegates to pipeline.py, so this graph and the offline demo
+share one implementation. The local demo (`scripts/run_local.py`) drives the
+pipeline directly and needs no API key; this graph is the ADK deployment form.
 """
 
 from __future__ import annotations
@@ -34,26 +22,23 @@ from __future__ import annotations
 from google.adk import Workflow
 
 from smart_assignment.workflows.slot_recommendation.nodes import (
+    build_recommendation_node,
     confidence_gate,
+    constraint_and_score_node,
     escalate_low_confidence,
     escalate_no_feasible_slot,
-    fetch_candidate_slots_node,
-    filter_feasible_slots_node,
     format_output,
-    geocode_and_cluster_customer,
-    prepare_recommendation_prompt,
-    recommend_slot_agent,
+    geo_lookup_node,
     route_on_feasibility,
 )
 
 root_agent = Workflow(
-    name="delivery_slot_recommendation_workflow",
+    name="smart_assignment_slot_recommendation",
     edges=[
         (
             "START",
-            geocode_and_cluster_customer,
-            fetch_candidate_slots_node,
-            filter_feasible_slots_node,
+            geo_lookup_node,
+            constraint_and_score_node,
             route_on_feasibility,
         ),
         (
@@ -61,8 +46,7 @@ root_agent = Workflow(
             {
                 "NO_OPTIONS": escalate_no_feasible_slot,
                 "HAS_OPTIONS": (
-                    prepare_recommendation_prompt,
-                    recommend_slot_agent,
+                    build_recommendation_node,
                     confidence_gate,
                 ),
             },

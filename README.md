@@ -1,97 +1,148 @@
 # smart-assignment
 
-Agentic workflows for automated delivery day/time slot assignment for new
-customers, built on Google's [Agent Development Kit (ADK)](https://google.github.io/adk-docs/).
+Agentic workflow for automated delivery **slot assignment** for new
+foodservice customers (Sysco context), built on Google's
+[Agent Development Kit (ADK)](https://google.github.io/adk-docs/) and verified
+against **google-adk 2.3.0**.
 
-Verified against **google-adk 2.3.0** (the current `pip install google-adk`
-release as of this writing). Every import, the graph construction, and
-the full test suite in this repo have been executed against the real
-installed package — not just checked against documentation prose.
+Given a new customer (address, order quantity in cases, optional delivery
+window), the workflow finds the delivery route+day that best serves them —
+or escalates to a human specialist when nothing fits or the call is too close.
+
+## The process (`slot_recommendation`)
+
+```
+1. Intake        collect address, order quantity (cases), optional window
+2. Geo-Lookup    geocode the address, pick the Top-N nearest candidate routes
+3. Constraints   drop routes failing any HARD constraint (deterministic code)
+4. Score & Rank  weighted multi-factor scoring over the survivors
+5. Recommend     output the top slot + full reasoning trace,
+                 or ESCALATE (no feasible slot / low confidence)
+```
+
+**Hard constraints (step 3) — objective, code-enforced, never LLM judgment:**
+
+| Constraint | Rule |
+|---|---|
+| Geographic serviceability | customer within the route's service radius (and a global mileage cap) |
+| Route capacity | utilization stays `<= 90%` after adding the order |
+| Delivery-window compatibility | route has a window overlapping the customer's preference (if stated) |
+
+**Scoring factors (step 4) — weighted, in priority order:**
+
+| Factor | Weight | Meaning |
+|---|---|---|
+| `geographic_clustering` | 0.45 | how tightly the customer clusters with the route's existing stops |
+| `capacity_buffer` | 0.30 | headroom left on the truck after the add (resilience) |
+| `window_match` | 0.25 | how much of the preferred window the route can cover |
+
+Constraints and scoring are **deterministic Python** — reproducible and
+auditable. An LLM is *structurally unable* to place a customer onto a full
+truck or outside the serviceable area, because those checks are code, not
+prompting. The LLM's only (optional) job is turning the already-decided,
+fully-quantified result into a fluent natural-language explanation.
+
+## Architecture / decision flow
+
+```
+START
+  -> geo_lookup_node            (intake + geocode + Top-N nearest routes)
+  -> constraint_and_score_node  (hard constraints, then weighted scoring)
+  -> route_on_feasibility       (conditional)
+       NO_OPTIONS  -> escalate_no_feasible_slot     (human input)
+       HAS_OPTIONS -> build_recommendation_node
+                        -> confidence_gate            (conditional)
+                             LOW_CONFIDENCE  -> escalate_low_confidence (human input)
+                             HIGH_CONFIDENCE -> format_output
+```
+
+Confidence blends *how good* the top option is with *how clearly* it beats the
+runner-up; below `SMART_ASSIGNMENT_CONFIDENCE_THRESHOLD` (default 0.70) it
+escalates for a human sanity-check (a slot is still proposed, so the reviewer
+has something to approve/override).
 
 ## Repo structure
 
-This repo is structured to hold **multiple, architecturally different
-agentic workflows** side by side, not just the one currently implemented.
-
 ```
 smart-assignment/
-├── smart_assignment/                # importable package
-│   ├── agent.py                     # ADK entry point (root_agent)
-│   ├── workflows/                   # one subpackage per agentic workflow
-│   │   └── slot_recommendation/     # ← currently the only workflow
-│   │       ├── graph.py             # the Workflow(edges=[...]) definition
-│   │       ├── nodes.py             # function nodes + the one LLM Agent
-│   │       └── prompts.py           # instruction text & output schemas
-│   ├── shared/                      # cross-workflow code
-│   │   ├── models.py                # data contracts
-│   │   ├── tools.py                 # reusable deterministic functions
-│   │   └── config.py                # env-driven thresholds/settings
-│   └── integrations/                # external system clients
-│       └── route_capacity_client.py # [MOCKED] route/capacity data source
-├── deployment/                      # deploy.py + optional terraform/
-├── eval/                            # AgentEvaluator golden-dataset evals
-├── tests/                           # fast, deterministic unit tests
-├── docs/architecture/               # per-workflow diagrams
-└── scripts/run_local.py             # manual smoke-test entry point
+├── smart_assignment/
+│   ├── agent.py                        # ADK entry point (root_agent)
+│   ├── mock_customers.py               # [MOCK] sample Sysco new-customer intakes
+│   ├── shared/                         # cross-workflow, framework-agnostic core
+│   │   ├── models.py                   # data contracts (CustomerProfile, Route, ...)
+│   │   ├── geo.py                      # haversine + Geocoder protocol
+│   │   ├── timeutils.py                # delivery-window overlap helpers
+│   │   ├── constraints.py              # pluggable HARD constraints (step 3)
+│   │   ├── scoring.py                  # pluggable weighted factors (step 4)
+│   │   └── config.py                   # env-driven thresholds & weights
+│   ├── workflows/slot_recommendation/
+│   │   ├── pipeline.py                 # the 5-step orchestration (source of truth)
+│   │   ├── reasoning.py                # confidence + pluggable reasoner (LLM default)
+│   │   ├── prompts.py                  # LLM reasoning prompt text
+│   │   ├── graph.py                    # ADK Workflow wrapper (delegates to pipeline)
+│   │   └── nodes.py                    # ADK nodes (delegate to pipeline)
+│   └── integrations/                   # [MOCKED] external systems
+│       ├── route_capacity_client.py    # route/capacity data (TMS stand-in)
+│       └── geocoding_client.py         # address -> lat/lng
+├── scripts/run_local.py                # OFFLINE demo over the mock customers
+├── tests/                              # fast, deterministic unit tests
+└── deployment/ · eval/ · docs/
 ```
 
-**Why `workflows/<name>/` instead of flat files at the package root:**
-each workflow owns whatever internal shape its orchestration pattern
-needs — a graph (what `slot_recommendation` uses), a `SequentialAgent`/
-`LoopAgent` pipeline, or a multi-agent hierarchy with `sub_agents/`. Adding
-a second, differently-architected workflow means adding a new folder
-under `workflows/`, without touching `slot_recommendation/` or `shared/`.
-
-**Why `shared/` is separate from any one workflow:** functions like
-`filter_feasible_slots` and data contracts like `RouteSlot` aren't
-specific to the graph pattern — a future workflow built as a sequential
-pipeline could call the exact same constraint-filtering function. This is
-what makes the structure genuinely reusable across architectures, not
-just parallel folders that don't talk to each other.
-
-> **Honesty note:** I have not found a published Google reference repo
-> that contains multiple, architecturally different workflows side by
-> side in one package — every `google/adk-samples` entry is one agent
-> (single pattern) per repo. The `workflows/<name>/` convention is an
-> extrapolation from how Google structures sub-agents *within* a single
-> complex sample (e.g. `data-science`'s `sub_agents/`), generalized one
-> level up. It's ADK-idiomatic and follows real Python packaging
-> practice, but it is not itself a documented Google standard — validate
-> it against your team's actual second and third workflows once they
-> exist.
-
-### A note on flat vs. `src/` layout
-
-This repo uses a **flat layout** (the `smart_assignment/` package sits at
-the repo root, not under `src/`), matching the convention used across
-Google's own `adk-samples` repo (`llm-auditor/`, `customer-service/`,
-etc., and the ADK CLI's own project scaffolding). General Python
-packaging guidance increasingly recommends a `src/` layout for
-distributable library code, since it prevents accidentally importing the
-in-development copy of the code instead of the installed one. This repo
-is closer to a deployed application than a distributed library, and
-matching the ADK ecosystem's own convention makes it easier to use
-standard ADK tooling (`adk run`, `adk web`, `adk deploy`) without extra
-path configuration. If this ever needs to be published as an installable
-library for others to depend on, moving to `src/smart_assignment/` would
-be the standard next step.
+**Modularity by design:** each hard constraint and each scoring factor is a
+small pure function in a registry (`HARD_CONSTRAINTS`, `SCORING_FACTORS`).
+Add/remove/reweight one by editing a single list or a config weight — nothing
+else changes. Every collaborator (route source, geocoder, reasoner, config) is
+injected into `run_slot_recommendation(...)`, so pointing this at real systems
+is a matter of passing different arguments, not editing logic.
 
 ## Setup
 
 ```bash
 python3 -m venv .venv
-source .venv/bin/activate        # or .venv\Scripts\activate on Windows
+source .venv/bin/activate         # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
-cp .env.example .env             # then fill in GOOGLE_API_KEY or Vertex AI config
 ```
 
-## Running
+No API key or `.env` is needed for the demo or tests.
+
+## Seeing the agent output on mock data
+
+The demo runs the full pipeline over the mock Sysco customers and prints an
+auditable trace for each — geocoding, the Top-N candidate routes, every
+constraint outcome, the weighted score breakdown, and the final decision:
 
 ```bash
-# Manual smoke test
-python3 scripts/run_local.py --workflow slot_recommendation
+python3 scripts/run_local.py                    # all sample customers
+python3 scripts/run_local.py --customer CUST-NEW-9002   # just one
+```
 
-# ADK's own CLI / Web UI
+The four bundled customers each exercise a different branch:
+
+| Customer | Situation | Outcome |
+|---|---|---|
+| Bayou City Bistro (downtown) | sits in the dense Central route, morning window | **RECOMMENDED** (~89%) |
+| Galleria Grill & Catering | two routes plausible, scores close | **ESCALATE – low confidence** (~51%) |
+| Katy Prairie Steakhouse (far west) | all routes out of range / over capacity | **ESCALATE – no feasible slot** |
+| Woodlands Fresh Cafe | lightly-booked North route fits cleanly | **RECOMMENDED** (~93%) |
+
+### Reasoning: deterministic vs. LLM
+
+Reasoning defaults to the **LLM layer** (`LLMReasoner`). When no
+`GOOGLE_API_KEY` / Vertex credentials are present it transparently falls back
+to a deterministic trace, so the demo always runs offline. To get real Gemini
+narratives, `cp .env.example .env`, set `GOOGLE_API_KEY`, and re-run. To force
+the deterministic reasoner in code, pass
+`run_slot_recommendation(customer, reasoner=DeterministicReasoner())`.
+
+## ADK CLI / deployment path
+
+`graph.py` wraps the same pipeline as an ADK `Workflow` (`root_agent`) for
+`adk run` / `adk web` / `adk deploy`. These invoke the LLM node and therefore
+need model credentials. Because every ADK node delegates to `pipeline.py`, the
+deployed graph and the offline demo can never disagree on business logic.
+
+```bash
 adk run smart_assignment
 adk web smart_assignment
 ```
@@ -99,98 +150,28 @@ adk web smart_assignment
 ## Testing
 
 ```bash
-pytest tests/              # fast, deterministic unit tests — no LLM calls
-pytest eval/test_eval.py   # AgentEvaluator-based trajectory/response eval
+pytest tests/              # fast, deterministic unit tests — no LLM/network
 ```
 
-All 11 unit tests pass as of this writing. The eval suite currently
-contains a **placeholder** dataset (`eval/data/slot_recommendation.test.json`)
-— no real route/capacity data was available to build a genuine golden
-dataset. Populate it with real captured trajectories (via the ADK Web
-UI's trajectory recording) before relying on it for regression detection.
+Constraints, scoring, confidence math, the end-to-end pipeline decisions, and
+the ADK routers are all covered.
 
-## Architecture: `slot_recommendation`
+## [ASSUMPTIONS / MOCKS REQUIRING REPLACEMENT]
 
-```
-START
-  -> geocode_and_cluster_customer        (code)
-  -> fetch_candidate_slots_node          (code — calls route capacity system)
-  -> filter_feasible_slots_node          (code — HARD constraints only)
-  -> route_on_feasibility                (code, conditional)
-       NO_OPTIONS  -> escalate_no_feasible_slot   (human input)
-       HAS_OPTIONS -> recommend_slot_agent        (LLM — ranks feasible options)
-                        -> confidence_gate          (code, conditional)
-                             LOW_CONFIDENCE  -> escalate_low_confidence (human input)
-                             HIGH_CONFIDENCE -> format_output            (code)
-```
+This is a **first-pass** on mock data. Highest-priority items to replace:
 
-Capacity, driver hours, and temperature compatibility are objectively
-checkable, so they're plain Python functions (`shared/tools.py`), not
-agent reasoning — an LLM is structurally unable to assign a stop that
-violates them, not just instructed not to. Exactly one LLM call happens,
-and only over options that already passed every hard constraint, to make
-the genuinely subjective call: which feasible slot best serves
-reliability and customer satisfaction.
-
-## Key ADK 2.0 mechanics this design relies on (verified against installed package)
-
-- `Event.output` passes data to the *immediately next* node only — it does
-  not accumulate across the graph.
-- `Event.state` persists across the whole workflow run and is how the
-  customer profile / feasible options survive the LLM hop.
-- `RequestInput` (from `google.adk.events`) implements human-in-the-loop
-  nodes without invoking a model.
-- `Agent.input_schema` must be a `pydantic.BaseModel` subclass (not a bare
-  type like `str`) in this installed version — confirmed by instantiating
-  the agent and fixing a validation error that the official docs example
-  did not surface.
-- `Event(route=[...])` stores routing data on `event.actions.route`, not
-  `event.route` directly — confirmed by inspecting the real `Event`
-  pydantic model fields.
-- `AgentEvaluator.evaluate()` auto-discovers eval criteria from a
-  `test_config.json` file in the **same folder** as the `.test.json`
-  dataset — it is not passed as an explicit config-path argument (an
-  earlier draft of this repo assumed otherwise; fixed after inspecting
-  the real method signature and source).
-
-## [ASSUMPTIONS REQUIRING CORRECTION]
-
-1. **Route/capacity data source** (`integrations/route_capacity_client.py`)
-   is entirely mocked. Highest-priority integration point — replace with
-   a real call into your TMS/routing system.
-2. **Geocoding/zone assignment** (`shared/tools.py: _naive_zone_bucket`)
-   is a placeholder lat/lng bucket, not real territory logic.
-3. **Capacity utilization buffer** (`SMART_ASSIGNMENT_MAX_UTILIZATION`,
-   default 90%) is a guess, not a stated operational policy — confirm
-   the real "do not exceed X% of rated capacity" rule with ops.
-4. **`available_arrival_windows`** on `RouteSlot` assumes some upstream
-   system already computes open slack windows within a route.
-5. **Geographic fit score** is a crude proxy (count of committed stops).
-   Real clustering quality should come from actual stop-insertion
-   marginal cost/drive-time delta from the routing engine.
-6. **Confidence threshold** (`SMART_ASSIGNMENT_CONFIDENCE_THRESHOLD`,
-   default 0.70) for escalating to a human is an arbitrary starting
-   point — tune against real human-override rates once available.
-
-## Production-readiness gaps
-
-- **Eval dataset is a placeholder**, as noted above.
-- **No retry/error handling** around the route data fetch — a failed or
-  slow call to the real capacity system should have explicit fallback
-  behavior, not crash the graph.
-- **No monitoring/observability wiring.** ADK supports logging, metrics,
-  and traces (https://google.github.io/adk-docs/observability/) — none
-  configured here. At minimum, track recommendation acceptance rate,
-  human-override rate, and feasible-slot-found rate.
-- **No authentication/authorization** around who can approve human-input
-  escalations, and no durable audit trail beyond the session.
-- **Human-input node UX is unspecified** — `RequestInput` yields a
-  request that some client (web UI, Slack bot, ops dashboard) must
-  surface and respond to; that client doesn't exist in this repo.
-- **No load/concurrency testing** against a real, rate-limited capacity API.
-- **Confidence calibration is unverified** — the model self-reports
-  confidence with no evidence yet that it correlates with actual
-  recommendation quality.
-- **`deployment/deploy.py` has not been run against a real GCP project**
-  as part of building this repo — verify project/region values and IAM
-  permissions before running it in your environment.
+1. **Route/capacity source** (`integrations/route_capacity_client.py`) is
+   mocked Houston data. Replace with a real Sysco TMS/routing integration —
+   as long as it populates `Route`/`RouteStop`, nothing downstream changes.
+2. **Geocoding** (`integrations/geocoding_client.py`) resolves a handful of
+   demo addresses and otherwise returns a deterministic Houston-area point.
+   Swap for a real geocoder implementing the `Geocoder` protocol.
+3. **`geographic_clustering`** uses average distance to a route's committed
+   stops as a proxy — real clustering quality should come from the routing
+   engine's marginal stop-insertion cost / drive-time delta.
+4. **Thresholds & weights** (90% utilization, 0.70 confidence, service radius,
+   factor weights) are starting points in `shared/config.py`, not validated
+   Sysco policy — tune against real operational data.
+5. **Human-input UX** — the escalation nodes yield an ADK `RequestInput`; the
+   client that surfaces it to an ops reviewer (dashboard, Slack, etc.) is out
+   of scope for this pass.
