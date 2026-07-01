@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Smart Assignment — Delivery Slot Recommendation</title>
+<meta name="description" content="How the Smart Assignment agent recommends delivery slots for new Sysco customers, with live examples on mock data." />
+<style>
+  :root {
+    --navy: #0b2e59;
+    --blue: #1257a6;
+    --blue-soft: #e8f0fb;
+    --ink: #1a2233;
+    --muted: #5b6675;
+    --line: #e3e8ef;
+    --bg: #f6f8fb;
+    --card: #ffffff;
+    --green: #1a7f37;
+    --green-soft: #e7f4ea;
+    --amber: #9a6700;
+    --amber-soft: #fdf3d8;
+    --red: #b42318;
+    --red-soft: #fbe9e7;
+    --radius: 14px;
+    --shadow: 0 1px 2px rgba(16,32,64,.06), 0 6px 20px rgba(16,32,64,.06);
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; color: var(--ink); background: var(--bg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.55;
+  }
+  a { color: var(--blue); }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 20px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12px; font-weight: 600; letter-spacing: .02em;
+    padding: 5px 11px; border-radius: 999px; background: rgba(255,255,255,.15);
+    border: 1px solid rgba(255,255,255,.3);
+  }
+
+  /* Hero */
+  header.hero {
+    background: linear-gradient(135deg, var(--navy), var(--blue));
+    color: #fff; padding: 54px 0 60px;
+  }
+  .hero h1 { margin: 14px 0 8px; font-size: 40px; line-height: 1.1; letter-spacing: -.02em; }
+  .hero p.lead { margin: 0; font-size: 18px; max-width: 640px; color: #dbe6f5; }
+  .hero .meta { margin-top: 22px; display: flex; flex-wrap: wrap; gap: 10px; }
+
+  /* Sections */
+  section { padding: 48px 0; }
+  section h2 { font-size: 26px; letter-spacing: -.01em; margin: 0 0 6px; }
+  section .sub { color: var(--muted); margin: 0 0 26px; max-width: 720px; }
+  .eyebrow { color: var(--blue); font-weight: 700; font-size: 13px; letter-spacing: .08em; text-transform: uppercase; }
+
+  /* Flow steps */
+  .flow { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; }
+  .step {
+    background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 18px 16px; box-shadow: var(--shadow); position: relative;
+  }
+  .step .num {
+    width: 30px; height: 30px; border-radius: 8px; background: var(--blue-soft); color: var(--blue);
+    display: grid; place-items: center; font-weight: 700; font-size: 14px; margin-bottom: 10px;
+  }
+  .step h3 { margin: 0 0 4px; font-size: 15px; }
+  .step p { margin: 0; font-size: 13px; color: var(--muted); }
+
+  /* Generic card grids */
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 20px; box-shadow: var(--shadow);
+  }
+  .card .icon { font-size: 22px; }
+  .card h3 { margin: 8px 0 4px; font-size: 16px; }
+  .card p { margin: 0; font-size: 14px; color: var(--muted); }
+  .tag {
+    display: inline-block; font-size: 11px; font-weight: 700; color: var(--blue);
+    background: var(--blue-soft); padding: 3px 8px; border-radius: 6px; margin-top: 10px;
+  }
+
+  /* Weight bars */
+  .bar { height: 8px; border-radius: 6px; background: #eef1f6; overflow: hidden; margin-top: 8px; }
+  .bar > span { display: block; height: 100%; background: var(--blue); border-radius: 6px; }
+
+  /* Decision legend */
+  .legend { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 8px; font-weight: 700; font-size: 13px;
+    padding: 6px 12px; border-radius: 999px;
+  }
+  .pill.rec { background: var(--green-soft); color: var(--green); }
+  .pill.low { background: var(--amber-soft); color: var(--amber); }
+  .pill.no  { background: var(--red-soft); color: var(--red); }
+
+  /* Example result cards */
+  .examples { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; }
+  .result { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
+  .result .rhead { padding: 18px 20px; border-bottom: 1px solid var(--line); }
+  .result .cnum { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--muted); }
+  .result h3 { margin: 2px 0 2px; font-size: 18px; }
+  .result .addr { font-size: 13px; color: var(--muted); }
+  .result .facts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .fact { font-size: 12px; background: #f1f4f9; color: #33415c; border-radius: 7px; padding: 4px 9px; }
+  .result .rbody { padding: 18px 20px; }
+  .decision-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .slot { margin: 12px 0 4px; font-size: 15px; }
+  .slot b { color: var(--navy); }
+  .conf { margin-top: 4px; }
+  .conf .bar { height: 10px; }
+  .conf .bar > span.g { background: var(--green); }
+  .conf .bar > span.a { background: var(--amber); }
+  .conf .bar > span.r { background: var(--red); }
+  .conf small { color: var(--muted); font-size: 12px; }
+
+  .factors { margin-top: 14px; display: grid; gap: 9px; }
+  .factor { display: grid; grid-template-columns: 150px 1fr 42px; align-items: center; gap: 10px; font-size: 12.5px; }
+  .factor .fname { color: #33415c; }
+  .factor .fval { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  .reason { margin-top: 14px; background: var(--blue-soft); border-left: 3px solid var(--blue);
+            border-radius: 8px; padding: 12px 14px; font-size: 13.5px; color: #22364f; }
+  .reason .lbl { font-weight: 700; color: var(--blue); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; display: block; margin-bottom: 4px; }
+
+  details.routes { margin-top: 14px; border-top: 1px dashed var(--line); padding-top: 10px; }
+  details.routes summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--blue); }
+  .routelist { margin-top: 10px; display: grid; gap: 8px; }
+  .route { border: 1px solid var(--line); border-radius: 9px; padding: 9px 11px; font-size: 12.5px; }
+  .route .rtitle { display: flex; justify-content: space-between; gap: 8px; font-weight: 600; }
+  .route .status { font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 5px; }
+  .route .status.ok { background: var(--green-soft); color: var(--green); }
+  .route .status.bad { background: var(--red-soft); color: var(--red); }
+  .checks { margin: 6px 0 0; padding-left: 0; list-style: none; color: var(--muted); }
+  .checks li { padding: 1px 0; }
+  .checks li .ok { color: var(--green); font-weight: 700; }
+  .checks li .no { color: var(--red); font-weight: 700; }
+
+  .note { background: #fff8ec; border: 1px solid #f2e2bd; border-radius: var(--radius); padding: 18px 20px; color: #5c4b1f; font-size: 14px; }
+  footer { padding: 34px 0 60px; color: var(--muted); font-size: 13px; border-top: 1px solid var(--line); background: #fff; }
+  footer a { text-decoration: none; }
+
+  @media (max-width: 860px) {
+    .flow { grid-template-columns: repeat(2, 1fr); }
+    .grid-3, .legend { grid-template-columns: 1fr; }
+    .examples { grid-template-columns: 1fr; }
+    .hero h1 { font-size: 32px; }
+    .factor { grid-template-columns: 120px 1fr 40px; }
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <span class="chip">🚚 Sysco · Foodservice Distribution</span>
+    <h1>Smart Assignment</h1>
+    <p class="lead">An agentic workflow that recommends the best delivery day &amp; time slot for a
+      <strong>new customer</strong> — enforcing hard operational rules in code, ranking the
+      survivors on weighted business factors, and escalating to a human when the call is close.</p>
+    <div class="meta">
+      <span class="chip">✅ Deterministic, auditable decisions</span>
+      <span class="chip">🤖 LLM-written reasoning</span>
+      <span class="chip">🧪 Running on mock data</span>
+    </div>
+  </div>
+</header>
+
+<!-- What it solves -->
+<section>
+  <div class="wrap">
+    <span class="eyebrow">The problem</span>
+    <h2>Onboarding a new account, every time, the same way</h2>
+    <p class="sub">When a new foodservice customer signs on, someone has to decide which delivery route
+      and time window they should join. That decision balances truck capacity, geography, and the
+      customer's preference — and it needs to be consistent, explainable, and fast. Smart Assignment
+      makes that call automatically, and flags the tricky ones for a specialist instead of guessing.</p>
+  </div>
+</section>
+
+<!-- Workflow -->
+<section style="background:#fff; border-top:1px solid var(--line); border-bottom:1px solid var(--line);">
+  <div class="wrap">
+    <span class="eyebrow">How it works</span>
+    <h2>Five steps, from intake to recommendation</h2>
+    <p class="sub">The customer's details go in one end; a fully-explained slot recommendation
+      (or a human escalation) comes out the other.</p>
+    <div class="flow">
+      <div class="step"><div class="num">1</div><h3>Intake</h3><p>Capture the customer's address, order quantity (cases), and preferred delivery window (optional).</p></div>
+      <div class="step"><div class="num">2</div><h3>Geo-Lookup</h3><p>Geocode the address and pick the Top-N nearest candidate routes by proximity.</p></div>
+      <div class="step"><div class="num">3</div><h3>Constraint Check</h3><p>Drop any route that fails a hard rule — serviceability, capacity, or window.</p></div>
+      <div class="step"><div class="num">4</div><h3>Score &amp; Rank</h3><p>Rank the survivors with weighted scoring across clustering, capacity buffer, and window fit.</p></div>
+      <div class="step"><div class="num">5</div><h3>Recommend</h3><p>Return the top slot with a reasoning trace — or escalate to a human specialist.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- Rules -->
+<section>
+  <div class="wrap">
+    <span class="eyebrow">The rules it enforces</span>
+    <h2>Hard constraints — non-negotiable, checked in code</h2>
+    <p class="sub">These are objective facts, not judgment calls. A route that fails any of them is
+      removed before ranking — the agent can never "reason" a customer onto a full truck or outside
+      the serviceable area.</p>
+    <div class="grid-3">
+      <div class="card"><div class="icon">📍</div><h3>Geographic serviceability</h3><p>The customer must fall within the route's serviceable radius.</p></div>
+      <div class="card"><div class="icon">📦</div><h3>Route capacity</h3><p>The truck stays at or below 90% capacity after adding this order.</p></div>
+      <div class="card"><div class="icon">🕑</div><h3>Delivery-window fit</h3><p>The route offers a window overlapping the customer's preference, if stated.</p></div>
+    </div>
+
+    <div style="height:34px"></div>
+    <span class="eyebrow">How it ranks the rest</span>
+    <h2>Weighted scoring factors</h2>
+    <p class="sub">Among the routes that pass every hard rule, these weighted factors decide the winner.
+      Weights reflect priority and are fully configurable.</p>
+    <div class="grid-3">
+      <div class="card">
+        <div class="icon">🧭</div><h3>Geographic clustering</h3>
+        <p>How tightly the customer clusters with the route's existing stops — tighter clusters mean more predictable arrivals.</p>
+        <div class="bar"><span style="width:45%"></span></div><span class="tag">weight 0.45</span>
+      </div>
+      <div class="card">
+        <div class="icon">🛡️</div><h3>Capacity buffer</h3>
+        <p>How much headroom is left after the add — more buffer means a route that's resilient to day-of disruption.</p>
+        <div class="bar"><span style="width:30%"></span></div><span class="tag">weight 0.30</span>
+      </div>
+      <div class="card">
+        <div class="icon">🎯</div><h3>Window match</h3>
+        <p>How well the route's window covers the customer's stated preference.</p>
+        <div class="bar"><span style="width:25%"></span></div><span class="tag">weight 0.25</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Decision outcomes -->
+<section style="background:#fff; border-top:1px solid var(--line); border-bottom:1px solid var(--line);">
+  <div class="wrap">
+    <span class="eyebrow">The outcome</span>
+    <h2>Three possible decisions</h2>
+    <p class="sub">Every run ends in one of three states. Anything below a 70% confidence threshold, or
+      with no valid slot at all, goes to a human — with full context attached.</p>
+    <div class="legend">
+      <div class="card"><span class="pill rec">✔ Recommended</span><p style="margin-top:12px">A clear winner above the confidence threshold — ready to auto-assign.</p></div>
+      <div class="card"><span class="pill low">⚠ Low confidence</span><p style="margin-top:12px">A slot is proposed, but the options are close — a specialist confirms before committing.</p></div>
+      <div class="card"><span class="pill no">✖ No feasible slot</span><p style="margin-top:12px">Every candidate failed a hard rule — routed to a specialist for a manual decision.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- Examples -->
+<section>
+  <div class="wrap">
+    <span class="eyebrow">See it in action</span>
+    <h2>Live examples on mock Sysco data</h2>
+    <p class="sub">Four new customers on mock Houston site <code>067</code>, each landing on a different
+      outcome. Every recommendation carries the reasoning and the routes it weighed — expand
+      <em>“Routes evaluated”</em> to audit the full decision.</p>
+
+    <div class="examples">
+
+      <!-- 1. Bayou City Bistro -->
+      <article class="result">
+        <div class="rhead">
+          <div class="cnum">067-100001</div>
+          <h3>Bayou City Bistro</h3>
+          <div class="addr">1200 McKinney St, Houston, TX 77010 · Downtown</div>
+          <div class="facts">
+            <span class="fact">90 cases</span>
+            <span class="fact">prefers 07:00–10:00</span>
+            <span class="fact">3 routes evaluated</span>
+          </div>
+        </div>
+        <div class="rbody">
+          <div class="decision-row">
+            <span class="pill rec">✔ Recommended</span>
+            <span style="font-size:13px;color:var(--muted)">confidence <b style="color:var(--green)">89%</b></span>
+          </div>
+          <div class="conf"><div class="bar"><span class="g" style="width:89%"></span></div></div>
+          <p class="slot">→ <b>RTE-4100 · Central Houston</b> · Tue · <b>07:00–10:00</b> <small style="color:var(--muted)">(score 0.77)</small></p>
+          <div class="factors">
+            <div class="factor"><span class="fname">Geographic clustering</span><div class="bar"><span style="width:94%"></span></div><span class="fval">0.94</span></div>
+            <div class="factor"><span class="fname">Capacity buffer</span><div class="bar"><span style="width:32%"></span></div><span class="fval">0.32</span></div>
+            <div class="factor"><span class="fname">Window match</span><div class="bar"><span style="width:100%"></span></div><span class="fval">1.00</span></div>
+          </div>
+          <div class="reason"><span class="lbl">Why this slot</span>
+            Central Houston sits almost on top of the customer (0.8 mi from its existing stops) and its
+            07:00–10:00 window fully covers the request, with 290 cases of headroom (68% utilized). A clear best fit.</div>
+          <details class="routes"><summary>Routes evaluated (3)</summary>
+            <div class="routelist">
+              <div class="route"><div class="rtitle"><span>RTE-4100 · Central Houston · Tue · 0.1 mi</span><span class="status ok">FEASIBLE</span></div>
+                <ul class="checks"><li><span class="ok">✓</span> serviceability 0.1 mi (limit 12)</li><li><span class="ok">✓</span> capacity 68% post-add</li><li><span class="ok">✓</span> window 180 min overlap</li></ul></div>
+              <div class="route"><div class="rtitle"><span>RTE-4200 · West Houston · Wed · 14.7 mi</span><span class="status bad">INFEASIBLE</span></div>
+                <ul class="checks"><li><span class="no">✗</span> serviceability 14.7 mi (limit 12)</li></ul></div>
+              <div class="route"><div class="rtitle"><span>RTE-4400 · Southwest · Tue · 18.7 mi</span><span class="status bad">INFEASIBLE</span></div>
+                <ul class="checks"><li><span class="no">✗</span> serviceability 18.7 mi (limit 12)</li><li><span class="no">✗</span> capacity 101% post-add</li></ul></div>
+            </div>
+          </details>
+        </div>
+      </article>
+
+      <!-- 2. Galleria Grill -->
+      <article class="result">
+        <div class="rhead">
+          <div class="cnum">067-100002</div>
+          <h3>Galleria Grill &amp; Catering</h3>
+          <div class="addr">5085 Westheimer Rd, Houston, TX 77056 · Galleria/Uptown</div>
+          <div class="facts">
+            <span class="fact">140 cases</span>
+            <span class="fact">no window preference</span>
+            <span class="fact">3 routes evaluated</span>
+          </div>
+        </div>
+        <div class="rbody">
+          <div class="decision-row">
+            <span class="pill low">⚠ Low confidence — human review</span>
+            <span style="font-size:13px;color:var(--muted)">confidence <b style="color:var(--amber)">51%</b></span>
+          </div>
+          <div class="conf"><div class="bar"><span class="a" style="width:51%"></span></div><small>below the 70% threshold</small></div>
+          <p class="slot">→ proposed: <b>RTE-4200 · West Houston</b> · Wed · <b>07:30–11:00</b> <small style="color:var(--muted)">(score 0.58)</small></p>
+          <div class="factors">
+            <div class="factor"><span class="fname">Geographic clustering</span><div class="bar"><span style="width:67%"></span></div><span class="fval">0.67</span></div>
+            <div class="factor"><span class="fname">Capacity buffer</span><div class="bar"><span style="width:43%"></span></div><span class="fval">0.43</span></div>
+            <div class="factor"><span class="fname">Window match</span><div class="bar"><span style="width:60%"></span></div><span class="fval">0.60</span></div>
+          </div>
+          <div class="reason"><span class="lbl">Why it escalated</span>
+            Two routes are genuinely close — West Houston (0.58) barely edges out Central Houston (0.52),
+            a gap of just 0.06. With no stated window to break the tie, the agent flags it for a
+            specialist rather than overstating certainty.</div>
+          <details class="routes"><summary>Routes evaluated (3)</summary>
+            <div class="routelist">
+              <div class="route"><div class="rtitle"><span>RTE-4200 · West Houston · Wed · 9.3 mi</span><span class="status ok">FEASIBLE · 0.58</span></div>
+                <ul class="checks"><li><span class="ok">✓</span> serviceability 9.3 mi (limit 12)</li><li><span class="ok">✓</span> capacity 57% post-add</li></ul></div>
+              <div class="route"><div class="rtitle"><span>RTE-4100 · Central Houston · Tue · 5.9 mi</span><span class="status ok">FEASIBLE · 0.52</span></div>
+                <ul class="checks"><li><span class="ok">✓</span> serviceability 5.9 mi (limit 12)</li><li><span class="ok">✓</span> capacity 73% post-add</li></ul></div>
+              <div class="route"><div class="rtitle"><span>RTE-4400 · Southwest · Tue · 13.3 mi</span><span class="status bad">INFEASIBLE</span></div>
+                <ul class="checks"><li><span class="no">✗</span> serviceability 13.3 mi (limit 12)</li><li><span class="no">✗</span> capacity 109% post-add</li></ul></div>
+            </div>
+          </details>
+        </div>
+      </article>
+
+      <!-- 3. Katy Prairie -->
+      <article class="result">
+        <div class="rhead">
+          <div class="cnum">067-100003</div>
+          <h3>Katy Prairie Steakhouse</h3>
+          <div class="addr">24600 Katy Fwy, Katy, TX 77494 · Far west</div>
+          <div class="facts">
+            <span class="fact">260 cases</span>
+            <span class="fact">prefers 06:00–08:00</span>
+            <span class="fact">3 routes evaluated</span>
+          </div>
+        </div>
+        <div class="rbody">
+          <div class="decision-row">
+            <span class="pill no">✖ No feasible slot — specialist</span>
+            <span style="font-size:13px;color:var(--muted)">confidence <b style="color:var(--red)">0%</b></span>
+          </div>
+          <div class="conf"><div class="bar"><span class="r" style="width:100%"></span></div><small>no candidate passed the hard rules</small></div>
+          <div class="reason"><span class="lbl">Why it escalated</span>
+            This account is too far west: the nearest route is 12.8 mi out (just past its 12 mi limit),
+            and the others are both out of range and over capacity for a 260-case order. No automatic
+            assignment is safe — it needs a manual routing decision (new route, schedule change, or
+            capacity reallocation).</div>
+          <details class="routes"><summary>Routes evaluated (3)</summary>
+            <div class="routelist">
+              <div class="route"><div class="rtitle"><span>RTE-4200 · West Houston · Wed · 12.8 mi</span><span class="status bad">INFEASIBLE</span></div>
+                <ul class="checks"><li><span class="no">✗</span> serviceability 12.8 mi (limit 12)</li></ul></div>
+              <div class="route"><div class="rtitle"><span>RTE-4400 · Southwest · Tue · 16.0 mi</span><span class="status bad">INFEASIBLE</span></div>
+                <ul class="checks"><li><span class="no">✗</span> serviceability 16.0 mi (limit 12)</li><li><span class="no">✗</span> capacity 126% post-add</li></ul></div>
+              <div class="route"><div class="rtitle"><span>RTE-4100 · Central Houston · Tue · 27.4 mi</span><span class="status bad">INFEASIBLE</span></div>
+                <ul class="checks"><li><span class="no">✗</span> serviceability 27.4 mi (limit 12)</li></ul></div>
+            </div>
+          </details>
+        </div>
+      </article>
+
+      <!-- 4. Woodlands -->
+      <article class="result">
+        <div class="rhead">
+          <div class="cnum">067-100004</div>
+          <h3>Woodlands Fresh Cafe</h3>
+          <div class="addr">1201 Lake Woodlands Dr, The Woodlands, TX 77380 · North</div>
+          <div class="facts">
+            <span class="fact">150 cases</span>
+            <span class="fact">prefers 09:00–12:00</span>
+            <span class="fact">3 routes evaluated</span>
+          </div>
+        </div>
+        <div class="rbody">
+          <div class="decision-row">
+            <span class="pill rec">✔ Recommended</span>
+            <span style="font-size:13px;color:var(--muted)">confidence <b style="color:var(--green)">93%</b></span>
+          </div>
+          <div class="conf"><div class="bar"><span class="g" style="width:93%"></span></div></div>
+          <p class="slot">→ <b>RTE-4300 · North Houston / The Woodlands</b> · Thu · <b>08:00–12:00</b> <small style="color:var(--muted)">(score 0.85)</small></p>
+          <div class="factors">
+            <div class="factor"><span class="fname">Geographic clustering</span><div class="bar"><span style="width:96%"></span></div><span class="fval">0.96</span></div>
+            <div class="factor"><span class="fname">Capacity buffer</span><div class="bar"><span style="width:56%"></span></div><span class="fval">0.56</span></div>
+            <div class="factor"><span class="fname">Window match</span><div class="bar"><span style="width:100%"></span></div><span class="fval">1.00</span></div>
+          </div>
+          <div class="reason"><span class="lbl">Why this slot</span>
+            The lightly-booked North route is 0.3 mi away, sits right in the customer's cluster,
+            fully covers the 09:00–12:00 preference, and keeps utilization at a comfortable 44% —
+            a strong, low-risk fit for a new relationship.</div>
+          <details class="routes"><summary>Routes evaluated (3)</summary>
+            <div class="routelist">
+              <div class="route"><div class="rtitle"><span>RTE-4300 · North Houston · Thu · 0.3 mi</span><span class="status ok">FEASIBLE</span></div>
+                <ul class="checks"><li><span class="ok">✓</span> serviceability 0.3 mi (limit 16)</li><li><span class="ok">✓</span> capacity 44% post-add</li><li><span class="ok">✓</span> window 180 min overlap</li></ul></div>
+              <div class="route"><div class="rtitle"><span>RTE-4200 · West Houston · Wed · 27.7 mi</span><span class="status bad">INFEASIBLE</span></div>
+                <ul class="checks"><li><span class="no">✗</span> serviceability 27.7 mi (limit 12)</li></ul></div>
+              <div class="route"><div class="rtitle"><span>RTE-4100 · Central Houston · Tue · 28.4 mi</span><span class="status bad">INFEASIBLE</span></div>
+                <ul class="checks"><li><span class="no">✗</span> serviceability 28.4 mi (limit 12)</li></ul></div>
+            </div>
+          </details>
+        </div>
+      </article>
+
+    </div>
+  </div>
+</section>
+
+<!-- Note -->
+<section style="padding-top:0;">
+  <div class="wrap">
+    <div class="note">
+      <strong>About this data.</strong> These examples run on <strong>mock</strong> Houston-area routes and
+      geocoding so the workflow can be demonstrated end-to-end. Capacities, service radii, scoring
+      weights, and thresholds are illustrative starting points — not validated Sysco policy. The route
+      source and geocoder are designed to be swapped for real systems without changing the decision logic.
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    Smart Assignment · delivery slot recommendation for new customers ·
+    built on Google's Agent Development Kit (ADK).<br />
+    Source &amp; docs on <a href="https://github.com/MuhammadVT/smart-assignment">GitHub</a>.
+    Decisions are deterministic and auditable; reasoning narration is LLM-written with a deterministic fallback.
+  </div>
+</footer>
+
+</body>
+</html>
