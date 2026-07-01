@@ -5,11 +5,9 @@ helpers it relies on. Deterministic, fast, no LLM or network.
 
 from __future__ import annotations
 
-from datetime import time
-
 from smart_assignment.shared.constraints import (
+    HARD_CONSTRAINTS,
     build_context,
-    delivery_window_compatibility,
     evaluate_constraints,
     geographic_serviceability,
     route_capacity,
@@ -45,16 +43,17 @@ def test_far_route_fails_serviceability(sample_customer, far_route, config):
     assert outcome.passed is False
 
 
-def test_window_incompatible_is_rejected(sample_customer, open_route, config):
-    # Customer prefers 07:00-10:00; route only offers an afternoon window.
+def test_hard_constraints_exclude_delivery_window():
+    # The preferred delivery window is a soft (scoring) preference, not a hard
+    # constraint — only serviceability and capacity gate feasibility.
+    names = {fn.__name__ for fn in HARD_CONSTRAINTS}
+    assert names == {"geographic_serviceability", "route_capacity"}
+
+
+def test_window_mismatch_does_not_make_route_infeasible(sample_customer, open_route, config):
+    # Route only offers an afternoon window that misses the morning preference,
+    # yet the route stays feasible (window is not a hard rule).
+    from datetime import time
+
     open_route.available_windows = [(time(13, 0), time(15, 0))]
-    ctx = build_context(sample_customer, open_route)
-    outcome = delivery_window_compatibility(sample_customer, open_route, ctx, config)
-    assert outcome.passed is False
-
-
-def test_no_preference_passes_window_check(sample_customer, open_route, config):
-    sample_customer.preferred_window = None
-    ctx = build_context(sample_customer, open_route)
-    outcome = delivery_window_compatibility(sample_customer, open_route, ctx, config)
-    assert outcome.passed is True
+    assert _all_pass(sample_customer, open_route, config)

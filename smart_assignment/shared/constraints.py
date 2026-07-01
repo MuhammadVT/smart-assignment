@@ -26,7 +26,7 @@ from smart_assignment.shared.models import (
     Route,
     Window,
 )
-from smart_assignment.shared.timeutils import best_overlapping_window, fmt_window
+from smart_assignment.shared.timeutils import best_overlapping_window
 
 
 @dataclass
@@ -107,31 +107,16 @@ def route_capacity(
     )
 
 
-def delivery_window_compatibility(
-    customer: CustomerProfile, route: Route, ctx: EvalContext, config: Config
-) -> ConstraintOutcome:
-    if customer.preferred_window is None:
-        return ConstraintOutcome(
-            name="delivery_window_compatibility",
-            passed=True,
-            detail="no stated preference; any available window acceptable",
-        )
-    passed = ctx.window_overlap_minutes > 0
-    return ConstraintOutcome(
-        name="delivery_window_compatibility",
-        passed=passed,
-        detail=(
-            f"{ctx.window_overlap_minutes} min overlap with preferred window "
-            f"(best route window {fmt_window(ctx.best_window)})"
-        ),
-    )
+# NOTE: the customer's preferred delivery window is intentionally NOT a hard
+# constraint. It is a *soft* preference handled by the `window_match` scoring
+# factor (see shared/scoring.py) — it influences ranking but never eliminates a
+# route. `EvalContext` still pre-computes the window overlap for that scorer.
 
 
 # Registry — the ordered set of hard constraints applied to every candidate.
 HARD_CONSTRAINTS: list[ConstraintFn] = [
     geographic_serviceability,
     route_capacity,
-    delivery_window_compatibility,
 ]
 
 
