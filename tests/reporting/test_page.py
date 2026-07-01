@@ -8,6 +8,7 @@ configured weights must appear in the output.
 
 from __future__ import annotations
 
+import json
 from html import escape as html_escape
 
 from smart_assignment.mock_customers import SAMPLE_CUSTOMERS
@@ -53,6 +54,36 @@ def test_page_reflects_configured_weights():
     config.factor_weights["geographic_clustering"] = 0.50
     html = build_page(_results(config), config)
     assert "weight 0.50" in html  # picked up from config, not hard-coded
+
+
+def test_page_has_architecture_and_agent_emphasis():
+    config = Config()
+    html = build_page(_results(config), config)
+    assert "<svg" in html  # architecture diagram
+    assert "AI AGENT" in html
+    assert "🤖 Agent" in html  # per-step agent badge
+    assert "executed autonomously by the agent" in html
+
+
+def test_page_has_interactive_simulator_with_payload():
+    config = Config()
+    html = build_page(_results(config), config)
+    # Simulator controls exist.
+    assert 'id="run-btn"' in html
+    assert 'id="cust-input"' in html
+    assert 'id="workflow-data"' in html
+
+    # The embedded JSON payload drives the simulator entirely client-side.
+    marker = '<script type="application/json" id="workflow-data">'
+    start = html.index(marker) + len(marker)
+    end = html.index("</script>", start)
+    payload = json.loads(html[start:end])
+
+    for customer in SAMPLE_CUSTOMERS:
+        entry = payload[customer.customer_number]
+        assert len(entry["steps"]) == 5  # the five workflow steps
+        assert all(s["action"] and s["title"] for s in entry["steps"])
+        assert entry["resultHtml"].strip().startswith("<article")
 
 
 def test_generate_writes_file(tmp_path):
