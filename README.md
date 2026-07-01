@@ -5,9 +5,10 @@ customers (Sysco context), built on Google's
 [Agent Development Kit (ADK)](https://google.github.io/adk-docs/) and verified
 against **google-adk 2.3.0**.
 
-Given a new customer (address, order quantity in cases, optional delivery
-window), the workflow finds the delivery route+day that best serves them —
-or escalates to a human specialist when nothing fits or the call is too close.
+Given a new customer (address, order quantity in cases, and an optional
+preferred slot — a **day of week plus a time window**), the workflow finds the
+delivery route+day that best serves them — or escalates to a human specialist
+when nothing fits or the call is too close.
 
 > 📊 **Overview page for product owners:** a visual, tabbed walkthrough
 > published via GitHub Pages at **https://muhammadvt.github.io/smart-assignment/** —
@@ -21,7 +22,7 @@ or escalates to a human specialist when nothing fits or the call is too close.
 ## The process (`slot_recommendation`)
 
 ```
-1. Intake        collect address, order quantity (cases), optional window
+1. Intake        collect address, order quantity (cases), optional slot (day+time)
 2. Geo-Lookup    geocode the address, pick the Top-N nearest candidate routes
 3. Constraints   drop routes failing any HARD constraint (deterministic code)
 4. Score & Rank  weighted multi-factor scoring over the survivors
@@ -36,9 +37,9 @@ or escalates to a human specialist when nothing fits or the call is too close.
 | Geographic serviceability | customer within the route's service radius (and a global mileage cap) |
 | Route capacity | utilization stays `<= 90%` after adding the order |
 
-The customer's **preferred delivery window is a soft preference, not a hard
-constraint** — it never eliminates a route; it only feeds the `window_match`
-scoring factor below.
+The customer's **preferred delivery slot — a day of week plus a time window —
+is a soft preference, not a hard constraint**: it never eliminates a route; it
+only feeds the `window_match` scoring factor below.
 
 **Scoring factors (step 4) — weighted, in priority order:**
 
@@ -46,7 +47,7 @@ scoring factor below.
 |---|---|---|
 | `geographic_clustering` | 0.45 | how tightly the customer clusters with the route's existing stops |
 | `capacity_buffer` | 0.30 | headroom left on the truck after the add (resilience) |
-| `window_match` | 0.25 | how much of the preferred window the route can cover (soft preference) |
+| `window_match` | 0.25 | how well the route matches the preferred **slot** — day of week + time window (soft preference) |
 
 Constraints and scoring are **deterministic Python** — reproducible and
 auditable. An LLM is *structurally unable* to place a customer onto a full

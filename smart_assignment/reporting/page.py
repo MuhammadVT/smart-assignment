@@ -46,7 +46,7 @@ DEFAULT_OUTPUT = Path(__file__).resolve().parents[2] / "docs" / "index.html"
 FACTOR_LABEL = {
     FACTOR_GEO_CLUSTERING: "Geographic clustering",
     FACTOR_CAPACITY_BUFFER: "Capacity buffer",
-    FACTOR_WINDOW_MATCH: "Window match",
+    FACTOR_WINDOW_MATCH: "Slot match (day + time)",
 }
 CONSTRAINT_LABEL = {
     "geographic_serviceability": "serviceability",
@@ -437,8 +437,10 @@ def _win(window_str: Optional[str]) -> str:
 
 
 def _pref_fact(result: RecommendationResult) -> str:
-    w = result.customer.preferred_window
-    return f"prefers {_win(fmt_window(w))}" if w else "no window preference"
+    slot = result.customer.preferred_slot
+    if slot is None:
+        return "no slot preference"
+    return f"prefers {slot.day.value} {_win(fmt_window(slot.window))}"
 
 
 def _factor_value(cand: CandidateEvaluation, name: str) -> float:
@@ -555,7 +557,8 @@ def _sim_steps(result: RecommendationResult, config: Config) -> list[dict]:
     cands = result.candidates_considered
     n = len(cands)
     feasible = [e for e in cands if e.feasible]
-    pref = _win(fmt_window(c.preferred_window)) if c.preferred_window else "any"
+    slot = c.preferred_slot
+    pref = f"{slot.day.value} {_win(fmt_window(slot.window))}" if slot else "any"
     gw = config.factor_weights[FACTOR_GEO_CLUSTERING]
     cw = config.factor_weights[FACTOR_CAPACITY_BUFFER]
     ww = config.factor_weights[FACTOR_WINDOW_MATCH]
@@ -564,7 +567,7 @@ def _sim_steps(result: RecommendationResult, config: Config) -> list[dict]:
     intake = [
         f'Customer number <b>{_esc(c.customer_number)}</b> <span class="ok">✓ valid</span>',
         f"Order quantity: <b>{c.order_quantity_cases}</b> cases",
-        f"Preferred window: <b>{_esc(pref)}</b>",
+        f"Preferred slot (day + time): <b>{_esc(pref)}</b>",
     ]
     geo = [
         f"Geocoded address → <b>({loc.latitude:.4f}, {loc.longitude:.4f})</b>",
@@ -602,16 +605,18 @@ def _sim_steps(result: RecommendationResult, config: Config) -> list[dict]:
                 f'<span class="calc">↳ capacity buffer = clamp({ctx.remaining_capacity_after} ÷ '
                 f"{e.route.vehicle_capacity_cases} cases) = <b>{b:.2f}</b> · weight {cw:.2f}</span>"
             )
-            if c.preferred_window is None:
+            if slot is None:
                 score.append(
-                    f'<span class="calc">↳ window match = neutral (no preferred window) = '
+                    f'<span class="calc">↳ slot match = neutral (no preferred slot) = '
                     f"<b>{w:.2f}</b> · weight {ww:.2f}</span>"
                 )
             else:
-                pd = max(1, duration_minutes(c.preferred_window))
+                pd = max(1, duration_minutes(slot.window))
+                day_sym = "✓" if e.route.day == slot.day else "✗"
                 score.append(
-                    f'<span class="calc">↳ window match = clamp({ctx.window_overlap_minutes} ÷ '
-                    f"{pd} min) = <b>{w:.2f}</b> · weight {ww:.2f}</span>"
+                    f'<span class="calc">↳ slot match = 0.5×day({e.route.day.value}{day_sym}'
+                    f"pref {slot.day.value}) + 0.5×time({ctx.window_overlap_minutes}÷{pd} min) = "
+                    f"<b>{w:.2f}</b> · weight {ww:.2f}</span>"
                 )
             score.append(
                 f'<span class="calc">↳ total = {gw:.2f}×{g:.2f} + {cw:.2f}×{b:.2f} + '
@@ -688,12 +693,13 @@ def _scoring_section(config: Config) -> str:
         <p>How much headroom is left on the truck once this order is added. More buffer = more resilient.</p>
         <div class="formula">score = clamp( <b>cases_remaining_after_add</b> ÷ <b>vehicle_capacity</b> , 0, 1 )</div>
         <p style="margin-top:8px;font-size:12.5px">Remaining = capacity − already-committed cases − this order.</p></div>
-      <div class="card"><div class="icon">🎯</div><h3>Window match · weight {ww:.2f}</h3>
-        <p>How much of the customer's preferred window the route's window can cover. This is a <b>soft
-          preference</b> — it shapes the score but never eliminates a route.</p>
-        <div class="formula">score = clamp( <b>overlap_minutes</b> ÷ <b>preferred_window_minutes</b> , 0, 1 )</div>
-        <p style="margin-top:8px;font-size:12.5px">If the customer states no window, a neutral {neutral:.2f} is used
-          instead.</p></div>
+      <div class="card"><div class="icon">🎯</div><h3>Slot match (day + time) · weight {ww:.2f}</h3>
+        <p>How well the route matches the customer's preferred <b>slot</b> — which always includes a
+          <b>day of week</b> plus a time-of-day window. A <b>soft preference</b>: it shapes the score but
+          never eliminates a route.</p>
+        <div class="formula">score = 0.5·( <b>route_day == preferred_day</b> ) + 0.5·clamp( <b>overlap_minutes</b> ÷ <b>preferred_window_minutes</b> , 0, 1 )</div>
+        <p style="margin-top:8px;font-size:12.5px">Right day + full time overlap = 1.0; right day only or overlapping
+          time only = 0.5. If the customer states no slot, a neutral {neutral:.2f} is used instead.</p></div>
     </div>
 
     <div style="height:16px"></div>
@@ -752,7 +758,7 @@ def _config_sources(config: Config, results: list[RecommendationResult]) -> str:
         [
             row("Address → geocoded point", "per customer", "geocoding"),
             row("Order quantity", "cases", "capacity math"),
-            row("Preferred window (optional)", "soft", "window scoring only"),
+            row("Preferred slot: day + time (optional)", "soft", "slot scoring only"),
         ]
     )
     return f"""
@@ -855,7 +861,7 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
         phases of the same agent's workflow, not five separate agents. A person is involved only if the
         agent decides to escalate at the final stage.</div></div>
       <div class="flow">
-        <div class="step"><div class="num">1</div><h3>Intake</h3><p>Capture the customer's address, order quantity (cases), and preferred window.</p><p class="action">Validate the number &amp; build the profile.</p></div>
+        <div class="step"><div class="num">1</div><h3>Intake</h3><p>Capture the customer's address, order quantity (cases), and preferred slot (day + time).</p><p class="action">Validate the number &amp; build the profile.</p></div>
         <div class="step"><div class="num">2</div><h3>Geo-Lookup</h3><p>Geocode the address and find the nearest candidate routes.</p><p class="action">Geocode &amp; pick the Top-{top_n} nearest.</p></div>
         <div class="step"><div class="num">3</div><h3>Constraint Check</h3><p>Drop any route that fails a hard rule.</p><p class="action">Enforce serviceability &amp; capacity.</p></div>
         <div class="step"><div class="num">4</div><h3>Score &amp; Rank</h3><p>Rank survivors on weighted business factors.</p><p class="action">Score &amp; order the options.</p></div>
@@ -876,9 +882,10 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
         <div class="card"><div class="icon">\U0001f4cd</div><h3>Geographic serviceability</h3><p>The customer must fall within the route's serviceable radius.</p></div>
         <div class="card"><div class="icon">\U0001f4e6</div><h3>Route capacity</h3><p>The truck stays at or below {config.max_utilization_after_assignment:.0%} capacity after adding this order.</p></div>
       </div>
-      <p class="sub" style="margin-top:18px">🕑 <b>The preferred delivery window is a soft preference, not a hard
-        constraint</b> — it never eliminates a route. Instead it feeds the <em>window match</em> scoring
-        factor, so a route that misses the window can still win if it's the best overall fit.</p>
+      <p class="sub" style="margin-top:18px">🕑 <b>The preferred delivery slot — a day of week plus a time
+        window — is a soft preference, not a hard constraint</b> — it never eliminates a route. Instead it
+        feeds the <em>slot match</em> scoring factor, so a route on a different day or time can still win if
+        it's the best overall fit.</p>
     </div>
   </section>
 

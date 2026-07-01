@@ -57,9 +57,8 @@ def build_context(customer: CustomerProfile, route: Route) -> EvalContext:
     remaining_after = route.vehicle_capacity_cases - committed - customer.order_quantity_cases
     utilization_after = (committed + customer.order_quantity_cases) / route.vehicle_capacity_cases
 
-    best_window, overlap = best_overlapping_window(
-        customer.preferred_window, route.available_windows
-    )
+    preferred_window = customer.preferred_slot.window if customer.preferred_slot else None
+    best_window, overlap = best_overlapping_window(preferred_window, route.available_windows)
 
     return EvalContext(
         distance_miles=distance,

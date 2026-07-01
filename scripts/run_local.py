@@ -36,12 +36,13 @@ _DECISION_MARK = {
 def _print_result(result: RecommendationResult) -> None:
     c = result.customer
     rec = result.recommendation
-    pref = fmt_window(c.preferred_window) if c.preferred_window else "any"
+    slot = c.preferred_slot
+    pref = f"{slot.day.value} {fmt_window(slot.window)}" if slot else "any"
 
     print(_RULE)
     print(f"CUSTOMER  {c.name} ({c.customer_number})")
     print(f"  intake    address={c.address!r}")
-    print(f"            order={c.order_quantity_cases} cases, preferred_window={pref}")
+    print(f"            order={c.order_quantity_cases} cases, preferred_slot={pref}")
     loc = c.location
     print(f"  geocoded  ({loc.latitude:.4f}, {loc.longitude:.4f})")
 

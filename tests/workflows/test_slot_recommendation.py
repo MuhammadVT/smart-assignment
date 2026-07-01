@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import time
 
 from smart_assignment.shared.config import Config
-from smart_assignment.shared.models import CustomerProfile, Decision
+from smart_assignment.shared.models import CustomerProfile, DayOfWeek, Decision, PreferredSlot
 from smart_assignment.workflows.slot_recommendation.nodes import (
     confidence_gate,
     route_on_feasibility,
@@ -33,7 +33,7 @@ def test_clear_case_is_recommended():
         name="Bayou City Bistro",
         address="1200 McKinney St, Houston, TX 77010",
         order_quantity_cases=90,
-        preferred_window=(time(7, 0), time(10, 0)),
+        preferred_slot=PreferredSlot(DayOfWeek.TUE, (time(7, 0), time(10, 0))),
     )
     rec = _run(customer).recommendation
     assert rec.decision == Decision.RECOMMENDED
@@ -47,7 +47,7 @@ def test_unserviceable_customer_escalates_no_feasible_slot():
         name="Katy Prairie Steakhouse",
         address="24600 Katy Fwy, Katy, TX 77494",
         order_quantity_cases=260,
-        preferred_window=(time(6, 0), time(8, 0)),
+        preferred_slot=PreferredSlot(DayOfWeek.TUE, (time(6, 0), time(8, 0))),
     )
     rec = _run(customer).recommendation
     assert rec.decision == Decision.ESCALATED_NO_FEASIBLE_SLOT
@@ -74,7 +74,7 @@ def test_near_tie_escalates_low_confidence():
         name="Galleria Grill & Catering",
         address="5085 Westheimer Rd, Houston, TX 77056",
         order_quantity_cases=140,
-        preferred_window=None,
+        preferred_slot=None,
     )
     rec = _run(customer).recommendation
     assert rec.decision == Decision.ESCALATED_LOW_CONFIDENCE

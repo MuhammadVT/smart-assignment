@@ -99,6 +99,9 @@ def test_scoring_section_shows_real_formulas():
     assert "avg_miles_to_stops" in html
     assert "cases_remaining_after_add" in html
     assert "preferred_window_minutes" in html
+    # Slot match now includes the day-of-week term.
+    assert "route_day == preferred_day" in html
+    assert "Slot match (day + time)" in html
     # The confidence formula from reasoning.compute_confidence is shown.
     assert "0.6·" in html and "0.5 + 0.5·" in html
 
@@ -112,6 +115,12 @@ def test_scoring_section_shows_real_formulas():
     joined = " ".join(score_step["lines"])
     assert "clustering = clamp(" in joined
     assert "total =" in joined
+    assert "slot match = 0.5×day(" in joined  # day-of-week is part of the slot score
+
+    # Intake step now surfaces the preferred slot (day + time).
+    intake_lines = " ".join(payload["067-100001"]["steps"][0]["lines"])
+    assert "Preferred slot (day + time)" in intake_lines
+    assert "TUE" in intake_lines
 
 
 def test_page_has_interactive_simulator_with_payload():
