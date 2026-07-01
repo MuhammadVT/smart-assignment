@@ -7,7 +7,12 @@ name: Deploy GitHub Pages
 on:
   push:
     branches: [main]
-    paths: ["docs/**", ".github/workflows/pages.yml"]
+    # The page is generated from the code, so republish when either changes.
+    paths:
+      - "docs/**"
+      - "smart_assignment/**"
+      - "scripts/generate_page.py"
+      - ".github/workflows/pages.yml"
   workflow_dispatch: {}
 
 permissions:
@@ -29,6 +34,17 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package
+        run: pip install -e .
+
+      - name: Regenerate docs/index.html from live workflow output
+        run: python3 scripts/generate_page.py
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
