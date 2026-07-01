@@ -48,10 +48,23 @@ class GeoPoint:
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class PreferredSlot:
+    """
+    A customer's preferred delivery slot — always a **day of week** plus a
+    time-of-day window. A slot is meaningless without a day, so both are
+    required; a customer with no preference simply has ``preferred_slot=None``.
+    This is a *soft* preference (it feeds scoring, never a hard constraint).
+    """
+
+    day: DayOfWeek
+    window: Window  # (start, end) time-of-day
+
+
 @dataclass
 class CustomerProfile:
     """
-    New-customer intake (spec: address, order quantity, optional window).
+    New-customer intake (address, order quantity, optional preferred slot).
 
     `customer_number` is the Sysco identifier in ``NNN-NNNNNN`` form (site/OpCo
     + per-site number); see `shared/customer.py`. `location` is populated by the
@@ -63,7 +76,7 @@ class CustomerProfile:
     name: str
     address: str
     order_quantity_cases: int
-    preferred_window: Optional[Window] = None  # optional, soft/hard depending on constraint
+    preferred_slot: Optional[PreferredSlot] = None  # soft preference: day + time window
     location: Optional[GeoPoint] = None  # filled in by geo-lookup
 
 

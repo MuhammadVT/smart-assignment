@@ -67,21 +67,40 @@ def capacity_buffer(
 def window_match(
     customer: CustomerProfile, route: Route, ctx: EvalContext, config: Config
 ) -> FactorScore:
-    """Fraction of the customer's preferred window the route can cover."""
-    if customer.preferred_window is None:
+    """
+    How well the route matches the customer's preferred **slot** (day + time).
+
+    The preferred slot always carries a day of week, so the score gives equal
+    weight to the day matching and to the time-of-day overlap:
+
+        0.5 * (route.day == preferred.day) + 0.5 * (overlap / preferred_minutes)
+
+    A route on the right day covering the whole window scores 1.0; the right day
+    but wrong time, or the wrong day but overlapping time, scores 0.5; neither
+    scores 0.0. With no stated preference, a neutral score is used.
+    """
+    slot = customer.preferred_slot
+    weight = config.factor_weights[FACTOR_WINDOW_MATCH]
+    if slot is None:
         return FactorScore(
             name=FACTOR_WINDOW_MATCH,
-            weight=config.factor_weights[FACTOR_WINDOW_MATCH],
+            weight=weight,
             value=config.window_neutral_score,
             detail="no stated preference (neutral score)",
         )
-    pref_minutes = max(1, duration_minutes(customer.preferred_window))
-    value = _clamp01(ctx.window_overlap_minutes / pref_minutes)
+    day_ok = route.day == slot.day
+    pref_minutes = max(1, duration_minutes(slot.window))
+    time_frac = _clamp01(ctx.window_overlap_minutes / pref_minutes)
+    value = 0.5 * (1.0 if day_ok else 0.0) + 0.5 * time_frac
+    day_note = f"{route.day.value}={'✓' if day_ok else '✗'} vs pref {slot.day.value}"
     return FactorScore(
         name=FACTOR_WINDOW_MATCH,
-        weight=config.factor_weights[FACTOR_WINDOW_MATCH],
+        weight=weight,
         value=value,
-        detail=f"{ctx.window_overlap_minutes}/{pref_minutes} min of preferred window covered",
+        detail=(
+            f"day {day_note}; {ctx.window_overlap_minutes}/{pref_minutes} min of "
+            f"preferred time covered"
+        ),
     )
 
 

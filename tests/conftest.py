@@ -11,6 +11,7 @@ from smart_assignment.shared.models import (
     CustomerProfile,
     DayOfWeek,
     GeoPoint,
+    PreferredSlot,
     Route,
     RouteStop,
 )
@@ -23,13 +24,13 @@ def config() -> Config:
 
 @pytest.fixture
 def sample_customer() -> CustomerProfile:
-    """A geocoded downtown-Houston customer with a morning preference."""
+    """A geocoded downtown-Houston customer preferring Tuesday mornings."""
     return CustomerProfile(
         customer_number="067-100001",
         name="Riverside Diner",
         address="1200 McKinney St, Houston, TX 77010",
         order_quantity_cases=90,
-        preferred_window=(time(7, 0), time(10, 0)),
+        preferred_slot=PreferredSlot(DayOfWeek.TUE, (time(7, 0), time(10, 0))),
         location=GeoPoint(29.7570, -95.3670),
     )
 
