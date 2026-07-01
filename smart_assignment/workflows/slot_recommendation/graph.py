@@ -3,7 +3,7 @@ ADK graph assembly for the slot_recommendation workflow — the deployable
 (`adk run` / `adk web` / `adk deploy`) wrapper around the pipeline.
 
     START
-      -> geo_lookup_node            (intake + geocode + Top-N nearest routes)
+      -> intake_node                (resolve customer + geocode + Top-N nearest routes)
       -> constraint_and_score_node  (hard constraints, then weighted scoring)
       -> route_on_feasibility       (conditional router)
            "NO_OPTIONS"  -> escalate_no_feasible_slot    (human input)
@@ -28,7 +28,7 @@ from smart_assignment.workflows.slot_recommendation.nodes import (
     escalate_low_confidence,
     escalate_no_feasible_slot,
     format_output,
-    geo_lookup_node,
+    intake_node,
     route_on_feasibility,
 )
 
@@ -37,20 +37,21 @@ root_agent = Workflow(
     edges=[
         (
             "START",
-            geo_lookup_node,
+            intake_node,
             constraint_and_score_node,
             route_on_feasibility,
         ),
+        # A tuple as a routing-map value is a fan-out, not a chain — so the
+        # HAS_OPTIONS branch points at a single node, and the follow-on
+        # build -> gate step is expressed as its own chain edge below.
         (
             route_on_feasibility,
             {
                 "NO_OPTIONS": escalate_no_feasible_slot,
-                "HAS_OPTIONS": (
-                    build_recommendation_node,
-                    confidence_gate,
-                ),
+                "HAS_OPTIONS": build_recommendation_node,
             },
         ),
+        (build_recommendation_node, confidence_gate),
         (
             confidence_gate,
             {

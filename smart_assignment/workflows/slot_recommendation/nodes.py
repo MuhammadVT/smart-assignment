@@ -6,24 +6,35 @@ node delegates to the same step functions the offline demo uses, so the ADK
 deployment path and the local demo can never disagree on business logic. The
 graph wiring itself lives in `graph.py`.
 
+Input note: `adk run` / `adk web` hand the workflow a free-text user message.
+The entry node therefore accepts `str` and resolves it to one of the mock
+Sysco customers (by customer_id or name) — e.g. type `CUST-NEW-9002` or
+`Galleria`. Replace `resolve_customer` with real intake parsing / a form when
+wiring this to a real front end.
+
 Node flow (mirrors pipeline.py):
-  geo_lookup_node -> constraint_and_score_node -> route_on_feasibility
-    NO_OPTIONS  -> escalate_no_feasible_slot            (human-in-the-loop)
+  intake_node -> constraint_and_score_node -> route_on_feasibility
+    NO_OPTIONS  -> escalate_no_feasible_slot            (terminal text)
     HAS_OPTIONS -> build_recommendation_node -> confidence_gate
-                     LOW_CONFIDENCE  -> escalate_low_confidence  (human-in-the-loop)
-                     HIGH_CONFIDENCE -> format_output
+                     LOW_CONFIDENCE  -> escalate_low_confidence  (terminal text)
+                     HIGH_CONFIDENCE -> format_output            (terminal text)
 """
 
 from __future__ import annotations
 
 from google.adk import Event
 from google.adk.agents.invocation_context import InvocationContext as Context
-from google.adk.events import RequestInput
+from google.genai import types
 
 from smart_assignment.integrations.geocoding_client import MockGeocoder
 from smart_assignment.integrations.route_capacity_client import fetch_candidate_routes
+from smart_assignment.mock_customers import SAMPLE_CUSTOMERS
 from smart_assignment.shared.config import DEFAULT_CONFIG
-from smart_assignment.shared.models import CustomerProfile, Decision, SlotRecommendation
+from smart_assignment.shared.models import (
+    CustomerProfile,
+    Decision,
+    SlotRecommendation,
+)
 from smart_assignment.workflows.slot_recommendation.pipeline import (
     decide,
     evaluate_candidates,
@@ -32,22 +43,68 @@ from smart_assignment.workflows.slot_recommendation.pipeline import (
 )
 from smart_assignment.workflows.slot_recommendation.reasoning import LLMReasoner
 
-# --- Step 1 + 2: intake + geo-lookup (entry node) --------------------------
+_DECISION_MARK = {
+    Decision.RECOMMENDED: "RECOMMENDED",
+    Decision.ESCALATED_LOW_CONFIDENCE: "ESCALATE -> human review (low confidence)",
+    Decision.ESCALATED_NO_FEASIBLE_SLOT: "ESCALATE -> human specialist (no feasible slot)",
+}
 
 
-def geo_lookup_node(node_input: CustomerProfile) -> Event:
-    customer = intake(node_input)
+def resolve_customer(user_text: str) -> CustomerProfile:
+    """Map a typed message (customer_id or name fragment) to a mock customer."""
+    query = (user_text or "").strip().lower()
+    if query:
+        for customer in SAMPLE_CUSTOMERS:
+            if query == customer.customer_id.lower() or query in customer.name.lower():
+                return customer
+    # Unknown / empty input -> default to the first sample so the demo still runs.
+    return SAMPLE_CUSTOMERS[0]
+
+
+def _render(rec: SlotRecommendation) -> types.Content:
+    lines = [
+        f"Customer: {rec.customer_name} ({rec.customer_id})",
+        f"Decision: {_DECISION_MARK[rec.decision]}  |  confidence {rec.confidence:.0%}",
+    ]
+    if rec.recommended_route_id:
+        lines.append(
+            f"Proposed slot: {rec.recommended_route_id} ({rec.recommended_route_name}), "
+            f"{rec.recommended_day}, window {rec.recommended_window}"
+        )
+    if rec.factor_breakdown:
+        factors = "  ".join(
+            f"{f.name}={f.value:.2f}(w{f.weight:.2f})" for f in rec.factor_breakdown
+        )
+        lines.append(f"Score factors: {factors}")
+    lines.append(f"Reasoning: {rec.reasoning}")
+    if rec.rejected_alternatives:
+        lines.append("Alternatives considered:")
+        lines.extend(f"  - {alt}" for alt in rec.rejected_alternatives)
+    return types.Content(role="model", parts=[types.Part(text="\n".join(lines))])
+
+
+# NOTE: ADK persists session *state* as JSON, so state may hold only
+# JSON-serializable values. We stash the customer_id (a string) and re-resolve
+# the (module-level, already-geocoded) CustomerProfile in later nodes; the
+# richer evaluation objects are passed node-to-node via Event.output instead.
+
+
+# --- Step 1 + 2: intake + geo-lookup (entry node, receives user text) ------
+
+
+def intake_node(node_input: str) -> Event:
+    customer = intake(resolve_customer(node_input))
     candidates = geo_lookup(customer, fetch_candidate_routes(), MockGeocoder(), DEFAULT_CONFIG)
-    return Event(output=candidates, state={"customer": customer})
+    return Event(output=candidates, state={"customer_id": customer.customer_id})
 
 
 # --- Step 3 + 4: hard constraints then weighted scoring --------------------
 
 
 def constraint_and_score_node(node_input: list, ctx: Context) -> Event:
-    customer: CustomerProfile = ctx.state["customer"]
+    customer = resolve_customer(ctx.state["customer_id"])
     evaluations = evaluate_candidates(customer, node_input, DEFAULT_CONFIG)
-    return Event(output=evaluations, state={"evaluations": evaluations})
+    return Event(output=evaluations)
 
 
 # --- Conditional router: any feasible slot at all? -------------------------
@@ -58,19 +115,20 @@ def route_on_feasibility(node_input: list) -> Event:
     return Event(route=["HAS_OPTIONS" if has_feasible else "NO_OPTIONS"], output=node_input)
 
 
-def escalate_no_feasible_slot(ctx: Context):
-    customer: CustomerProfile = ctx.state["customer"]
-    rec = decide(customer, ctx.state["evaluations"], LLMReasoner(DEFAULT_CONFIG), DEFAULT_CONFIG)
-    yield RequestInput(message=rec.reasoning, response_schema=str)
+def escalate_no_feasible_slot(node_input: list, ctx: Context) -> types.Content:
+    """Terminal: no slot satisfied the hard constraints (would page a specialist)."""
+    customer = resolve_customer(ctx.state["customer_id"])
+    rec = decide(customer, node_input, LLMReasoner(DEFAULT_CONFIG), DEFAULT_CONFIG)
+    return _render(rec)
 
 
 # --- Step 5: build recommendation, then gate on confidence -----------------
 
 
 def build_recommendation_node(node_input: list, ctx: Context) -> Event:
-    customer: CustomerProfile = ctx.state["customer"]
+    customer = resolve_customer(ctx.state["customer_id"])
     rec = decide(customer, node_input, LLMReasoner(DEFAULT_CONFIG), DEFAULT_CONFIG)
-    return Event(output=rec, state={"recommendation": rec})
+    return Event(output=rec)
 
 
 def confidence_gate(node_input: SlotRecommendation, ctx: Context) -> Event:
@@ -78,9 +136,10 @@ def confidence_gate(node_input: SlotRecommendation, ctx: Context) -> Event:
     return Event(route=[route], output=node_input)
 
 
-def escalate_low_confidence(node_input: SlotRecommendation, ctx: Context):
-    yield RequestInput(message=node_input.reasoning, response_schema=str)
+def escalate_low_confidence(node_input: SlotRecommendation, ctx: Context) -> types.Content:
+    """Terminal: a slot is proposed but flagged for human review."""
+    return _render(node_input)
 
 
-def format_output(node_input: SlotRecommendation, ctx: Context) -> SlotRecommendation:
-    return node_input
+def format_output(node_input: SlotRecommendation, ctx: Context) -> types.Content:
+    return _render(node_input)

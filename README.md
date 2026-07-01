@@ -135,17 +135,50 @@ narratives, `cp .env.example .env`, set `GOOGLE_API_KEY`, and re-run. To force
 the deterministic reasoner in code, pass
 `run_slot_recommendation(customer, reasoner=DeterministicReasoner())`.
 
-## ADK CLI / deployment path
+## Running on the mock examples with `adk run` / `adk web`
 
-`graph.py` wraps the same pipeline as an ADK `Workflow` (`root_agent`) for
-`adk run` / `adk web` / `adk deploy`. These invoke the LLM node and therefore
-need model credentials. Because every ADK node delegates to `pipeline.py`, the
-deployed graph and the offline demo can never disagree on business logic.
+`graph.py` wraps the same pipeline as an ADK `Workflow` (`root_agent`). Because
+`adk run`/`adk web` send the agent a free-text message, the entry node accepts
+a **customer id or name** and resolves it to one of the mock Sysco customers.
+Reasoning defaults to the LLM layer with a deterministic fallback, so no API
+key is required to see output.
+
+Valid inputs: `CUST-NEW-9001` … `CUST-NEW-9004`, or a name fragment like
+`Galleria` / `Woodlands` (unrecognized input falls back to the first customer).
+
+**CLI (`adk run`)** — one-shot, prints the recommendation to the terminal:
 
 ```bash
+adk run smart_assignment "CUST-NEW-9001"   # RECOMMENDED (~89%)
+adk run smart_assignment "CUST-NEW-9002"   # ESCALATE - low confidence (~51%)
+adk run smart_assignment "CUST-NEW-9003"   # ESCALATE - no feasible slot
+adk run smart_assignment "CUST-NEW-9004"   # RECOMMENDED (~93%)
+
+# Omit the query for an interactive prompt (type a customer id, then Enter):
 adk run smart_assignment
-adk web smart_assignment
 ```
+
+**Web UI (`adk web`)** — point it directly at the agent folder, open the URL,
+pick `smart_assignment`, and type a customer id in the chat:
+
+```bash
+adk web smart_assignment          # serves http://127.0.0.1:8000
+```
+
+Sample `adk run` output (CUST-NEW-9002):
+
+```
+[smart_assignment_slot_recommendation]: Customer: Galleria Grill & Catering (CUST-NEW-9002)
+Decision: ESCALATE -> human review (low confidence)  |  confidence 51%
+Proposed slot: RTE-4200 (West Houston / Energy Corridor), WED, window 07:30-11:00
+Score factors: geographic_clustering=0.67(w0.45)  capacity_buffer=0.43(w0.30)  window_match=0.60(w0.25)
+Reasoning: ... Passed over: RTE-4100/TUE scored 0.52 (−0.06). Confidence 51% is below the 70% threshold ...
+```
+
+Because every ADK node delegates to `pipeline.py`, the deployed graph and the
+offline demo can never disagree on business logic. To get real Gemini
+narratives instead of the deterministic fallback, set `GOOGLE_API_KEY` in
+`.env` first. `adk deploy` uses the same `root_agent`.
 
 ## Testing
 
