@@ -1,14 +1,12 @@
 """
 Generate the GitHub Pages overview site (``docs/index.html``) directly from
-live workflow output, so the examples on the page can never drift from the
-code.
+live workflow output, so the content can never drift from the code.
 
-The page has three audiences-facing goals:
-  1. make clear this is an **agent-automated** workflow (every step is badged
-     and described as an agent action);
-  2. show the **agentic architecture** as a diagram;
-  3. let a product owner **run the agent** interactively by entering a mock
-     customer number and watching the steps execute, then see the output.
+The page is a three-tab single-page site:
+  1. Overview     — what the agent does, the steps, the rules, the outcomes.
+  2. Architecture — the agentic workflow diagram + how the pieces fit.
+  3. Simulator    — how scoring is computed (with the real formulas), plus an
+                    interactive runner and the per-customer results.
 
 All example/interactive data is precomputed here from the real pipeline
 (``mock_customers.SAMPLE_CUSTOMERS``) and embedded as JSON, so the static site
@@ -33,12 +31,13 @@ from smart_assignment.shared.config import (
     FACTOR_WINDOW_MATCH,
     Config,
 )
+from smart_assignment.shared.constraints import build_context
 from smart_assignment.shared.models import (
     CandidateEvaluation,
     Decision,
     RecommendationResult,
 )
-from smart_assignment.shared.timeutils import fmt_window
+from smart_assignment.shared.timeutils import duration_minutes, fmt_window
 from smart_assignment.workflows.slot_recommendation.pipeline import run_slot_recommendation
 from smart_assignment.workflows.slot_recommendation.reasoning import DeterministicReasoner
 
@@ -82,6 +81,7 @@ _STYLE = """
     --green: #1a7f37; --green-soft: #e7f4ea; --amber: #9a6700; --amber-soft: #fdf3d8;
     --red: #b42318; --red-soft: #fbe9e7; --violet: #5b3fb0; --violet-soft: #efeafb;
     --radius: 14px; --shadow: 0 1px 2px rgba(16,32,64,.06), 0 6px 20px rgba(16,32,64,.06);
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
   * { box-sizing: border-box; }
   html { scroll-behavior: smooth; }
@@ -93,11 +93,21 @@ _STYLE = """
   .chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600;
     letter-spacing: .02em; padding: 5px 11px; border-radius: 999px; background: rgba(255,255,255,.15);
     border: 1px solid rgba(255,255,255,.3); }
-  header.hero { background: linear-gradient(135deg, var(--navy), var(--blue)); color: #fff; padding: 54px 0 60px; }
+  header.hero { background: linear-gradient(135deg, var(--navy), var(--blue)); color: #fff; padding: 48px 0 52px; }
   .hero h1 { margin: 14px 0 8px; font-size: 40px; line-height: 1.1; letter-spacing: -.02em; }
   .hero p.lead { margin: 0; font-size: 18px; max-width: 660px; color: #dbe6f5; }
   .hero .meta { margin-top: 22px; display: flex; flex-wrap: wrap; gap: 10px; }
-  section { padding: 48px 0; }
+  /* tabs */
+  .tabbar { position: sticky; top: 0; z-index: 30; background: #fff; border-bottom: 1px solid var(--line);
+    box-shadow: 0 2px 8px rgba(16,32,64,.04); }
+  .tabbar .wrap { display: flex; gap: 4px; }
+  .tabbtn { appearance: none; border: 0; background: transparent; padding: 15px 18px; font-size: 14.5px;
+    font-weight: 700; color: var(--muted); cursor: pointer; border-bottom: 3px solid transparent; }
+  .tabbtn:hover { color: var(--ink); }
+  .tabbtn.active { color: var(--blue); border-bottom-color: var(--blue); }
+  .tabpanel { display: none; }
+  .tabpanel.active { display: block; }
+  section { padding: 46px 0; }
   section h2 { font-size: 26px; letter-spacing: -.01em; margin: 0 0 6px; }
   section .sub { color: var(--muted); margin: 0 0 26px; max-width: 720px; }
   .eyebrow { color: var(--blue); font-weight: 700; font-size: 13px; letter-spacing: .08em; text-transform: uppercase; }
@@ -115,23 +125,27 @@ _STYLE = """
   .step h3 { margin: 0 0 4px; font-size: 15px; }
   .step p { margin: 0; font-size: 13px; color: var(--muted); }
   .step .action { margin-top: 8px; font-size: 12px; color: var(--violet); font-weight: 600; }
+  .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
   .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
     padding: 20px; box-shadow: var(--shadow); }
   .card .icon { font-size: 22px; }
   .card h3 { margin: 8px 0 4px; font-size: 16px; }
+  .card h4 { margin: 4px 0 3px; font-size: 14px; }
   .card p { margin: 0; font-size: 14px; color: var(--muted); }
   .tag { display: inline-block; font-size: 11px; font-weight: 700; color: var(--blue);
     background: var(--blue-soft); padding: 3px 8px; border-radius: 6px; margin-top: 10px; }
   .bar { height: 8px; border-radius: 6px; background: #eef1f6; overflow: hidden; margin-top: 8px; }
   .bar > span { display: block; height: 100%; background: var(--blue); border-radius: 6px; }
+  .formula { font-family: var(--mono); background: #f4f7fc; border: 1px solid #dde6f2; border-radius: 9px;
+    padding: 11px 13px; font-size: 12.5px; color: #22364f; margin-top: 12px; overflow-x: auto; }
+  .formula b { color: var(--navy); }
   .arch { background: #fff; border: 1px solid var(--line); border-radius: var(--radius);
     padding: 20px; box-shadow: var(--shadow); }
   .arch svg { width: 100%; height: auto; display: block; }
   .arch-legend { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-top: 22px; }
   .arch-legend .card { padding: 16px; }
-  .arch-legend h4 { margin: 6px 0 3px; font-size: 14px; }
-  .arch-legend p { margin: 0; font-size: 12.5px; color: var(--muted); }
+  .arch-legend p { font-size: 12.5px; }
   .legend { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
   .pill { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; font-size: 13px;
     padding: 6px 12px; border-radius: 999px; }
@@ -143,18 +157,17 @@ _STYLE = """
     box-shadow: var(--shadow); padding: 22px; }
   .sim-controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
   .sim input { font-size: 15px; padding: 11px 13px; border: 1px solid var(--line); border-radius: 9px;
-    min-width: 200px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    min-width: 200px; font-family: var(--mono); }
   .sim button { background: var(--blue); color: #fff; border: 0; border-radius: 9px; padding: 12px 18px;
     font-weight: 700; font-size: 14px; cursor: pointer; }
   .sim button:disabled { opacity: .55; cursor: default; }
   .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
-  .chip-btn { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
-    border: 1px solid var(--line); background: #f5f8fc; color: var(--blue); border-radius: 999px;
-    padding: 6px 11px; cursor: pointer; }
+  .chip-btn { font-family: var(--mono); font-size: 12px; border: 1px solid var(--line); background: #f5f8fc;
+    color: var(--blue); border-radius: 999px; padding: 6px 11px; cursor: pointer; }
   .chip-btn:hover { background: var(--blue-soft); }
   .sim-error { color: var(--red); font-size: 13px; margin-top: 10px; min-height: 16px; }
   .sim-cust { margin: 14px 0 4px; font-size: 14.5px; }
-  .sim-cust .cnum { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); font-size: 12px; }
+  .sim-cust .cnum { font-family: var(--mono); color: var(--muted); font-size: 12px; }
   .sim-step { display: grid; grid-template-columns: 26px 1fr; gap: 12px; padding: 11px 0; border-top: 1px solid var(--line); }
   .sim-dot { width: 18px; height: 18px; border-radius: 50%; margin-top: 3px; border: 2px solid var(--line); background: #fff; }
   .sim-step.running .sim-dot { border-color: var(--blue); animation: pulse 1s infinite; }
@@ -167,12 +180,14 @@ _STYLE = """
   .sim-lines { margin-top: 7px; font-size: 12.5px; color: #33415c; display: grid; gap: 3px; }
   .sim-line .ok { color: var(--green); font-weight: 700; }
   .sim-line .no { color: var(--red); font-weight: 700; }
+  .sim-line .calc { font-family: var(--mono); font-size: 11.5px; color: #5b6675; }
+  .sim-line .calc b { color: var(--navy); }
   .sim-output { margin-top: 18px; }
   .examples { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; }
   .result { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
     box-shadow: var(--shadow); overflow: hidden; }
   .result .rhead { padding: 18px 20px; border-bottom: 1px solid var(--line); }
-  .result .cnum { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--muted); }
+  .result .cnum { font-family: var(--mono); font-size: 12px; color: var(--muted); }
   .result h3 { margin: 2px 0 2px; font-size: 18px; }
   .result .addr { font-size: 13px; color: var(--muted); }
   .result .facts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
@@ -213,10 +228,11 @@ _STYLE = """
   footer a { text-decoration: none; }
   @media (max-width: 860px) {
     .flow { grid-template-columns: repeat(2, 1fr); }
-    .grid-3, .legend, .arch-legend { grid-template-columns: 1fr; }
+    .grid-2, .grid-3, .legend, .arch-legend { grid-template-columns: 1fr; }
     .examples { grid-template-columns: 1fr; }
     .hero h1 { font-size: 32px; }
     .factor { grid-template-columns: 120px 1fr 40px; }
+    .tabbar .wrap { overflow-x: auto; }
   }
 """
 
@@ -292,9 +308,8 @@ _ARCH_SVG = """
 </svg>
 """
 
-# Browser logic for the interactive simulator. Plain string (NOT an f-string),
-# so its many braces are safe; it reads the embedded JSON payload.
-_JS = """
+# Interactive simulator logic. Plain string (NOT an f-string) so its braces are safe.
+_SIM_JS = """
 (function () {
   var DATA = JSON.parse(document.getElementById('workflow-data').textContent);
   var input = document.getElementById('cust-input');
@@ -348,6 +363,36 @@ _JS = """
 
   runBtn.addEventListener('click', run);
   input.addEventListener('keydown', function (e) { if (e.key === 'Enter') { run(); } });
+})();
+"""
+
+# Tab switching logic. Plain string (NOT an f-string).
+_TABS_JS = """
+(function () {
+  var btns = document.querySelectorAll('.tabbtn');
+  var panels = document.querySelectorAll('.tabpanel');
+  var valid = { overview: 1, architecture: 1, simulator: 1 };
+  function activate(name, scroll) {
+    btns.forEach(function (b) {
+      var on = b.getAttribute('data-tab') === name;
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
+    panels.forEach(function (p) { p.classList.toggle('active', p.id === 'tab-' + name); });
+    if (scroll) {
+      var bar = document.querySelector('.tabbar');
+      if (bar) { window.scrollTo({ top: bar.offsetTop, behavior: 'smooth' }); }
+    }
+  }
+  btns.forEach(function (b) {
+    b.addEventListener('click', function () {
+      var n = b.getAttribute('data-tab');
+      activate(n, true);
+      history.replaceState(null, '', '#' + n);
+    });
+  });
+  var initial = (location.hash || '').replace('#', '');
+  if (valid[initial]) { activate(initial, false); }
 })();
 """
 
@@ -474,7 +519,7 @@ def _example_card(result: RecommendationResult) -> str:
       </article>"""
 
 
-def _sim_steps(result: RecommendationResult) -> list[dict]:
+def _sim_steps(result: RecommendationResult, config: Config) -> list[dict]:
     c = result.customer
     rec = result.recommendation
     loc = c.location
@@ -482,6 +527,10 @@ def _sim_steps(result: RecommendationResult) -> list[dict]:
     n = len(cands)
     feasible = [e for e in cands if e.feasible]
     pref = _win(fmt_window(c.preferred_window)) if c.preferred_window else "any"
+    gw = config.factor_weights[FACTOR_GEO_CLUSTERING]
+    cw = config.factor_weights[FACTOR_CAPACITY_BUFFER]
+    ww = config.factor_weights[FACTOR_WINDOW_MATCH]
+    cref = config.cluster_reference_miles
 
     intake = [
         f'Customer number <b>{_esc(c.customer_number)}</b> <span class="ok">✓ valid</span>',
@@ -506,20 +555,46 @@ def _sim_steps(result: RecommendationResult) -> list[dict]:
             )
 
     if result.ranked_feasible:
-        score = ["Weighted scores (higher is better):"]
+        score = ["Each dimension is normalized to 0–1, then combined by weight:"]
         for e in result.ranked_feasible:
+            ctx = build_context(c, e.route)
+            g = _factor_value(e, FACTOR_GEO_CLUSTERING)
+            b = _factor_value(e, FACTOR_CAPACITY_BUFFER)
+            w = _factor_value(e, FACTOR_WINDOW_MATCH)
             score.append(
-                f"• {_esc(e.route.route_id)}: score <b>{e.total_score:.2f}</b> — "
-                f"clustering {_factor_value(e, FACTOR_GEO_CLUSTERING):.2f}, "
-                f"buffer {_factor_value(e, FACTOR_CAPACITY_BUFFER):.2f}, "
-                f"window {_factor_value(e, FACTOR_WINDOW_MATCH):.2f}"
+                f"• <b>{_esc(e.route.route_id)} · {_esc(e.route.name)}</b> "
+                f"→ weighted score <b>{e.total_score:.2f}</b>"
+            )
+            score.append(
+                f'<span class="calc">↳ clustering = clamp(1 − {ctx.avg_stop_distance_miles:.1f} ÷ '
+                f"{cref:.0f} mi) = <b>{g:.2f}</b> · weight {gw:.2f}</span>"
+            )
+            score.append(
+                f'<span class="calc">↳ capacity buffer = clamp({ctx.remaining_capacity_after} ÷ '
+                f"{e.route.vehicle_capacity_cases} cases) = <b>{b:.2f}</b> · weight {cw:.2f}</span>"
+            )
+            if c.preferred_window is None:
+                score.append(
+                    f'<span class="calc">↳ window match = neutral (no preferred window) = '
+                    f"<b>{w:.2f}</b> · weight {ww:.2f}</span>"
+                )
+            else:
+                pd = max(1, duration_minutes(c.preferred_window))
+                score.append(
+                    f'<span class="calc">↳ window match = clamp({ctx.window_overlap_minutes} ÷ '
+                    f"{pd} min) = <b>{w:.2f}</b> · weight {ww:.2f}</span>"
+                )
+            score.append(
+                f'<span class="calc">↳ total = {gw:.2f}×{g:.2f} + {cw:.2f}×{b:.2f} + '
+                f"{ww:.2f}×{w:.2f} = <b>{e.total_score:.2f}</b></span>"
             )
     else:
-        score = ["No feasible routes survived — nothing to score."]
+        score = ["No feasible routes survived the hard rules — nothing to score."]
 
     decide = [
         f"Decision: <b>{DECISION_SHORT[rec.decision]}</b>",
-        f"Agent self-assessed confidence: <b>{rec.confidence:.0%}</b>",
+        f"Agent self-assessed confidence: <b>{rec.confidence:.0%}</b> "
+        f"(threshold {config.confidence_threshold:.0%})",
     ]
     if rec.recommended_route_id:
         decide.append(
@@ -547,7 +622,7 @@ def _sim_steps(result: RecommendationResult) -> list[dict]:
         },
         {
             "title": "Score & Rank",
-            "action": "The agent scores each feasible route on the weighted factors and ranks them.",
+            "action": "The agent scores each feasible route on the weighted factors (with the math) and ranks them.",
             "lines": score,
         },
         {
@@ -558,48 +633,62 @@ def _sim_steps(result: RecommendationResult) -> list[dict]:
     ]
 
 
-def _scoring_cards(config: Config) -> str:
-    meta = {
-        FACTOR_GEO_CLUSTERING: (
-            "\U0001f9ed",
-            "Geographic clustering",
-            "How tightly the customer clusters with the route's existing stops — "
-            "tighter clusters mean more predictable arrivals.",
-        ),
-        FACTOR_CAPACITY_BUFFER: (
-            "\U0001f6e1️",
-            "Capacity buffer",
-            "How much headroom is left after the add — more buffer means a route "
-            "that's resilient to day-of disruption.",
-        ),
-        FACTOR_WINDOW_MATCH: (
-            "\U0001f3af",
-            "Window match",
-            "How well the route's window covers the customer's stated preference.",
-        ),
-    }
-    cards = []
-    for key in (FACTOR_GEO_CLUSTERING, FACTOR_CAPACITY_BUFFER, FACTOR_WINDOW_MATCH):
-        icon, title, desc = meta[key]
-        weight = config.factor_weights[key]
-        cards.append(
-            f'<div class="card"><div class="icon">{icon}</div><h3>{title}</h3>'
-            f"<p>{desc}</p>"
-            f'<div class="bar"><span style="width:{round(weight * 100)}%"></span></div>'
-            f'<span class="tag">weight {weight:.2f}</span></div>'
-        )
-    return "".join(cards)
+def _scoring_section(config: Config) -> str:
+    gw = config.factor_weights[FACTOR_GEO_CLUSTERING]
+    cw = config.factor_weights[FACTOR_CAPACITY_BUFFER]
+    ww = config.factor_weights[FACTOR_WINDOW_MATCH]
+    total_w = gw + cw + ww
+    cref = config.cluster_reference_miles
+    neutral = config.window_neutral_score
+    sep = config.confidence_separation_ref
+    thr = config.confidence_threshold
+    return f"""
+    <span class="eyebrow">How the agent scores &amp; ranks</span>
+    <h2>Exactly how each dimension is scored</h2>
+    <p class="sub">Only routes that pass every hard rule reach this stage. The agent scores each on three
+      dimensions, normalizes each to 0–1 (<span style="font-family:var(--mono)">clamp</span> keeps it in
+      range), and combines them by weight. This is deterministic Python — the same inputs always give the
+      same score.</p>
+    <div class="grid-3">
+      <div class="card"><div class="icon">🧭</div><h3>Geographic clustering · weight {gw:.2f}</h3>
+        <p>How tightly the customer sits within the route's existing cluster of stops. Closer = higher.</p>
+        <div class="formula">score = clamp( 1 − <b>avg_miles_to_stops</b> ÷ {cref:.0f} , 0, 1 )</div>
+        <p style="margin-top:8px;font-size:12.5px">Distance is the average great-circle miles to the route's
+          committed stops; at {cref:.0f} mi the score reaches 0.</p></div>
+      <div class="card"><div class="icon">🛡️</div><h3>Capacity buffer · weight {cw:.2f}</h3>
+        <p>How much headroom is left on the truck once this order is added. More buffer = more resilient.</p>
+        <div class="formula">score = clamp( <b>cases_remaining_after_add</b> ÷ <b>vehicle_capacity</b> , 0, 1 )</div>
+        <p style="margin-top:8px;font-size:12.5px">Remaining = capacity − already-committed cases − this order.</p></div>
+      <div class="card"><div class="icon">🎯</div><h3>Window match · weight {ww:.2f}</h3>
+        <p>How much of the customer's preferred window the route's window can cover.</p>
+        <div class="formula">score = clamp( <b>overlap_minutes</b> ÷ <b>preferred_window_minutes</b> , 0, 1 )</div>
+        <p style="margin-top:8px;font-size:12.5px">If the customer states no window, a neutral {neutral:.2f} is used
+          instead.</p></div>
+    </div>
+
+    <div style="height:16px"></div>
+    <div class="card">
+      <h3 style="margin-top:0">Final score, then the agent's own confidence</h3>
+      <p>The overall score is the weighted average of the three dimensions:</p>
+      <div class="formula">total = ( {gw:.2f}·clustering + {cw:.2f}·capacity + {ww:.2f}·window ) ÷ {total_w:.2f}</div>
+      <p style="margin-top:14px">The agent ranks feasible routes by <em>total</em>, then scores how confident it
+        is in the winner. It <b>auto-assigns</b> when confidence ≥ {thr:.0%}; otherwise it <b>escalates</b>:</p>
+      <div class="formula">two or more options: confidence = 0.6·<b>top</b> + 0.4·clamp( (top − runner_up) ÷ {sep:.2f} , 0, 1 )
+<br/>single option: confidence = 0.5 + 0.5·<b>top</b> &#160;&#160;·&#160;&#160; no feasible option: confidence = 0</div>
+      <p style="margin-top:12px;font-size:12.5px;color:var(--muted)">A strong, clearly-separated winner scores high;
+        a mediocre option or a near-tie scores low and trips the {thr:.0%} threshold.</p>
+    </div>"""
 
 
 def build_page(results: list[RecommendationResult], config: Config) -> str:
-    """Render the full overview HTML from live workflow results."""
+    """Render the full three-tab overview HTML from live workflow results."""
     threshold = f"{config.confidence_threshold:.0%}"
     top_n = config.top_n_candidate_routes
     cards = "".join(_example_card(r) for r in results)
     payload = {
         r.customer.customer_number: {
             "name": _esc(r.customer.name),
-            "steps": _sim_steps(r),
+            "steps": _sim_steps(r, config),
             "resultHtml": _example_card(r),
         }
         for r in results
@@ -609,7 +698,7 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
         + json.dumps(payload, ensure_ascii=False)
         + "</script>"
     )
-    js_block = "<script>" + _JS + "</script>"
+    js_block = "<script>" + _SIM_JS + _TABS_JS + "</script>"
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -625,7 +714,7 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
 
 <header class="hero">
   <div class="wrap">
-    <span class="chip">🤖 Agentic workflow · Sysco foodservice</span>
+    <span class="chip">🤖 Agentic workflow · Sysco</span>
     <h1>Smart Assignment</h1>
     <p class="lead">An <strong>AI agent</strong> that autonomously recommends the best delivery day &amp;
       time slot for a <strong>new customer</strong> — running every step end-to-end, enforcing hard
@@ -640,131 +729,161 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
   </div>
 </header>
 
-<section>
+<nav class="tabbar" role="tablist" aria-label="Sections">
   <div class="wrap">
-    <span class="eyebrow">The problem</span>
-    <h2>Onboarding a new account, every time, the same way</h2>
-    <p class="sub">When a new foodservice customer signs on, someone has to decide which delivery route
-      and time window they should join. That decision balances truck capacity, geography, and the
-      customer's preference — and it needs to be consistent, explainable, and fast. The Smart
-      Assignment agent makes that call automatically, and flags the tricky ones for a specialist
-      instead of guessing.</p>
+    <button class="tabbtn active" data-tab="overview" role="tab" aria-selected="true">Overview</button>
+    <button class="tabbtn" data-tab="architecture" role="tab" aria-selected="false">Architecture</button>
+    <button class="tabbtn" data-tab="simulator" role="tab" aria-selected="false">Simulator</button>
   </div>
-</section>
+</nav>
 
-<section style="background:#fff; border-top:1px solid var(--line); border-bottom:1px solid var(--line);">
-  <div class="wrap">
-    <span class="eyebrow">How the agent works</span>
-    <h2>Five steps, executed autonomously by the agent</h2>
-    <div class="agent-banner"><span class="big">🤖</span>
-      <div><b>Every step below is performed by the AI agent — no human in the loop.</b>
-      The agent orchestrates the whole flow end-to-end; a person is involved only if the agent
-      decides to escalate at the final step.</div></div>
-    <div class="flow">
-      <div class="step"><span class="abadge">🤖 Agent</span><div class="num">1</div><h3>Intake</h3><p>Capture the customer's address, order quantity (cases), and preferred window.</p><p class="action">Agent validates the number &amp; builds the profile.</p></div>
-      <div class="step"><span class="abadge">🤖 Agent</span><div class="num">2</div><h3>Geo-Lookup</h3><p>Geocode the address and find the nearest candidate routes.</p><p class="action">Agent geocodes &amp; picks the Top-{top_n}.</p></div>
-      <div class="step"><span class="abadge">🤖 Agent</span><div class="num">3</div><h3>Constraint Check</h3><p>Drop any route that fails a hard rule.</p><p class="action">Agent enforces serviceability, capacity, window.</p></div>
-      <div class="step"><span class="abadge">🤖 Agent</span><div class="num">4</div><h3>Score &amp; Rank</h3><p>Rank survivors on weighted business factors.</p><p class="action">Agent scores &amp; orders the options.</p></div>
-      <div class="step"><span class="abadge">🤖 Agent</span><div class="num">5</div><h3>Recommend</h3><p>Return the top slot with a reasoning trace — or escalate.</p><p class="action">Agent self-scores confidence &amp; decides.</p></div>
+<main>
+
+<div class="tabpanel active" id="tab-overview" role="tabpanel">
+  <section>
+    <div class="wrap">
+      <span class="eyebrow">The problem</span>
+      <h2>Onboarding a new account, every time, the same way</h2>
+      <p class="sub">When a new customer signs on, someone has to decide which delivery route and time
+        window they should join. That decision balances truck capacity, geography, and the customer's
+        preference — and it needs to be consistent, explainable, and fast. The Smart Assignment agent
+        makes that call automatically, and flags the tricky ones for a specialist instead of guessing.</p>
     </div>
-  </div>
-</section>
+  </section>
 
-<section>
-  <div class="wrap">
-    <span class="eyebrow">Architecture</span>
-    <h2>The agentic workflow, end to end</h2>
-    <p class="sub">The agent is a Google ADK <em>Workflow</em> that orchestrates the five steps. It calls
-      deterministic tools for the objective checks and an LLM only to narrate its decision — the
-      decision itself is code, so it's reproducible and auditable.</p>
-    <div class="arch">
-      {_ARCH_SVG}
-      <div class="arch-legend">
-        <div class="card"><div class="icon">🤖</div><h4>Agent orchestrator</h4><p>An ADK Workflow drives all five steps and the branching, autonomously.</p></div>
-        <div class="card"><div class="icon">🧭</div><h4>Deterministic tools</h4><p>Geo, hard constraints, and weighted scoring — plain code the agent calls.</p></div>
-        <div class="card"><div class="icon">🧠</div><h4>LLM reasoner</h4><p>Gemini turns the agent's decision into a plain-English rationale (optional).</p></div>
-        <div class="card"><div class="icon">🙋</div><h4>Human-in-the-loop</h4><p>Only engaged when the agent escalates — low confidence or no feasible slot.</p></div>
+  <section style="background:#fff; border-top:1px solid var(--line); border-bottom:1px solid var(--line);">
+    <div class="wrap">
+      <span class="eyebrow">How the agent works</span>
+      <h2>Five steps, executed autonomously by the agent</h2>
+      <div class="agent-banner"><span class="big">🤖</span>
+        <div><b>Every step below is performed by the AI agent — no human in the loop.</b>
+        The agent orchestrates the whole flow end-to-end; a person is involved only if the agent
+        decides to escalate at the final step.</div></div>
+      <div class="flow">
+        <div class="step"><span class="abadge">🤖 Agent</span><div class="num">1</div><h3>Intake</h3><p>Capture the customer's address, order quantity (cases), and preferred window.</p><p class="action">Agent validates the number &amp; builds the profile.</p></div>
+        <div class="step"><span class="abadge">🤖 Agent</span><div class="num">2</div><h3>Geo-Lookup</h3><p>Geocode the address and find the nearest candidate routes.</p><p class="action">Agent geocodes &amp; picks the Top-{top_n}.</p></div>
+        <div class="step"><span class="abadge">🤖 Agent</span><div class="num">3</div><h3>Constraint Check</h3><p>Drop any route that fails a hard rule.</p><p class="action">Agent enforces serviceability, capacity, window.</p></div>
+        <div class="step"><span class="abadge">🤖 Agent</span><div class="num">4</div><h3>Score &amp; Rank</h3><p>Rank survivors on weighted business factors.</p><p class="action">Agent scores &amp; orders the options.</p></div>
+        <div class="step"><span class="abadge">🤖 Agent</span><div class="num">5</div><h3>Recommend</h3><p>Return the top slot with a reasoning trace — or escalate.</p><p class="action">Agent self-scores confidence &amp; decides.</p></div>
       </div>
     </div>
-  </div>
-</section>
+  </section>
 
-<section style="background:#fff; border-top:1px solid var(--line); border-bottom:1px solid var(--line);">
-  <div class="wrap">
-    <span class="eyebrow">The rules the agent enforces</span>
-    <h2>Hard constraints — non-negotiable, checked in code</h2>
-    <p class="sub">These are objective facts, not judgment calls. The agent removes any route that fails
-      one before ranking — it can never "reason" a customer onto a full truck or outside the
-      serviceable area.</p>
-    <div class="grid-3">
-      <div class="card"><div class="icon">\U0001f4cd</div><h3>Geographic serviceability</h3><p>The customer must fall within the route's serviceable radius.</p></div>
-      <div class="card"><div class="icon">\U0001f4e6</div><h3>Route capacity</h3><p>The truck stays at or below {config.max_utilization_after_assignment:.0%} capacity after adding this order.</p></div>
-      <div class="card"><div class="icon">\U0001f551</div><h3>Delivery-window fit</h3><p>The route offers a window overlapping the customer's preference, if stated.</p></div>
-    </div>
-
-    <div style="height:34px"></div>
-    <span class="eyebrow">How the agent ranks the rest</span>
-    <h2>Weighted scoring factors</h2>
-    <p class="sub">Among the routes that pass every hard rule, the agent uses these weighted factors to
-      decide the winner. Weights reflect priority and are fully configurable.</p>
-    <div class="grid-3">{_scoring_cards(config)}</div>
-  </div>
-</section>
-
-<section>
-  <div class="wrap">
-    <span class="eyebrow">The outcome</span>
-    <h2>Three possible agent decisions</h2>
-    <p class="sub">Every run ends in one of three states. Anything below a {threshold} confidence
-      threshold, or with no valid slot at all, the agent hands to a human — with full context attached.</p>
-    <div class="legend">
-      <div class="card"><span class="pill rec">✔ Recommended</span><p style="margin-top:12px">A clear winner above the confidence threshold — the agent auto-assigns.</p></div>
-      <div class="card"><span class="pill low">⚠ Low confidence</span><p style="margin-top:12px">A slot is proposed, but the options are close — the agent asks a specialist to confirm.</p></div>
-      <div class="card"><span class="pill no">✖ No feasible slot</span><p style="margin-top:12px">Every candidate failed a hard rule — the agent routes it to a specialist.</p></div>
-    </div>
-  </div>
-</section>
-
-<section style="background:#fff; border-top:1px solid var(--line); border-bottom:1px solid var(--line);" id="try">
-  <div class="wrap">
-    <span class="eyebrow">Try it yourself</span>
-    <h2>Run the agent on a customer</h2>
-    <p class="sub">Enter a mock customer number (or pick one below) and watch the agent execute each step,
-      then render its recommendation. Everything runs in your browser — no data leaves the page.</p>
-    <div class="sim">
-      <div class="sim-controls">
-        <input id="cust-input" placeholder="e.g. 067-100002" aria-label="Customer number" autocomplete="off" />
-        <button id="run-btn">▶ Run agent workflow</button>
+  <section>
+    <div class="wrap">
+      <span class="eyebrow">The rules the agent enforces</span>
+      <h2>Hard constraints — non-negotiable, checked in code</h2>
+      <p class="sub">These are objective facts, not judgment calls. The agent removes any route that fails
+        one before ranking — it can never "reason" a customer onto a full truck or outside the
+        serviceable area. (See the <b>Simulator</b> tab for exactly how the surviving routes are scored.)</p>
+      <div class="grid-3">
+        <div class="card"><div class="icon">\U0001f4cd</div><h3>Geographic serviceability</h3><p>The customer must fall within the route's serviceable radius.</p></div>
+        <div class="card"><div class="icon">\U0001f4e6</div><h3>Route capacity</h3><p>The truck stays at or below {config.max_utilization_after_assignment:.0%} capacity after adding this order.</p></div>
+        <div class="card"><div class="icon">\U0001f551</div><h3>Delivery-window fit</h3><p>The route offers a window overlapping the customer's preference, if stated.</p></div>
       </div>
-      <div class="chips" id="chips"></div>
-      <div class="sim-error" id="sim-error"></div>
-      <div id="sim-steps"></div>
-      <div class="sim-output" id="sim-output"></div>
     </div>
-  </div>
-</section>
+  </section>
 
-<section>
-  <div class="wrap">
-    <span class="eyebrow">All outcomes at a glance</span>
-    <h2>What the agent decided for each mock customer</h2>
-    <p class="sub">These cards are generated straight from the agent's output. Each customer lands on a
-      different outcome; expand <em>“Routes the agent evaluated”</em> to audit the full decision.</p>
-    <div class="examples">{cards}
+  <section style="background:#fff; border-top:1px solid var(--line); border-bottom:1px solid var(--line);">
+    <div class="wrap">
+      <span class="eyebrow">The outcome</span>
+      <h2>Three possible agent decisions</h2>
+      <p class="sub">Every run ends in one of three states. Anything below a {threshold} confidence
+        threshold, or with no valid slot at all, the agent hands to a human — with full context attached.</p>
+      <div class="legend">
+        <div class="card"><span class="pill rec">✔ Recommended</span><p style="margin-top:12px">A clear winner above the confidence threshold — the agent auto-assigns.</p></div>
+        <div class="card"><span class="pill low">⚠ Low confidence</span><p style="margin-top:12px">A slot is proposed, but the options are close — the agent asks a specialist to confirm.</p></div>
+        <div class="card"><span class="pill no">✖ No feasible slot</span><p style="margin-top:12px">Every candidate failed a hard rule — the agent routes it to a specialist.</p></div>
+      </div>
     </div>
-  </div>
-</section>
+  </section>
+</div>
 
-<section style="padding-top:0;">
-  <div class="wrap">
-    <div class="note">
-      <strong>About this data.</strong> The agent runs on <strong>mock</strong> Houston-area routes and
-      geocoding so the workflow can be demonstrated end-to-end. Capacities, service radii, scoring
-      weights, and thresholds are illustrative starting points — not validated Sysco policy. The route
-      source and geocoder are designed to be swapped for real systems without changing the agent's logic.
+<div class="tabpanel" id="tab-architecture" role="tabpanel">
+  <section>
+    <div class="wrap">
+      <span class="eyebrow">Architecture</span>
+      <h2>The agentic workflow, end to end</h2>
+      <p class="sub">The agent is a Google ADK <em>Workflow</em> that orchestrates the five steps. It calls
+        deterministic tools for the objective checks and an LLM only to narrate its decision — the
+        decision itself is code, so it's reproducible and auditable.</p>
+      <div class="arch">
+        {_ARCH_SVG}
+        <div class="arch-legend">
+          <div class="card"><div class="icon">🤖</div><h4>Agent orchestrator</h4><p>An ADK Workflow drives all five steps and the branching, autonomously.</p></div>
+          <div class="card"><div class="icon">🧭</div><h4>Deterministic tools</h4><p>Geo, hard constraints, and weighted scoring — plain code the agent calls.</p></div>
+          <div class="card"><div class="icon">🧠</div><h4>LLM reasoner</h4><p>Gemini turns the agent's decision into a plain-English rationale (optional).</p></div>
+          <div class="card"><div class="icon">🙋</div><h4>Human-in-the-loop</h4><p>Only engaged when the agent escalates — low confidence or no feasible slot.</p></div>
+        </div>
+      </div>
     </div>
-  </div>
-</section>
+  </section>
+
+  <section style="background:#fff; border-top:1px solid var(--line);">
+    <div class="wrap">
+      <span class="eyebrow">Key mechanics</span>
+      <h2>What makes it trustworthy</h2>
+      <div class="grid-2">
+        <div class="card"><h4>🤖 One agent, five steps</h4><p>A single ADK Workflow runs Intake → Geo-Lookup → Constraint Check → Score &amp; Rank → Decide, and branches to escalate.</p></div>
+        <div class="card"><h4>✅ Decisions are code, not vibes</h4><p>Constraints and scoring are deterministic Python, so identical inputs always yield the identical recommendation.</p></div>
+        <div class="card"><h4>🧠 The LLM only narrates</h4><p>Gemini writes the human-readable rationale; it never changes the decision, and falls back to a deterministic explanation.</p></div>
+        <div class="card"><h4>🙋 Human-in-the-loop on escalation</h4><p>A specialist is engaged only when the agent finds no feasible slot or isn't confident enough to auto-assign.</p></div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div class="tabpanel" id="tab-simulator" role="tabpanel">
+  <section>
+    <div class="wrap">
+      {_scoring_section(config)}
+    </div>
+  </section>
+
+  <section style="background:#fff; border-top:1px solid var(--line); border-bottom:1px solid var(--line);" id="try">
+    <div class="wrap">
+      <span class="eyebrow">Try it yourself</span>
+      <h2>Run the agent on a customer</h2>
+      <p class="sub">Enter a mock customer number (or pick one below) and watch the agent execute each step —
+        including the scoring math for every feasible route — then render its recommendation. Everything
+        runs in your browser; no data leaves the page.</p>
+      <div class="sim">
+        <div class="sim-controls">
+          <input id="cust-input" placeholder="e.g. 067-100002" aria-label="Customer number" autocomplete="off" />
+          <button id="run-btn">▶ Run agent workflow</button>
+        </div>
+        <div class="chips" id="chips"></div>
+        <div class="sim-error" id="sim-error"></div>
+        <div id="sim-steps"></div>
+        <div class="sim-output" id="sim-output"></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <span class="eyebrow">All outcomes at a glance</span>
+      <h2>What the agent decided for each mock customer</h2>
+      <p class="sub">These cards are generated straight from the agent's output. Each customer lands on a
+        different outcome; expand <em>“Routes the agent evaluated”</em> to audit the full decision.</p>
+      <div class="examples">{cards}
+      </div>
+    </div>
+  </section>
+
+  <section style="padding-top:0;">
+    <div class="wrap">
+      <div class="note">
+        <strong>About this data.</strong> The agent runs on <strong>mock</strong> Houston-area routes and
+        geocoding so the workflow can be demonstrated end-to-end. Capacities, service radii, scoring
+        weights, and thresholds are illustrative starting points — not validated Sysco policy. The route
+        source and geocoder are designed to be swapped for real systems without changing the agent's logic.
+      </div>
+    </div>
+  </section>
+</div>
+
+</main>
 
 <footer>
   <div class="wrap">
