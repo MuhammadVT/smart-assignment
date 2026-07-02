@@ -974,19 +974,7 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
 </div>
 
 <div class="tabpanel" id="tab-simulator" role="tabpanel">
-  <section>
-    <div class="wrap">
-      {_scoring_section(config)}
-    </div>
-  </section>
-
-  <section style="background:#fff; border-top:1px solid var(--line);">
-    <div class="wrap">
-      {_config_sources(config, results)}
-    </div>
-  </section>
-
-  <section style="border-top:1px solid var(--line); border-bottom:1px solid var(--line);" id="try">
+  <section id="try">
     <div class="wrap">
       <span class="eyebrow">Try it yourself</span>
       <h2>Run the agent on a customer</h2>
@@ -1010,7 +998,19 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
     </div>
   </section>
 
-  <section>
+  <section style="border-top:1px solid var(--line);">
+    <div class="wrap">
+      {_scoring_section(config)}
+    </div>
+  </section>
+
+  <section style="background:#fff; border-top:1px solid var(--line);">
+    <div class="wrap">
+      {_config_sources(config, results)}
+    </div>
+  </section>
+
+  <section style="border-top:1px solid var(--line);">
     <div class="wrap">
       <span class="eyebrow">All outcomes at a glance</span>
       <h2>What the agent decided for each mock customer</h2>
