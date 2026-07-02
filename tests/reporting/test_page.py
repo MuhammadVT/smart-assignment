@@ -31,7 +31,7 @@ def test_page_includes_every_sample_customer():
     html = build_page(_results(config), config)
     assert html.startswith("<!DOCTYPE html>")
     for customer in SAMPLE_CUSTOMERS:
-        assert customer.customer_number in html
+        assert html_escape(customer.address) in html
         assert html_escape(customer.name) in html
 
 
@@ -84,6 +84,19 @@ def test_page_states_number_sources():
     assert "shared/config.py" in html
 
 
+def test_page_treats_customers_as_prospects_identified_by_address():
+    config = Config()
+    results = _results(config)
+    html = build_page(results, config)
+    # None of the sample customers have a Sysco number yet -- address is the
+    # identifier, and the page says so rather than showing a blank/None.
+    assert all(c.customer_number is None for c in SAMPLE_CUSTOMERS)
+    assert "new prospect — no Sysco number yet" in html
+    assert "Sysco customer number (optional)" in html
+    # The simulator's run-by-address flow is documented, not run-by-number.
+    assert "Enter a mock customer's address" in html
+
+
 def test_page_has_three_tabs():
     config = Config()
     html = build_page(_results(config), config)
@@ -120,27 +133,31 @@ def test_scoring_section_shows_real_formulas():
     start = html.index(marker) + len(marker)
     payload = json.loads(html[start : html.index("</script>", start)])
 
-    # Bayou (067-100001) stays comfortably under the safe line -> flat branch.
-    bayou_joined = " ".join(payload["067-100001"]["steps"][3]["lines"])
-    assert payload["067-100001"]["steps"][3]["title"] == "Score & Rank"
+    bayou_key = SAMPLE_CUSTOMERS[0].lookup_key
+    galleria_key = SAMPLE_CUSTOMERS[1].lookup_key
+    woodlands_key = SAMPLE_CUSTOMERS[3].lookup_key
+
+    # Bayou stays comfortably under the safe line -> flat branch.
+    bayou_joined = " ".join(payload[bayou_key]["steps"][3]["lines"])
+    assert payload[bayou_key]["steps"][3]["title"] == "Score & Rank"
     assert "clustering = clamp(" in bayou_joined
     assert "total =" in bayou_joined
     assert "slot match = day(" in bayou_joined  # day-of-week gates the slot score
     assert "capacity buffer = 1.00 flat" in bayou_joined
 
-    # Woodlands (067-100004) is mock-tuned to land in the 75-90% decay band,
-    # so the demo actually exercises the decaying branch, not just the flat one.
-    woodlands_joined = " ".join(payload["067-100004"]["steps"][3]["lines"])
+    # Woodlands is mock-tuned to land in the 75-90% decay band, so the demo
+    # actually exercises the decaying branch, not just the flat one.
+    woodlands_joined = " ".join(payload[woodlands_key]["steps"][3]["lines"])
     assert "capacity buffer = clamp((" in woodlands_joined
 
-    # Galleria (067-100002) is mock-tuned so her only feasible route's OWN
-    # score is mediocre -- a genuine low-total-score escalation, not a
-    # tie-breaking artifact between two good options.
-    galleria_joined = " ".join(payload["067-100002"]["steps"][3]["lines"])
+    # Galleria is mock-tuned so her only feasible route's OWN score is
+    # mediocre -- a genuine low-total-score escalation, not a tie-breaking
+    # artifact between two good options.
+    galleria_joined = " ".join(payload[galleria_key]["steps"][3]["lines"])
     assert "capacity buffer = clamp((" in galleria_joined
 
     # Intake step now surfaces the preferred slot (day + time).
-    intake_lines = " ".join(payload["067-100001"]["steps"][0]["lines"])
+    intake_lines = " ".join(payload[bayou_key]["steps"][0]["lines"])
     assert "Preferred slot (day + time)" in intake_lines
     assert "TUE" in intake_lines
 
@@ -160,7 +177,7 @@ def test_page_has_interactive_simulator_with_payload():
     payload = json.loads(html[start:end])
 
     for customer in SAMPLE_CUSTOMERS:
-        entry = payload[customer.customer_number]
+        entry = payload[customer.lookup_key]
         assert len(entry["steps"]) == 5  # the five workflow steps
         assert all(s["action"] and s["title"] for s in entry["steps"])
         assert entry["resultHtml"].strip().startswith("<article")

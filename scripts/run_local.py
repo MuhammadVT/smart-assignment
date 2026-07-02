@@ -11,8 +11,8 @@ layer, which automatically falls back to a deterministic trace when no
 GOOGLE_API_KEY / Vertex credentials are configured.
 
 Run:
-    python3 scripts/run_local.py                       # all sample customers
-    python3 scripts/run_local.py --customer 067-100002 # one, by customer number
+    python3 scripts/run_local.py                         # all sample customers
+    python3 scripts/run_local.py --customer Westheimer    # one, by address (default)
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ def _print_result(result: RecommendationResult) -> None:
     pref = f"{slot.day.value} {fmt_window(slot.window)}" if slot else "any"
 
     print(_RULE)
-    print(f"CUSTOMER  {c.name} ({c.customer_number})")
+    print(f"CUSTOMER  {c.name} ({c.customer_number or c.address})")
     print(f"  intake    address={c.address!r}")
     print(f"            order={c.order_quantity_cases} cases, preferred_slot={pref}")
     loc = c.location
@@ -82,15 +82,25 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run the Smart Assignment workflow on mock data")
     parser.add_argument(
         "--customer",
-        help="Only run for this customer number, e.g. 067-100002 (default: all)",
+        help=(
+            "Only run for this prospect: match by address (default -- e.g. a "
+            "snippet like 'Westheimer'), or by Sysco customer number if one is "
+            "already on file (e.g. 067-100002). Default: all sample customers."
+        ),
     )
     args = parser.parse_args()
 
     customers = SAMPLE_CUSTOMERS
     if args.customer:
-        customers = [c for c in customers if c.customer_number == args.customer]
+        query = args.customer.strip().lower()
+        customers = [
+            c
+            for c in customers
+            if query in c.address.lower()
+            or (c.customer_number and query == c.customer_number.lower())
+        ]
         if not customers:
-            raise SystemExit(f"No sample customer with customer number {args.customer!r}")
+            raise SystemExit(f"No sample customer matching {args.customer!r}")
 
     print(_RULE)
     print("SMART ASSIGNMENT - slot_recommendation workflow (mock Sysco data)")

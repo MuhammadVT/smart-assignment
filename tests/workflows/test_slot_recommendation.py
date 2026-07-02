@@ -68,6 +68,36 @@ def test_malformed_customer_number_is_rejected():
         _run(customer)
 
 
+def test_prospect_with_no_customer_number_runs_by_address():
+    # The default path: a new prospect from Salesforce with an address but no
+    # Sysco customer number yet. customer_number is left as the placeholder
+    # default (None); intake must not require it.
+    customer = CustomerProfile(
+        name="Bayou City Bistro",
+        address="1200 McKinney St, Houston, TX 77010",
+        order_quantity_cases=90,
+        preferred_slot=PreferredSlot(DayOfWeek.TUE, (time(7, 0), time(10, 0))),
+    )
+    result = _run(customer)
+    assert result.customer.customer_number is None
+    assert result.customer.lookup_key == customer.address
+    assert result.recommendation.decision == Decision.RECOMMENDED
+    assert result.recommendation.customer_number is None
+    assert result.recommendation.customer_address == customer.address
+
+
+def test_missing_address_is_rejected():
+    import pytest
+
+    customer = CustomerProfile(
+        name="No Address Diner",
+        address="",
+        order_quantity_cases=90,
+    )
+    with pytest.raises(ValueError):
+        _run(customer)
+
+
 def test_large_order_escalates_low_total_score():
     # Large enough that only one nearby route can still take it, and even
     # that route ends up quite full -- its own total_score (not a tie with

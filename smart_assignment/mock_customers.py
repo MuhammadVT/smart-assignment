@@ -3,12 +3,13 @@
 
 Each account is chosen to exercise a different branch of the workflow so the
 demo shows the full range of outcomes (clear recommend, low-total-score
-escalation, no-feasible-slot escalation). Addresses resolve via
-integrations/geocoding_client.py.
+escalation, no-feasible-slot escalation).
 
-Customer numbers use the Sysco ``NNN-NNNNNN`` format (site/OpCo + per-site
-number). All four sit on the same mock Houston site ``067``. A preferred slot,
-when stated, always includes a **day of week** plus a time-of-day window.
+These are **prospects** — Salesforce/CRM has their address, but they don't
+have a Sysco customer number yet, so ``customer_number`` is left unset
+(``None``) and address is the identifier that drives everything, including
+geocoding via integrations/geocoding_client.py. A preferred slot, when
+stated, always includes a **day of week** plus a time-of-day window.
 """
 
 from __future__ import annotations
@@ -21,7 +22,6 @@ SAMPLE_CUSTOMERS: list[CustomerProfile] = [
     # Downtown restaurant, modest order, prefers Tuesday mornings.
     # -> sits right in the dense Central Houston route -> clean recommend.
     CustomerProfile(
-        customer_number="067-100001",
         name="Bayou City Bistro",
         address="1200 McKinney St, Houston, TX 77010",
         order_quantity_cases=90,
@@ -33,7 +33,6 @@ SAMPLE_CUSTOMERS: list[CustomerProfile] = [
     #    lands below the auto-assign bar -> escalate for a specialist's
     #    sanity check (a genuine quality concern, not a tie-breaking artifact).
     CustomerProfile(
-        customer_number="067-100002",
         name="Galleria Grill & Catering",
         address="5085 Westheimer Rd, Houston, TX 77056",
         order_quantity_cases=400,
@@ -42,7 +41,6 @@ SAMPLE_CUSTOMERS: list[CustomerProfile] = [
     # Far-west Katy steakhouse, large order, prefers Tuesday early morning.
     # -> nearest routes are out of serviceable range or over capacity -> escalate.
     CustomerProfile(
-        customer_number="067-100003",
         name="Katy Prairie Steakhouse",
         address="24600 Katy Fwy, Katy, TX 77494",
         order_quantity_cases=260,
@@ -51,7 +49,6 @@ SAMPLE_CUSTOMERS: list[CustomerProfile] = [
     # The Woodlands cafe, mid-size order, prefers Thursday late-morning.
     # -> the lightly-booked North route fits well -> clean recommend.
     CustomerProfile(
-        customer_number="067-100004",
         name="Woodlands Fresh Cafe",
         address="1201 Lake Woodlands Dr, The Woodlands, TX 77380",
         order_quantity_cases=150,
