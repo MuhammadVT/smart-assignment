@@ -83,7 +83,7 @@ A route's own merit shouldn't be discounted just because another candidate
 happened to score nearly as well: two routes tied at a high score both clear
 the bar, and either is a safe pick; a route only gets flagged when *its own*
 score is mediocre. Below `SMART_ASSIGNMENT_TOTAL_SCORE_THRESHOLD` (default
-0.70) it escalates for a human sanity-check (a slot is still proposed, so the
+0.60) it escalates for a human sanity-check (a slot is still proposed, so the
 reviewer has something to approve/override).
 
 ## Repo structure
@@ -210,7 +210,7 @@ truck is getting quite full for this order — there's still some room, but not 
 150 cases of headroom left, putting the truck at about 84% full after this order (comfortably
 safe up to 75%). It was also the only route that cleared every requirement, so there wasn't
 anything else to weigh it against. Putting all of that together, this pick's total score comes
-out to 57%, which falls short of the 70% bar I use before auto-assigning. Rather than commit on
+out to 57%, which falls short of the 60% bar I use before auto-assigning. Rather than commit on
 my own, I'd like a specialist to take a quick look before this goes out.
 ```
 
@@ -241,7 +241,7 @@ This is a **first-pass** on mock data. Highest-priority items to replace:
 3. **`geographic_clustering`** uses average distance to a route's committed
    stops as a proxy — real clustering quality should come from the routing
    engine's marginal stop-insertion cost / drive-time delta.
-4. **Thresholds & weights** (90% utilization, 0.70 total-score threshold,
+4. **Thresholds & weights** (90% utilization, 0.60 total-score threshold,
    service radius, factor weights) are starting points in `shared/config.py`,
    not validated Sysco policy — tune against real operational data.
 5. **Human-input UX** — the escalation nodes yield an ADK `RequestInput`; the

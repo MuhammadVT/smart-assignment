@@ -98,10 +98,10 @@ def _slot_sentence(f: FactorScore) -> str:
         )
     if f.value >= 0.999:
         body = "both the day and the time line up exactly with what the customer asked for"
-    elif f.value >= 0.5:
-        body = "either the day or the time lines up, though not both"
+    elif f.value > 0:
+        body = "the day lines up and it covers part of the preferred window, though not all of it"
     else:
-        body = "this does not line up well with what the customer asked for"
+        body = "this doesn't line up with what the customer asked for, on the day or the time"
     return f"On timing, {body} — {f.detail}."
 
 

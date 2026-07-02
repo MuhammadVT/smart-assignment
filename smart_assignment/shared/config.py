@@ -82,7 +82,7 @@ class Config:
     # must meet this bar to auto-assign; below it, the agent escalates to a
     # human. A route's own merit is judged on its own -- this is intentionally
     # NOT a function of how close a runner-up scored (see reasoning.py).
-    total_score_threshold: float = 0.70
+    total_score_threshold: float = 0.60
 
     # --- Optional LLM reasoning layer ---
     model: str = "gemini-flash-latest"
@@ -99,7 +99,7 @@ class Config:
             capacity_buffer_safety_margin=_float_env(
                 "SMART_ASSIGNMENT_CAPACITY_SAFETY_MARGIN", 0.15
             ),
-            total_score_threshold=_float_env("SMART_ASSIGNMENT_TOTAL_SCORE_THRESHOLD", 0.70),
+            total_score_threshold=_float_env("SMART_ASSIGNMENT_TOTAL_SCORE_THRESHOLD", 0.60),
             model=os.environ.get("SMART_ASSIGNMENT_MODEL", "gemini-flash-latest"),
         )
 

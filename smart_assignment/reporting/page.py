@@ -618,12 +618,20 @@ def _sim_steps(result: RecommendationResult, config: Config) -> list[dict]:
                 )
             else:
                 pd = max(1, duration_minutes(slot.window))
-                day_sym = "✓" if e.route.day == slot.day else "✗"
-                score.append(
-                    f'<span class="calc">↳ slot match = 0.5×day({e.route.day.value}{day_sym}'
-                    f"pref {slot.day.value}) + 0.5×time({ctx.window_overlap_minutes}÷{pd} min) = "
-                    f"<b>{w:.2f}</b> · weight {ww:.2f}</span>"
-                )
+                day_ok = e.route.day == slot.day
+                day_sym = "✓" if day_ok else "✗"
+                if day_ok:
+                    score.append(
+                        f'<span class="calc">↳ slot match = day({e.route.day.value}{day_sym}'
+                        f"pref {slot.day.value}) → time({ctx.window_overlap_minutes}÷{pd} min) = "
+                        f"<b>{w:.2f}</b> · weight {ww:.2f}</span>"
+                    )
+                else:
+                    score.append(
+                        f'<span class="calc">↳ slot match = day({e.route.day.value}{day_sym}'
+                        f"pref {slot.day.value}) → wrong day, no credit = "
+                        f"<b>{w:.2f}</b> · weight {ww:.2f}</span>"
+                    )
             score.append(
                 f'<span class="calc">↳ total = {gw:.2f}×{g:.2f} + {cw:.2f}×{b:.2f} + '
                 f"{ww:.2f}×{w:.2f} = <b>{e.total_score:.2f}</b></span>"
@@ -710,9 +718,12 @@ def _scoring_section(config: Config) -> str:
         <p>How well the route matches the customer's preferred <b>slot</b> — which always includes a
           <b>day of week</b> plus a time-of-day window. A <b>soft preference</b>: it shapes the score but
           never eliminates a route.</p>
-        <div class="formula">score = 0.5·( <b>route_day == preferred_day</b> ) + 0.5·clamp( <b>overlap_minutes</b> ÷ <b>preferred_window_minutes</b> , 0, 1 )</div>
-        <p style="margin-top:8px;font-size:12.5px">Right day + full time overlap = 1.0; right day only or overlapping
-          time only = 0.5. If the customer states no slot, a neutral {neutral:.2f} is used instead.</p></div>
+        <div class="formula">score = 0                                                     if <b>route_day</b> ≠ <b>preferred_day</b>, or zero time overlap
+<br/>score = clamp( <b>overlap_minutes</b> ÷ <b>preferred_window_minutes</b> , 0, 1 )        otherwise</div>
+        <p style="margin-top:8px;font-size:12.5px">The day is a gate, not partial credit: a route only earns any
+          score once it lands on the customer's preferred day, and then only for however much of the preferred
+          window it actually covers. Wrong day, or right day with no time overlap, scores 0 — half-right isn't a
+          match. If the customer states no slot, a neutral {neutral:.2f} is used instead.</p></div>
     </div>
 
     <div style="height:16px"></div>
