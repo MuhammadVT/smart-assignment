@@ -60,7 +60,11 @@ def _mock_routes() -> list[Route]:
                 RouteStop("067-022023", GeoPoint(29.7830, -95.6350), 120),
             ],
         ),
-        # North / The Woodlands — lightly booked, plenty of room, later windows.
+        # North / The Woodlands — getting fuller (not empty, but not over the
+        # ceiling either). Sized so that adding Woodlands Fresh Cafe's order
+        # (see mock_customers.py) lands utilization in the 75-90% band, where
+        # the capacity_buffer scoring factor is meant to decay -- this is the
+        # one demo route that puts that behavior on screen.
         Route(
             route_id="RTE-4300",
             name="North Houston / The Woodlands",
@@ -70,8 +74,8 @@ def _mock_routes() -> list[Route]:
             vehicle_capacity_cases=800,
             available_windows=[(time(8, 0), time(12, 0)), (time(13, 0), time(15, 0))],
             committed_stops=[
-                RouteStop("067-033031", GeoPoint(30.1600, -95.4550), 110),
-                RouteStop("067-033032", GeoPoint(30.1720, -95.4700), 90),
+                RouteStop("067-033031", GeoPoint(30.1600, -95.4550), 300),
+                RouteStop("067-033032", GeoPoint(30.1720, -95.4700), 200),
             ],
         ),
         # Southwest / Sugar Land — nearly full (near the 90% ceiling),

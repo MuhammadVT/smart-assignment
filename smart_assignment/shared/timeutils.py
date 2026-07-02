@@ -7,9 +7,24 @@ about what "overlap" means.
 from __future__ import annotations
 
 from datetime import time
-from typing import Optional
+from typing import Optional, Union
 
-from smart_assignment.shared.models import Window
+from smart_assignment.shared.models import DayOfWeek, Window
+
+_DAY_NAMES = {
+    "MON": "Monday",
+    "TUE": "Tuesday",
+    "WED": "Wednesday",
+    "THU": "Thursday",
+    "FRI": "Friday",
+    "SAT": "Saturday",
+}
+
+
+def day_label(day: Union[DayOfWeek, str]) -> str:
+    """Full weekday name for a DayOfWeek (or its short code), for natural prose."""
+    code = day.value if isinstance(day, DayOfWeek) else day
+    return _DAY_NAMES.get(code, code)
 
 
 def _minutes(t: time) -> int:

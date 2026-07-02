@@ -46,8 +46,16 @@ only feeds the `window_match` scoring factor below.
 | Factor | Weight | Meaning |
 |---|---|---|
 | `geographic_clustering` | 0.45 | how tightly the customer clusters with the route's existing stops |
-| `capacity_buffer` | 0.30 | headroom left on the truck after the add (resilience) |
+| `capacity_buffer` | 0.30 | flat (1.0) while utilization stays under a safety margin below the ceiling; decays linearly to 0 at the ceiling itself |
 | `window_match` | 0.25 | how well the route matches the preferred **slot** — day of week + time window (soft preference) |
+
+`capacity_buffer` is deliberately **not** a straight "more headroom always
+scores higher" ratio — that biased recommendations toward near-empty trucks.
+Instead it stays flat at 1.0 as long as utilization is at or below
+`max_utilization_after_assignment - capacity_buffer_safety_margin` (90% − 15pp
+= 75% by default), so two routes that are both comfortably safe score
+identically; only a route that's genuinely approaching the ceiling is marked
+down, decaying linearly to 0 exactly at the ceiling.
 
 Constraints and scoring are **deterministic Python** — reproducible and
 auditable. An LLM is *structurally unable* to place a customer onto a full
@@ -138,10 +146,10 @@ exercise a different branch:
 
 | Customer number | Customer | Situation | Outcome |
 |---|---|---|---|
-| `067-100001` | Bayou City Bistro (downtown) | sits in the dense Central route, morning window | **RECOMMENDED** (~89%) |
-| `067-100002` | Galleria Grill & Catering | two routes plausible, scores close | **ESCALATE – low confidence** (~51%) |
+| `067-100001` | Bayou City Bistro (downtown) | sits in the dense Central route, well under the capacity safety margin | **RECOMMENDED** (~99%) |
+| `067-100002` | Galleria Grill & Catering | two routes plausible, scores close | **ESCALATE – low confidence** (~48%) |
 | `067-100003` | Katy Prairie Steakhouse (far west) | all routes out of range / over capacity | **ESCALATE – no feasible slot** |
-| `067-100004` | Woodlands Fresh Cafe | lightly-booked North route fits cleanly | **RECOMMENDED** (~93%) |
+| `067-100004` | Woodlands Fresh Cafe | North route fits well but is getting full — the one demo route inside the capacity-buffer decay zone (81% utilized) | **RECOMMENDED** (~93%) |
 
 ### Reasoning: deterministic vs. LLM
 
@@ -167,8 +175,8 @@ to the first customer).
 **CLI (`adk run`)** — one-shot, prints the recommendation to the terminal:
 
 ```bash
-adk run smart_assignment "067-100001"   # RECOMMENDED (~89%)
-adk run smart_assignment "067-100002"   # ESCALATE - low confidence (~51%)
+adk run smart_assignment "067-100001"   # RECOMMENDED (~99%)
+adk run smart_assignment "067-100002"   # ESCALATE - low confidence (~48%)
 adk run smart_assignment "067-100003"   # ESCALATE - no feasible slot
 adk run smart_assignment "067-100004"   # RECOMMENDED (~93%)
 
@@ -187,10 +195,19 @@ Sample `adk run` output (`067-100002`):
 
 ```
 [smart_assignment_slot_recommendation]: Customer: Galleria Grill & Catering (067-100002)
-Decision: ESCALATE -> human review (low confidence)  |  confidence 51%
+Decision: ESCALATE -> human review (low confidence)  |  confidence 48%
 Proposed slot: RTE-4200 (West Houston / Energy Corridor), WED, window 07:30-11:00
-Score factors: geographic_clustering=0.67(w0.45)  capacity_buffer=0.43(w0.30)  window_match=0.60(w0.25)
-Reasoning: ... Passed over: RTE-4100/TUE scored 0.52 (−0.06). Confidence 51% is below the 70% threshold ...
+Score factors: geographic_clustering=0.67(w0.45)  capacity_buffer=1.00(w0.30)  window_match=0.60(w0.25)
+Reasoning: For Galleria Grill & Catering, I recommend route RTE-4200 (West Houston / Energy
+Corridor), delivering on Wednesday between 07:30-11:00. Geographically, it lines up reasonably
+well with the stops already on this route — avg 5.0 mi to existing stops. On capacity, the truck
+still has plenty of room to spare after this order — 410 cases of headroom left, putting the truck
+at about 57% full after this order (comfortably safe up to 75%). The customer did not name a
+preferred day or time, so I treated every option evenly on that front. I did weigh this against
+route RTE-4100 on Tuesday, and honestly the two were close — it trailed by only 0.01 points, so
+this wasn't an obvious choice. Putting all of that together, I'd put my confidence at 48%, which
+falls short of the 70% bar I use before auto-assigning. Rather than commit on my own, I'd like a
+specialist to take a quick look before this goes out.
 ```
 
 Because every ADK node delegates to `pipeline.py`, the deployed graph and the

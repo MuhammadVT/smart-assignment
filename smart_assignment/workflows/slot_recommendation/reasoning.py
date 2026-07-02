@@ -21,12 +21,19 @@ from __future__ import annotations
 
 from typing import Optional, Protocol
 
-from smart_assignment.shared.config import Config
+from smart_assignment.shared.config import (
+    FACTOR_CAPACITY_BUFFER,
+    FACTOR_GEO_CLUSTERING,
+    FACTOR_WINDOW_MATCH,
+    Config,
+)
+from smart_assignment.shared.constraints import CONSTRAINT_LABEL
 from smart_assignment.shared.models import (
     CandidateEvaluation,
     CustomerProfile,
+    FactorScore,
 )
-from smart_assignment.shared.timeutils import fmt_window
+from smart_assignment.shared.timeutils import day_label, fmt_window
 
 
 def compute_confidence(ranked: list[CandidateEvaluation], config: Config) -> float:
@@ -57,14 +64,60 @@ class Reasoner(Protocol):
     ) -> str: ...
 
 
-def _describe_winner(winner: CandidateEvaluation) -> str:
-    top_factors = sorted(winner.factor_scores, key=lambda f: f.weighted, reverse=True)
-    parts = [f"{f.name} ({f.detail})" for f in top_factors]
-    return "; ".join(parts)
+def _clustering_sentence(f: FactorScore) -> str:
+    if f.value >= 0.85:
+        opening = "it sits right in the middle of the stops already on this route"
+    elif f.value >= 0.5:
+        opening = "it lines up reasonably well with the stops already on this route"
+    else:
+        opening = "it sits a bit further out from the route's usual stops"
+    return f"Geographically, {opening} — {f.detail}."
+
+
+def _capacity_sentence(f: FactorScore) -> str:
+    if f.value >= 0.999:
+        body = "the truck still has plenty of room to spare after this order"
+    elif f.value > 0:
+        body = "the truck is getting fuller, though it stays inside the safe margin I look for"
+    else:
+        body = "the truck would end up right at the edge of what it is allowed to carry"
+    return f"On capacity, {body} — {f.detail}."
+
+
+def _slot_sentence(f: FactorScore) -> str:
+    if "no stated preference" in f.detail:
+        return (
+            f"The customer did not name a preferred day or time, so I treated every "
+            f"option evenly on that front — {f.detail}."
+        )
+    if f.value >= 0.999:
+        body = "both the day and the time line up exactly with what the customer asked for"
+    elif f.value >= 0.5:
+        body = "either the day or the time lines up, though not both"
+    else:
+        body = "this does not line up well with what the customer asked for"
+    return f"On timing, {body} — {f.detail}."
+
+
+_FACTOR_SENTENCE = {
+    FACTOR_GEO_CLUSTERING: _clustering_sentence,
+    FACTOR_CAPACITY_BUFFER: _capacity_sentence,
+    FACTOR_WINDOW_MATCH: _slot_sentence,
+}
+
+
+def _factor_sentence(f: FactorScore) -> str:
+    builder = _FACTOR_SENTENCE.get(f.name)
+    return builder(f) if builder else f.detail
 
 
 class DeterministicReasoner:
-    """Builds the reasoning trace straight from the score breakdown."""
+    """
+    Builds a natural-language reasoning trace straight from the score
+    breakdown — written to read like a colleague explaining their own
+    decision, not a log line. It never changes the decision or the numbers,
+    only how they're narrated, so it stays fully reproducible.
+    """
 
     def explain(
         self,
@@ -75,44 +128,87 @@ class DeterministicReasoner:
         config: Config,
     ) -> str:
         if not ranked:
-            reasons = []
-            for cand in infeasible:
-                failed = ", ".join(c.name for c in cand.failed_constraints)
-                reasons.append(f"{cand.route.route_id} ({cand.route.day.value}): failed {failed}")
-            joined = "; ".join(reasons) if reasons else "no candidate routes found nearby"
-            return (
-                f"No feasible slot for {customer.name}: every candidate route was "
-                f"ruled out by a hard constraint [{joined}]. Escalating to a routing "
-                f"specialist for a manual decision (new route, schedule change, or "
-                f"capacity reallocation)."
-            )
+            return self._no_feasible_slot(customer, infeasible)
+        return self._recommendation(customer, ranked, confidence, config)
 
-        winner = ranked[0]
-        lead = (
-            f"Recommending {winner.route.route_id} ({winner.route.name}) on "
-            f"{winner.route.day.value}, window {fmt_window(winner.chosen_window)}, "
-            f"score {winner.total_score:.2f}. Key factors: {_describe_winner(winner)}."
+    def _no_feasible_slot(
+        self, customer: CustomerProfile, infeasible: list[CandidateEvaluation]
+    ) -> str:
+        if not infeasible:
+            return (
+                f"I wasn't able to find any candidate route anywhere near {customer.name} to "
+                f"even consider. That points to a gap in route coverage rather than a capacity "
+                f"or timing problem, so I'm handing this over to a routing specialist who can "
+                f"look at options like standing up a new route or adjusting an existing one."
+            )
+        clauses = []
+        for cand in infeasible:
+            reasons = [CONSTRAINT_LABEL.get(c.name, c.name) for c in cand.failed_constraints]
+            clauses.append(
+                f"route {cand.route.route_id} on {day_label(cand.route.day)} didn't work "
+                f"because of {' and '.join(reasons)}"
+            )
+        joined = "; ".join(clauses)
+        return (
+            f"I looked at every nearby route for {customer.name}, and none of them could take "
+            f"this order: {joined}. Since nothing cleared the basic requirements, I'm escalating "
+            f"this to a routing specialist rather than force a fit. This will most likely need a "
+            f"manual decision, such as opening a new route, shifting a schedule, or freeing up "
+            f"capacity somewhere else."
         )
 
-        alt_lines = []
-        for cand in ranked[1:]:
-            gap = winner.total_score - cand.total_score
-            alt_lines.append(
-                f"{cand.route.route_id}/{cand.route.day.value} scored "
-                f"{cand.total_score:.2f} (−{gap:.2f})"
+    def _recommendation(
+        self,
+        customer: CustomerProfile,
+        ranked: list[CandidateEvaluation],
+        confidence: float,
+        config: Config,
+    ) -> str:
+        winner = ranked[0]
+        route = winner.route
+        opening = (
+            f"For {customer.name}, I recommend route {route.route_id} ({route.name}), "
+            f"delivering on {day_label(route.day)} between {fmt_window(winner.chosen_window)}."
+        )
+
+        ordered_factors = sorted(winner.factor_scores, key=lambda f: f.weighted, reverse=True)
+        factor_text = " ".join(_factor_sentence(f) for f in ordered_factors)
+
+        if len(ranked) > 1:
+            runner_up = ranked[1]
+            gap = winner.total_score - runner_up.total_score
+            if gap < 0.05:
+                compare = (
+                    f"I did weigh this against route {runner_up.route.route_id} on "
+                    f"{day_label(runner_up.route.day)}, and honestly the two were close — it "
+                    f"trailed by only {gap:.2f} points, so this wasn't an obvious choice."
+                )
+            else:
+                compare = (
+                    f"The next best option was route {runner_up.route.route_id} on "
+                    f"{day_label(runner_up.route.day)}, but it trailed by a clearer margin "
+                    f"({gap:.2f} points), so {route.route_id} was the stronger pick."
+                )
+        else:
+            compare = (
+                "It was also the only route that cleared every requirement, so there wasn't "
+                "anything else to weigh it against."
             )
-        alts = (" Passed over: " + "; ".join(alt_lines) + ".") if alt_lines else ""
 
         if confidence < config.confidence_threshold:
-            tail = (
-                f" Confidence {confidence:.0%} is below the "
-                f"{config.confidence_threshold:.0%} threshold (options are close / "
-                f"scores modest) — flagging for human review before committing."
+            closing = (
+                f"Putting all of that together, I'd put my confidence at {confidence:.0%}, which "
+                f"falls short of the {config.confidence_threshold:.0%} bar I use before "
+                f"auto-assigning. Rather than commit on my own, I'd like a specialist to take a "
+                f"quick look before this goes out."
             )
         else:
-            tail = f" Confidence {confidence:.0%}."
+            closing = (
+                f"Putting all of that together, I'm confident in this pick — about "
+                f"{confidence:.0%} — and comfortable moving ahead without a specialist review."
+            )
 
-        return lead + alts + tail
+        return " ".join([opening, factor_text, compare, closing])
 
 
 class LLMReasoner:
