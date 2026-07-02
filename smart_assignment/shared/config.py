@@ -5,7 +5,7 @@ a `Config` instance) without touching workflow logic.
 
 [ASSUMPTION] All defaults below are reasonable starting points, NOT validated
 Sysco policy. Confirm real values (capacity buffer, serviceability radius,
-confidence threshold, factor weights/priorities) with operations.
+total-score threshold, factor weights/priorities) with operations.
 """
 
 from __future__ import annotations
@@ -78,9 +78,11 @@ class Config:
     capacity_buffer_safety_margin: float = 0.15
 
     # --- Decision / escalation ---
-    confidence_threshold: float = 0.70  # below this -> escalate to a human
-    # Score gap between #1 and #2 that counts as "clearly separated".
-    confidence_separation_ref: float = 0.15
+    # The winning route's own total_score (see shared/scoring.score_candidate)
+    # must meet this bar to auto-assign; below it, the agent escalates to a
+    # human. A route's own merit is judged on its own -- this is intentionally
+    # NOT a function of how close a runner-up scored (see reasoning.py).
+    total_score_threshold: float = 0.70
 
     # --- Optional LLM reasoning layer ---
     model: str = "gemini-flash-latest"
@@ -97,8 +99,7 @@ class Config:
             capacity_buffer_safety_margin=_float_env(
                 "SMART_ASSIGNMENT_CAPACITY_SAFETY_MARGIN", 0.15
             ),
-            confidence_threshold=_float_env("SMART_ASSIGNMENT_CONFIDENCE_THRESHOLD", 0.70),
-            confidence_separation_ref=_float_env("SMART_ASSIGNMENT_CONFIDENCE_SEPARATION", 0.15),
+            total_score_threshold=_float_env("SMART_ASSIGNMENT_TOTAL_SCORE_THRESHOLD", 0.70),
             model=os.environ.get("SMART_ASSIGNMENT_MODEL", "gemini-flash-latest"),
         )
 

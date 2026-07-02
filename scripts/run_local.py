@@ -28,7 +28,7 @@ from smart_assignment.workflows.slot_recommendation.pipeline import run_slot_rec
 _RULE = "=" * 78
 _DECISION_MARK = {
     Decision.RECOMMENDED: "[RECOMMENDED]",
-    Decision.ESCALATED_LOW_CONFIDENCE: "[ESCALATE - LOW CONFIDENCE]",
+    Decision.ESCALATED_LOW_SCORE: "[ESCALATE - LOW TOTAL SCORE]",
     Decision.ESCALATED_NO_FEASIBLE_SLOT: "[ESCALATE - NO FEASIBLE SLOT]",
 }
 
@@ -62,7 +62,7 @@ def _print_result(result: RecommendationResult) -> None:
             )
             print(f"        score={cand.total_score:.2f}  [{factors}]")
 
-    print(f"\n  DECISION  {_DECISION_MARK[rec.decision]}  confidence={rec.confidence:.0%}")
+    print(f"\n  DECISION  {_DECISION_MARK[rec.decision]}  total_score={rec.total_score:.0%}")
     if rec.recommended_route_id:
         print(
             f"            -> {rec.recommended_route_id} ({rec.recommended_route_name}), "
@@ -97,7 +97,7 @@ def main() -> None:
     print(
         f"config: top_n={DEFAULT_CONFIG.top_n_candidate_routes} "
         f"max_util={DEFAULT_CONFIG.max_utilization_after_assignment:.0%} "
-        f"confidence_threshold={DEFAULT_CONFIG.confidence_threshold:.0%} "
+        f"total_score_threshold={DEFAULT_CONFIG.total_score_threshold:.0%} "
         f"weights={DEFAULT_CONFIG.factor_weights}"
     )
 

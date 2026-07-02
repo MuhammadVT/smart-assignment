@@ -16,9 +16,9 @@ front end.
 Node flow (mirrors pipeline.py):
   intake_node -> constraint_and_score_node -> route_on_feasibility
     NO_OPTIONS  -> escalate_no_feasible_slot            (terminal text)
-    HAS_OPTIONS -> build_recommendation_node -> confidence_gate
-                     LOW_CONFIDENCE  -> escalate_low_confidence  (terminal text)
-                     HIGH_CONFIDENCE -> format_output            (terminal text)
+    HAS_OPTIONS -> build_recommendation_node -> total_score_gate
+                     LOW_SCORE  -> escalate_low_score  (terminal text)
+                     HIGH_SCORE -> format_output        (terminal text)
 """
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ from smart_assignment.workflows.slot_recommendation.reasoning import LLMReasoner
 
 _DECISION_MARK = {
     Decision.RECOMMENDED: "RECOMMENDED",
-    Decision.ESCALATED_LOW_CONFIDENCE: "ESCALATE -> human review (low confidence)",
+    Decision.ESCALATED_LOW_SCORE: "ESCALATE -> human review (low total score)",
     Decision.ESCALATED_NO_FEASIBLE_SLOT: "ESCALATE -> human specialist (no feasible slot)",
 }
 
@@ -69,7 +69,7 @@ def resolve_customer(user_text: str) -> CustomerProfile:
 def _render(rec: SlotRecommendation) -> types.Content:
     lines = [
         f"Customer: {rec.customer_name} ({rec.customer_number})",
-        f"Decision: {_DECISION_MARK[rec.decision]}  |  confidence {rec.confidence:.0%}",
+        f"Decision: {_DECISION_MARK[rec.decision]}  |  total score {rec.total_score:.0%}",
     ]
     if rec.recommended_route_id:
         lines.append(
@@ -127,7 +127,7 @@ def escalate_no_feasible_slot(node_input: list, ctx: Context) -> types.Content:
     return _render(rec)
 
 
-# --- Step 5: build recommendation, then gate on confidence -----------------
+# --- Step 5: build recommendation, then gate on total score ----------------
 
 
 def build_recommendation_node(node_input: list, ctx: Context) -> Event:
@@ -136,12 +136,12 @@ def build_recommendation_node(node_input: list, ctx: Context) -> Event:
     return Event(output=rec)
 
 
-def confidence_gate(node_input: SlotRecommendation, ctx: Context) -> Event:
-    route = "HIGH_CONFIDENCE" if node_input.decision == Decision.RECOMMENDED else "LOW_CONFIDENCE"
+def total_score_gate(node_input: SlotRecommendation, ctx: Context) -> Event:
+    route = "HIGH_SCORE" if node_input.decision == Decision.RECOMMENDED else "LOW_SCORE"
     return Event(route=[route], output=node_input)
 
 
-def escalate_low_confidence(node_input: SlotRecommendation, ctx: Context) -> types.Content:
+def escalate_low_score(node_input: SlotRecommendation, ctx: Context) -> types.Content:
     """Terminal: a slot is proposed but flagged for human review."""
     return _render(node_input)
 

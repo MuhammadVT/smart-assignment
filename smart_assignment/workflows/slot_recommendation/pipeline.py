@@ -42,7 +42,7 @@ from smart_assignment.shared.timeutils import fmt_window
 from smart_assignment.workflows.slot_recommendation.reasoning import (
     LLMReasoner,
     Reasoner,
-    compute_confidence,
+    compute_total_score,
 )
 
 # --- Step 1: intake ---------------------------------------------------------
@@ -118,8 +118,8 @@ def decide(
 ) -> SlotRecommendation:
     ranked = rank_feasible(evaluations)
     infeasible = [e for e in evaluations if not e.feasible]
-    confidence = compute_confidence(ranked, config)
-    reasoning = reasoner.explain(customer, ranked, infeasible, confidence, config)
+    total_score = compute_total_score(ranked)
+    reasoning = reasoner.explain(customer, ranked, infeasible, total_score, config)
 
     rejected: list[str] = []
     for cand in ranked[1:]:
@@ -136,20 +136,20 @@ def decide(
             customer_number=customer.customer_number,
             customer_name=customer.name,
             decision=Decision.ESCALATED_NO_FEASIBLE_SLOT,
-            confidence=confidence,
+            total_score=total_score,
             reasoning=reasoning,
             rejected_alternatives=rejected,
             review_reason="No candidate route satisfied all hard constraints.",
         )
 
     winner = ranked[0]
-    escalate = confidence < config.confidence_threshold
-    decision = Decision.ESCALATED_LOW_CONFIDENCE if escalate else Decision.RECOMMENDED
+    escalate = total_score < config.total_score_threshold
+    decision = Decision.ESCALATED_LOW_SCORE if escalate else Decision.RECOMMENDED
     return SlotRecommendation(
         customer_number=customer.customer_number,
         customer_name=customer.name,
         decision=decision,
-        confidence=confidence,
+        total_score=total_score,
         reasoning=reasoning,
         recommended_route_id=winner.route.route_id,
         recommended_route_name=winner.route.name,
@@ -158,7 +158,7 @@ def decide(
         factor_breakdown=winner.factor_scores,
         rejected_alternatives=rejected,
         review_reason=(
-            f"Confidence {confidence:.0%} below {config.confidence_threshold:.0%} threshold."
+            f"Total score {total_score:.0%} below {config.total_score_threshold:.0%} threshold."
             if escalate
             else None
         ),

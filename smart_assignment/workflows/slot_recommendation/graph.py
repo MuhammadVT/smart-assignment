@@ -8,9 +8,9 @@ ADK graph assembly for the slot_recommendation workflow — the deployable
       -> route_on_feasibility       (conditional router)
            "NO_OPTIONS"  -> escalate_no_feasible_slot    (human input)
            "HAS_OPTIONS" -> build_recommendation_node
-                              -> confidence_gate           (conditional router)
-                                   "LOW_CONFIDENCE"  -> escalate_low_confidence (human input)
-                                   "HIGH_CONFIDENCE" -> format_output
+                              -> total_score_gate          (conditional router)
+                                   "LOW_SCORE"  -> escalate_low_score (human input)
+                                   "HIGH_SCORE" -> format_output
 
 All node logic delegates to pipeline.py, so this graph and the offline demo
 share one implementation. The local demo (`scripts/run_local.py`) drives the
@@ -23,13 +23,13 @@ from google.adk import Workflow
 
 from smart_assignment.workflows.slot_recommendation.nodes import (
     build_recommendation_node,
-    confidence_gate,
     constraint_and_score_node,
-    escalate_low_confidence,
+    escalate_low_score,
     escalate_no_feasible_slot,
     format_output,
     intake_node,
     route_on_feasibility,
+    total_score_gate,
 )
 
 root_agent = Workflow(
@@ -51,12 +51,12 @@ root_agent = Workflow(
                 "HAS_OPTIONS": build_recommendation_node,
             },
         ),
-        (build_recommendation_node, confidence_gate),
+        (build_recommendation_node, total_score_gate),
         (
-            confidence_gate,
+            total_score_gate,
             {
-                "LOW_CONFIDENCE": escalate_low_confidence,
-                "HIGH_CONFIDENCE": format_output,
+                "LOW_SCORE": escalate_low_score,
+                "HIGH_SCORE": format_output,
             },
         ),
     ],

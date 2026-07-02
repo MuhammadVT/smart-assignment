@@ -42,7 +42,7 @@ def test_all_three_narrative_branches_are_covered_by_the_mock_set():
     joined = " ".join(reasonings)
     # Confident, auto-assigned recommendation.
     assert "comfortable moving ahead without a specialist review" in joined
-    # Low-confidence escalation (a proposed slot, but flagged for review).
+    # Low-total-score escalation (a proposed slot, but flagged for review).
     assert "I'd like a specialist to take a quick look" in joined
     # No feasible slot at all (nothing to propose).
     assert "escalating this to a routing specialist" in joined

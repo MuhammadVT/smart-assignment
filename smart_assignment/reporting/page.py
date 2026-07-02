@@ -50,22 +50,22 @@ FACTOR_LABEL = {
 }
 DECISION_PILL = {
     Decision.RECOMMENDED: ("rec", "✔ Recommended"),
-    Decision.ESCALATED_LOW_CONFIDENCE: ("low", "⚠ Low confidence — human review"),
+    Decision.ESCALATED_LOW_SCORE: ("low", "⚠ Low score — human review"),
     Decision.ESCALATED_NO_FEASIBLE_SLOT: ("no", "✖ No feasible slot — specialist"),
 }
 DECISION_SHORT = {
     Decision.RECOMMENDED: "Recommended — auto-assign",
-    Decision.ESCALATED_LOW_CONFIDENCE: "Escalate — low confidence",
+    Decision.ESCALATED_LOW_SCORE: "Escalate — low score",
     Decision.ESCALATED_NO_FEASIBLE_SLOT: "Escalate — no feasible slot",
 }
-CONF_CLASS = {
+SCORE_CLASS = {
     Decision.RECOMMENDED: "g",
-    Decision.ESCALATED_LOW_CONFIDENCE: "a",
+    Decision.ESCALATED_LOW_SCORE: "a",
     Decision.ESCALATED_NO_FEASIBLE_SLOT: "r",
 }
-CONF_TEXT_COLOR = {
+SCORE_TEXT_COLOR = {
     Decision.RECOMMENDED: "var(--green)",
-    Decision.ESCALATED_LOW_CONFIDENCE: "var(--amber)",
+    Decision.ESCALATED_LOW_SCORE: "var(--amber)",
     Decision.ESCALATED_NO_FEASIBLE_SLOT: "var(--red)",
 }
 
@@ -208,12 +208,12 @@ _STYLE = """
   .decision-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
   .slot { margin: 12px 0 4px; font-size: 15px; }
   .slot b { color: var(--navy); }
-  .conf { margin-top: 4px; }
-  .conf .bar { height: 10px; }
-  .conf .bar > span.g { background: var(--green); }
-  .conf .bar > span.a { background: var(--amber); }
-  .conf .bar > span.r { background: var(--red); }
-  .conf small { color: var(--muted); font-size: 12px; }
+  .score { margin-top: 4px; }
+  .score .bar { height: 10px; }
+  .score .bar > span.g { background: var(--green); }
+  .score .bar > span.a { background: var(--amber); }
+  .score .bar > span.r { background: var(--red); }
+  .score small { color: var(--muted); font-size: 12px; }
   .factors { margin-top: 14px; display: grid; gap: 9px; }
   .factor { display: grid; grid-template-columns: 150px 1fr 42px; align-items: center; gap: 10px; font-size: 12.5px; }
   .factor .fname { color: #33415c; }
@@ -290,7 +290,7 @@ _ARCH_SVG = """
   <text x="334" y="288" text-anchor="middle" font-size="11" font-weight="700" fill="#0b2e59">5 · Decide</text>
   <polygon points="334,300 412,342 334,384 256,342" fill="#fff" stroke="#9a6700" stroke-width="2"/>
   <text x="334" y="338" text-anchor="middle" font-size="11.5" font-weight="700" fill="#9a6700">feasible &amp;</text>
-  <text x="334" y="353" text-anchor="middle" font-size="11.5" font-weight="700" fill="#9a6700">confident?</text>
+  <text x="334" y="353" text-anchor="middle" font-size="11.5" font-weight="700" fill="#9a6700">high score?</text>
   <path d="M562,226 L562,342 L414,342" fill="none" stroke="#1257a6" stroke-width="2" marker-end="url(#arw)"/>
 
   <rect x="150" y="560" width="250" height="62" rx="12" fill="#e7f4ea" stroke="#1a7f37"/>
@@ -485,31 +485,30 @@ def _example_card(result: RecommendationResult) -> str:
     c = result.customer
     rec = result.recommendation
     pill_cls, pill_text = DECISION_PILL[rec.decision]
-    conf_cls = CONF_CLASS[rec.decision]
-    conf_color = CONF_TEXT_COLOR[rec.decision]
+    score_cls = SCORE_CLASS[rec.decision]
+    score_color = SCORE_TEXT_COLOR[rec.decision]
     n_routes = len(result.candidates_considered)
 
     if rec.decision == Decision.ESCALATED_NO_FEASIBLE_SLOT:
-        conf_bar = (
-            f'<div class="bar"><span class="{conf_cls}" style="width:100%"></span></div>'
+        score_bar = (
+            f'<div class="bar"><span class="{score_cls}" style="width:100%"></span></div>'
             f"<small>no candidate passed the hard rules</small>"
         )
     else:
-        note = "<small>below the confidence threshold</small>" if conf_cls == "a" else ""
-        conf_bar = (
-            f'<div class="bar"><span class="{conf_cls}" style="width:{round(rec.confidence * 100)}%">'
+        note = "<small>below the auto-assign bar</small>" if score_cls == "a" else ""
+        score_bar = (
+            f'<div class="bar"><span class="{score_cls}" style="width:{round(rec.total_score * 100)}%">'
             f"</span></div>{note}"
         )
 
     slot_html = ""
     if rec.recommended_route_id:
         prefix = "→ proposed: " if rec.requires_human_review else "→ "
-        score = result.ranked_feasible[0].total_score if result.ranked_feasible else 0.0
         slot_html = (
             f'<p class="slot">{prefix}<b>{_esc(rec.recommended_route_id)} · '
             f"{_esc(rec.recommended_route_name)}</b> · {_esc(rec.recommended_day)} · "
             f'<b>{_win(rec.recommended_window)}</b> '
-            f'<small style="color:var(--muted)">(score {score:.2f})</small></p>'
+            f'<small style="color:var(--muted)">(score {rec.total_score:.2f})</small></p>'
         )
 
     factors_html = (
@@ -532,10 +531,10 @@ def _example_card(result: RecommendationResult) -> str:
         <div class="rbody">
           <div class="decision-row">
             <span class="pill {pill_cls}">{pill_text}</span>
-            <span style="font-size:13px;color:var(--muted)">agent confidence
-              <b style="color:{conf_color}">{rec.confidence:.0%}</b></span>
+            <span style="font-size:13px;color:var(--muted)">total score
+              <b style="color:{score_color}">{rec.total_score:.0%}</b></span>
           </div>
-          <div class="conf">{conf_bar}</div>
+          <div class="score">{score_bar}</div>
           {slot_html}
           {factors_html}
           <div class="reason"><span class="lbl">{reason_label}</span>{_esc(rec.reasoning)}</div>
@@ -634,8 +633,8 @@ def _sim_steps(result: RecommendationResult, config: Config) -> list[dict]:
 
     decide = [
         f"Decision: <b>{DECISION_SHORT[rec.decision]}</b>",
-        f"Agent self-assessed confidence: <b>{rec.confidence:.0%}</b> "
-        f"(threshold {config.confidence_threshold:.0%})",
+        f"Total score for the winning route: <b>{rec.total_score:.0%}</b> "
+        f"(auto-assign bar {config.total_score_threshold:.0%})",
     ]
     if rec.recommended_route_id:
         decide.append(
@@ -668,7 +667,7 @@ def _sim_steps(result: RecommendationResult, config: Config) -> list[dict]:
         },
         {
             "title": "Recommend / Decide",
-            "action": "The agent picks the best slot, scores its own confidence, and decides to auto-assign or escalate.",
+            "action": "The agent picks the best slot, checks its total score against the auto-assign bar, and decides.",
             "lines": decide,
         },
     ]
@@ -681,8 +680,7 @@ def _scoring_section(config: Config) -> str:
     total_w = gw + cw + ww
     cref = config.cluster_reference_miles
     neutral = config.window_neutral_score
-    sep = config.confidence_separation_ref
-    thr = config.confidence_threshold
+    thr = config.total_score_threshold
     ceiling = config.max_utilization_after_assignment
     margin = config.capacity_buffer_safety_margin
     safe = ceiling - margin
@@ -719,15 +717,17 @@ def _scoring_section(config: Config) -> str:
 
     <div style="height:16px"></div>
     <div class="card">
-      <h3 style="margin-top:0">Final score, then the agent's own confidence</h3>
+      <h3 style="margin-top:0">Final score, then the auto-assign decision</h3>
       <p>The overall score is the weighted average of the three dimensions:</p>
-      <div class="formula">total = ( {gw:.2f}·clustering + {cw:.2f}·capacity + {ww:.2f}·window ) ÷ {total_w:.2f}</div>
-      <p style="margin-top:14px">The agent ranks feasible routes by <em>total</em>, then scores how confident it
-        is in the winner. It <b>auto-assigns</b> when confidence ≥ {thr:.0%}; otherwise it <b>escalates</b>:</p>
-      <div class="formula">two or more options: confidence = 0.6·<b>top</b> + 0.4·clamp( (top − runner_up) ÷ {sep:.2f} , 0, 1 )
-<br/>single option: confidence = 0.5 + 0.5·<b>top</b> &#160;&#160;·&#160;&#160; no feasible option: confidence = 0</div>
-      <p style="margin-top:12px;font-size:12.5px;color:var(--muted)">A strong, clearly-separated winner scores high;
-        a mediocre option or a near-tie scores low and trips the {thr:.0%} threshold.</p>
+      <div class="formula">total_score = ( {gw:.2f}·clustering + {cw:.2f}·capacity + {ww:.2f}·window ) ÷ {total_w:.2f}</div>
+      <p style="margin-top:14px">The agent ranks feasible routes by <em>total_score</em> and recommends the winner.
+        That same number is what gates the decision — there's no separate "confidence" formula on top of it.
+        The agent <b>auto-assigns</b> when the winner's own total score is ≥ {thr:.0%}; otherwise it
+        <b>escalates</b> for a specialist to review.</p>
+      <p style="margin-top:12px;font-size:12.5px;color:var(--muted)">By design, a route's own score is never
+        discounted just because another candidate scored nearly as well — two routes tied at a high score
+        both clear the bar, and either is a safe pick. A route only gets flagged when <em>its own</em> score
+        is mediocre, not because it happens to have close competition.</p>
     </div>"""
 
 
@@ -761,8 +761,11 @@ def _config_sources(config: Config, results: list[RecommendationResult]) -> str:
             row("Clustering reference (score→0)", f"{config.cluster_reference_miles:.0f} mi", "cluster_reference_miles"),
             row("No-window neutral score", f"{config.window_neutral_score:.2f}", "window_neutral_score"),
             row("Scoring weights (geo/cap/win)", f"{gw:.2f} / {cw:.2f} / {ww:.2f}", "factor_weights"),
-            row("Confidence threshold", f"{config.confidence_threshold:.0%}", "confidence_threshold"),
-            row("Confidence separation ref", f"{config.confidence_separation_ref:.2f}", "confidence_separation_ref"),
+            row(
+                "Total score threshold (auto-assign bar)",
+                f"{config.total_score_threshold:.0%}",
+                "total_score_threshold",
+            ),
             row("Serviceability hard cap", f"{config.max_service_distance_miles:.0f} mi", "max_service_distance_miles"),
             row("Candidates evaluated", f"Top-{config.top_n_candidate_routes}", "top_n_candidate_routes"),
         ]
@@ -804,7 +807,7 @@ def _config_sources(config: Config, results: list[RecommendationResult]) -> str:
 
 def build_page(results: list[RecommendationResult], config: Config) -> str:
     """Render the full three-tab overview HTML from live workflow results."""
-    threshold = f"{config.confidence_threshold:.0%}"
+    threshold = f"{config.total_score_threshold:.0%}"
     top_n = config.top_n_candidate_routes
     cards = "".join(_example_card(r) for r in results)
     payload = {
@@ -841,7 +844,7 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
     <p class="lead">An <strong>AI agent</strong> that autonomously recommends the best delivery day &amp;
       time slot for a <strong>new customer</strong> — running every step end-to-end, enforcing hard
       operational rules in code, ranking options on weighted business factors, and escalating to a
-      human only when it isn't confident.</p>
+      human whenever the best option's own score falls short.</p>
     <div class="meta">
       <span class="chip">🤖 Fully agent-automated</span>
       <span class="chip">✅ Deterministic, auditable decisions</span>
@@ -886,7 +889,7 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
         <div class="step"><div class="num">2</div><h3>Geo-Lookup</h3><p>Geocode the address and find the nearest candidate routes.</p><p class="action">Geocode &amp; pick the Top-{top_n} nearest.</p></div>
         <div class="step"><div class="num">3</div><h3>Constraint Check</h3><p>Drop any route that fails a hard rule.</p><p class="action">Enforce serviceability &amp; capacity.</p></div>
         <div class="step"><div class="num">4</div><h3>Score &amp; Rank</h3><p>Rank survivors on weighted business factors.</p><p class="action">Score &amp; order the options.</p></div>
-        <div class="step"><div class="num">5</div><h3>Recommend</h3><p>Return the top slot with a reasoning trace — or escalate.</p><p class="action">Self-score confidence &amp; decide.</p></div>
+        <div class="step"><div class="num">5</div><h3>Recommend</h3><p>Return the top slot with a reasoning trace — or escalate.</p><p class="action">Check the total score &amp; decide.</p></div>
       </div>
     </div>
   </section>
@@ -914,11 +917,11 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
     <div class="wrap">
       <span class="eyebrow">The outcome</span>
       <h2>Three possible agent decisions</h2>
-      <p class="sub">Every run ends in one of three states. Anything below a {threshold} confidence
-        threshold, or with no valid slot at all, the agent hands to a human — with full context attached.</p>
+      <p class="sub">Every run ends in one of three states. Anything whose own total score falls below
+        {threshold}, or with no valid slot at all, the agent hands to a human — with full context attached.</p>
       <div class="legend">
-        <div class="card"><span class="pill rec">✔ Recommended</span><p style="margin-top:12px">A clear winner above the confidence threshold — the agent auto-assigns.</p></div>
-        <div class="card"><span class="pill low">⚠ Low confidence</span><p style="margin-top:12px">A slot is proposed, but the options are close — the agent asks a specialist to confirm.</p></div>
+        <div class="card"><span class="pill rec">✔ Recommended</span><p style="margin-top:12px">A clear winner whose own total score clears the bar — the agent auto-assigns.</p></div>
+        <div class="card"><span class="pill low">⚠ Low score</span><p style="margin-top:12px">A slot is proposed, but its own total score falls short — the agent asks a specialist to confirm.</p></div>
         <div class="card"><span class="pill no">✖ No feasible slot</span><p style="margin-top:12px">Every candidate failed a hard rule — the agent routes it to a specialist.</p></div>
       </div>
     </div>
@@ -939,7 +942,7 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
           <div class="card"><div class="icon">🤖</div><h4>Agent orchestrator</h4><p>An ADK Workflow drives all five steps and the branching, autonomously.</p></div>
           <div class="card"><div class="icon">🧭</div><h4>Deterministic tools</h4><p>Geo, hard constraints, and weighted scoring — plain code the agent calls.</p></div>
           <div class="card"><div class="icon">🧠</div><h4>LLM reasoner</h4><p>Gemini turns the agent's decision into a plain-English rationale (optional).</p></div>
-          <div class="card"><div class="icon">🙋</div><h4>Human-in-the-loop</h4><p>Only engaged when the agent escalates — low confidence or no feasible slot.</p></div>
+          <div class="card"><div class="icon">🙋</div><h4>Human-in-the-loop</h4><p>Only engaged when the agent escalates — low total score or no feasible slot.</p></div>
         </div>
       </div>
     </div>
@@ -953,7 +956,7 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
         <div class="card"><h4>🤖 One agent, five steps</h4><p>A single ADK Workflow runs Intake → Geo-Lookup → Constraint Check → Score &amp; Rank → Decide, and branches to escalate.</p></div>
         <div class="card"><h4>✅ Decisions are code, not vibes</h4><p>Constraints and scoring are deterministic Python, so identical inputs always yield the identical recommendation.</p></div>
         <div class="card"><h4>🧠 The LLM only narrates</h4><p>Gemini writes the human-readable rationale; it never changes the decision, and falls back to a deterministic explanation.</p></div>
-        <div class="card"><h4>🙋 Human-in-the-loop on escalation</h4><p>A specialist is engaged only when the agent finds no feasible slot or isn't confident enough to auto-assign.</p></div>
+        <div class="card"><h4>🙋 Human-in-the-loop on escalation</h4><p>A specialist is engaged only when the agent finds no feasible slot, or the best option's own total score falls short of the auto-assign bar.</p></div>
       </div>
     </div>
   </section>
