@@ -360,7 +360,7 @@
         <div class="arch-legend">
           <div class="card"><div class="icon">🤖</div><h4>Agent orchestrator</h4><p>An ADK Workflow drives all five steps and the branching, autonomously.</p></div>
           <div class="card"><div class="icon">🧭</div><h4>Deterministic tools</h4><p>Geo, hard constraints, and weighted scoring — plain code the agent calls.</p></div>
-          <div class="card"><div class="icon">🧠</div><h4>LLM reasoner</h4><p>Gemini turns the agent's decision into a plain-English rationale (optional).</p></div>
+          <div class="card"><div class="icon">🧠</div><h4>LLM reasoner</h4><p>Gemini turns the agent's decision into a plain-English rationale.</p></div>
           <div class="card"><div class="icon">🙋</div><h4>Human-in-the-loop</h4><p>Only engaged when the agent escalates — low total score or no feasible slot.</p></div>
         </div>
       </div>
@@ -374,7 +374,7 @@
       <div class="grid-2">
         <div class="card"><h4>🤖 One agent, five steps</h4><p>A single ADK Workflow runs Intake → Geo-Lookup → Constraint Check → Score &amp; Rank → Decide, and branches to escalate.</p></div>
         <div class="card"><h4>✅ Decisions are code, not vibes</h4><p>Constraints and scoring are deterministic Python, so identical inputs always yield the identical recommendation.</p></div>
-        <div class="card"><h4>🧠 The LLM only narrates</h4><p>Gemini writes the human-readable rationale; it never changes the decision, and falls back to a deterministic explanation.</p></div>
+        <div class="card"><h4>🧠 The LLM reasons and explains</h4><p>Gemini writes the human-readable rationale; it never changes the decision, and falls back to a deterministic explanation.</p></div>
         <div class="card"><h4>🙋 Human-in-the-loop on escalation</h4><p>A specialist is engaged only when the agent finds no feasible slot, or the best option's own total score falls short of the auto-assign bar.</p></div>
       </div>
     </div>
@@ -448,9 +448,9 @@
       <p>The overall score is the weighted average of the three dimensions:</p>
       <div class="formula">total_score = ( 0.45·clustering + 0.30·capacity + 0.25·window ) ÷ 1.00</div>
       <p style="margin-top:14px">The agent ranks feasible routes by <em>total_score</em> and recommends the winner.
-        That same number is what gates the decision — there's no separate "confidence" formula on top of it.
-        The agent <b>auto-assigns</b> when the winner's own total score is ≥ 60%; otherwise it
-        <b>escalates</b> for a specialist to review.</p>
+        That same number is what gates the decision<span style="font-size:11px;color:var(--muted)"> — there's
+        no separate "confidence" formula on top of it</span>. The agent <b>auto-assigns</b> when the winner's
+        own total score is ≥ 60%; otherwise it <b>escalates</b> for a specialist to review.</p>
       <p style="margin-top:12px;font-size:12.5px;color:var(--muted)">By design, a route's own score is never
         discounted just because another candidate scored nearly as well — two routes tied at a high score
         both clear the bar, and either is a safe pick. A route only gets flagged when <em>its own</em> score
