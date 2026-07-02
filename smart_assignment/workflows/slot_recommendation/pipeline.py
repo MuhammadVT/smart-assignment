@@ -22,7 +22,11 @@ from typing import Optional
 from smart_assignment.integrations.geocoding_client import MockGeocoder
 from smart_assignment.integrations.route_capacity_client import fetch_candidate_routes
 from smart_assignment.shared.config import DEFAULT_CONFIG, Config
-from smart_assignment.shared.constraints import build_context, evaluate_constraints
+from smart_assignment.shared.constraints import (
+    CONSTRAINT_LABEL,
+    build_context,
+    evaluate_constraints,
+)
 from smart_assignment.shared.customer import validate_customer_number
 from smart_assignment.shared.geo import Geocoder, haversine_miles
 from smart_assignment.shared.models import (
@@ -124,7 +128,7 @@ def decide(
             f"{cand.total_score:.2f}"
         )
     for cand in infeasible:
-        failed = ", ".join(c.name for c in cand.failed_constraints)
+        failed = ", ".join(CONSTRAINT_LABEL.get(c.name, c.name) for c in cand.failed_constraints)
         rejected.append(f"{cand.route.route_id} ({cand.route.day.value}): infeasible — {failed}")
 
     if not ranked:

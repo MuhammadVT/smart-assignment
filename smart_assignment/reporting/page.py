@@ -31,7 +31,7 @@ from smart_assignment.shared.config import (
     FACTOR_WINDOW_MATCH,
     Config,
 )
-from smart_assignment.shared.constraints import build_context
+from smart_assignment.shared.constraints import CONSTRAINT_LABEL, build_context
 from smart_assignment.shared.models import (
     CandidateEvaluation,
     Decision,
@@ -47,10 +47,6 @@ FACTOR_LABEL = {
     FACTOR_GEO_CLUSTERING: "Geographic clustering",
     FACTOR_CAPACITY_BUFFER: "Capacity buffer",
     FACTOR_WINDOW_MATCH: "Slot match (day + time)",
-}
-CONSTRAINT_LABEL = {
-    "geographic_serviceability": "serviceability",
-    "route_capacity": "capacity",
 }
 DECISION_PILL = {
     Decision.RECOMMENDED: ("rec", "✔ Recommended"),
@@ -563,6 +559,9 @@ def _sim_steps(result: RecommendationResult, config: Config) -> list[dict]:
     cw = config.factor_weights[FACTOR_CAPACITY_BUFFER]
     ww = config.factor_weights[FACTOR_WINDOW_MATCH]
     cref = config.cluster_reference_miles
+    ceiling = config.max_utilization_after_assignment
+    margin = config.capacity_buffer_safety_margin
+    safe = ceiling - margin
 
     intake = [
         f'Customer number <b>{_esc(c.customer_number)}</b> <span class="ok">✓ valid</span>',
@@ -601,10 +600,18 @@ def _sim_steps(result: RecommendationResult, config: Config) -> list[dict]:
                 f'<span class="calc">↳ clustering = clamp(1 − {ctx.avg_stop_distance_miles:.1f} ÷ '
                 f"{cref:.0f} mi) = <b>{g:.2f}</b> · weight {gw:.2f}</span>"
             )
-            score.append(
-                f'<span class="calc">↳ capacity buffer = clamp({ctx.remaining_capacity_after} ÷ '
-                f"{e.route.vehicle_capacity_cases} cases) = <b>{b:.2f}</b> · weight {cw:.2f}</span>"
-            )
+            if ctx.utilization_after <= safe:
+                score.append(
+                    f'<span class="calc">↳ capacity buffer = 1.00 flat '
+                    f"({ctx.utilization_after:.0%} full is under the {safe:.0%} safe line) = "
+                    f"<b>{b:.2f}</b> · weight {cw:.2f}</span>"
+                )
+            else:
+                score.append(
+                    f'<span class="calc">↳ capacity buffer = clamp(({ceiling:.0%} − '
+                    f"{ctx.utilization_after:.0%}) ÷ {margin:.0%}) = <b>{b:.2f}</b> · "
+                    f"weight {cw:.2f}</span>"
+                )
             if slot is None:
                 score.append(
                     f'<span class="calc">↳ slot match = neutral (no preferred slot) = '
@@ -676,6 +683,9 @@ def _scoring_section(config: Config) -> str:
     neutral = config.window_neutral_score
     sep = config.confidence_separation_ref
     thr = config.confidence_threshold
+    ceiling = config.max_utilization_after_assignment
+    margin = config.capacity_buffer_safety_margin
+    safe = ceiling - margin
     return f"""
     <span class="eyebrow">How the agent scores &amp; ranks</span>
     <h2>Exactly how each dimension is scored</h2>
@@ -690,9 +700,14 @@ def _scoring_section(config: Config) -> str:
         <p style="margin-top:8px;font-size:12.5px">Distance is the average great-circle miles to the route's
           committed stops; at {cref:.0f} mi the score reaches 0.</p></div>
       <div class="card"><div class="icon">🛡️</div><h3>Capacity buffer · weight {cw:.2f}</h3>
-        <p>How much headroom is left on the truck once this order is added. More buffer = more resilient.</p>
-        <div class="formula">score = clamp( <b>cases_remaining_after_add</b> ÷ <b>vehicle_capacity</b> , 0, 1 )</div>
-        <p style="margin-top:8px;font-size:12.5px">Remaining = capacity − already-committed cases − this order.</p></div>
+        <p>How safely under the capacity ceiling the truck stays once this order is added. Flat while
+          comfortably safe; only decays as the truck approaches its limit.</p>
+        <div class="formula">score = 1.0                                     if utilization ≤ {safe:.0%}
+<br/>score = clamp( ({ceiling:.0%} − utilization) ÷ {margin:.0%} , 0, 1 )   otherwise</div>
+        <p style="margin-top:8px;font-size:12.5px">Utilization stays flat at 1.0 up to {safe:.0%} full (the
+          {margin:.0%}-point safety margin below the {ceiling:.0%} ceiling); past that it falls straight to 0
+          exactly at the ceiling. Two routes that are both comfortably safe score the same — only a route
+          that is genuinely getting full is marked down.</p></div>
       <div class="card"><div class="icon">🎯</div><h3>Slot match (day + time) · weight {ww:.2f}</h3>
         <p>How well the route matches the customer's preferred <b>slot</b> — which always includes a
           <b>day of week</b> plus a time-of-day window. A <b>soft preference</b>: it shapes the score but
@@ -734,9 +749,15 @@ def _config_sources(config: Config, results: list[RecommendationResult]) -> str:
     def row(k: str, v: str, src: str) -> str:
         return f'<li><span class="k">{k} <span class="src">— {src}</span></span><span class="v">{v}</span></li>'
 
+    safe_utilization = config.max_utilization_after_assignment - config.capacity_buffer_safety_margin
     cfg_rows = "".join(
         [
             row("Route capacity ceiling", f"{config.max_utilization_after_assignment:.0%}", "max_utilization_after_assignment"),
+            row(
+                "Capacity safety margin (safe up to)",
+                f"{config.capacity_buffer_safety_margin:.0%} pts (→ {safe_utilization:.0%})",
+                "capacity_buffer_safety_margin",
+            ),
             row("Clustering reference (score→0)", f"{config.cluster_reference_miles:.0f} mi", "cluster_reference_miles"),
             row("No-window neutral score", f"{config.window_neutral_score:.2f}", "window_neutral_score"),
             row("Scoring weights (geo/cap/win)", f"{gw:.2f} / {cw:.2f} / {ww:.2f}", "factor_weights"),
@@ -748,7 +769,7 @@ def _config_sources(config: Config, results: list[RecommendationResult]) -> str:
     )
     route_rows = "".join(
         [
-            row("Vehicle capacity per route", f"{cap_range} cases", "the “÷ 900 cases” in scoring"),
+            row("Vehicle capacity per route", f"{cap_range} cases", "denominator of utilization %"),
             row("Service radius per route", f"{radius_range} mi", "the serviceability limit"),
             row("Committed stops + locations", "varies", "drive clustering & used capacity"),
             row("Available delivery windows", "varies", "window overlap"),

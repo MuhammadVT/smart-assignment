@@ -39,9 +39,10 @@ def test_page_reflects_live_decisions_and_reasoning():
     config = Config()
     results = _results(config)
     html = build_page(results, config)
-    # Every decision's actual reasoning text must be present verbatim (no drift).
+    # Every decision's actual reasoning text must be present (no drift) --
+    # HTML-escaped, since the natural-language text contains apostrophes.
     for result in results:
-        assert result.recommendation.reasoning in html
+        assert html_escape(result.recommendation.reasoning) in html
     # All three outcome states are exercised by the sample set.
     decisions = {r.recommendation.decision for r in results}
     assert Decision.RECOMMENDED in decisions
@@ -97,11 +98,15 @@ def test_scoring_section_shows_real_formulas():
     # The scoring dimensions and their code formulas are spelled out.
     assert "Exactly how each dimension is scored" in html
     assert "avg_miles_to_stops" in html
-    assert "cases_remaining_after_add" in html
     assert "preferred_window_minutes" in html
     # Slot match now includes the day-of-week term.
     assert "route_day == preferred_day" in html
     assert "Slot match (day + time)" in html
+    # Capacity buffer is a flat-then-decay curve anchored on the safety margin,
+    # not a straight "more headroom always wins" ratio.
+    assert "capacity_buffer_safety_margin" in html
+    assert "up to 75% full" in html  # default margin -> 90% ceiling - 15pp
+    assert "15%-point safety margin" in html
     # The confidence formula from reasoning.compute_confidence is shown.
     assert "0.6·" in html and "0.5 + 0.5·" in html
 
@@ -109,13 +114,19 @@ def test_scoring_section_shows_real_formulas():
     marker = '<script type="application/json" id="workflow-data">'
     start = html.index(marker) + len(marker)
     payload = json.loads(html[start : html.index("</script>", start)])
-    # 067-100001 (Bayou City Bistro) has a feasible, scored route.
-    score_step = payload["067-100001"]["steps"][3]
-    assert score_step["title"] == "Score & Rank"
-    joined = " ".join(score_step["lines"])
-    assert "clustering = clamp(" in joined
-    assert "total =" in joined
-    assert "slot match = 0.5×day(" in joined  # day-of-week is part of the slot score
+
+    # Bayou (067-100001) stays comfortably under the safe line -> flat branch.
+    bayou_joined = " ".join(payload["067-100001"]["steps"][3]["lines"])
+    assert payload["067-100001"]["steps"][3]["title"] == "Score & Rank"
+    assert "clustering = clamp(" in bayou_joined
+    assert "total =" in bayou_joined
+    assert "slot match = 0.5×day(" in bayou_joined  # day-of-week is part of the slot score
+    assert "capacity buffer = 1.00 flat" in bayou_joined
+
+    # Woodlands (067-100004) is mock-tuned to land in the 75-90% decay band,
+    # so the demo actually exercises the decaying branch, not just the flat one.
+    woodlands_joined = " ".join(payload["067-100004"]["steps"][3]["lines"])
+    assert "capacity buffer = clamp((" in woodlands_joined
 
     # Intake step now surfaces the preferred slot (day + time).
     intake_lines = " ".join(payload["067-100001"]["steps"][0]["lines"])

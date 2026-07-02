@@ -10,8 +10,10 @@ weight — nothing else changes.
 
 Factors, in priority order (per spec):
   1. geographic_clustering — tightness of fit with existing stops on the route
-  2. capacity_buffer       — headroom left after adding this customer
-  3. window_match          — how well the route's window fits the preference
+  2. capacity_buffer       — stays flat once safely under the capacity
+                             ceiling; only decays as utilization approaches it
+  3. window_match          — how well the route's day and time fit the
+                             customer's preferred slot
 """
 
 from __future__ import annotations
@@ -26,7 +28,7 @@ from smart_assignment.shared.config import (
 )
 from smart_assignment.shared.constraints import EvalContext
 from smart_assignment.shared.models import CustomerProfile, FactorScore, Route
-from smart_assignment.shared.timeutils import duration_minutes
+from smart_assignment.shared.timeutils import day_label, duration_minutes
 
 FactorFn = Callable[[CustomerProfile, Route, EvalContext, Config], FactorScore]
 
@@ -51,15 +53,35 @@ def geographic_clustering(
 def capacity_buffer(
     customer: CustomerProfile, route: Route, ctx: EvalContext, config: Config
 ) -> FactorScore:
-    """More remaining headroom after the add -> higher score (more resilient)."""
-    value = _clamp01(ctx.remaining_capacity_after / route.vehicle_capacity_cases)
+    """
+    Reward staying comfortably under the capacity ceiling, without endlessly
+    rewarding emptiness beyond that.
+
+    The score is flat at 1.0 as long as utilization stays under a safety
+    margin below the hard ceiling (``capacity_buffer_safety_margin``, default
+    15 percentage points below ``max_utilization_after_assignment``) -- extra
+    headroom past that point buys no further score. Past the safe line, the
+    score decays linearly to 0 exactly at the ceiling, since that is where the
+    real risk of a future add overflowing the truck actually lives. This
+    avoids the old formula's bias toward near-empty trucks: two routes that
+    are both comfortably safe now score the same, and only a route that is
+    genuinely getting full is marked down.
+    """
+    ceiling = config.max_utilization_after_assignment
+    margin = config.capacity_buffer_safety_margin
+    safe_utilization = ceiling - margin
+    if ctx.utilization_after <= safe_utilization:
+        value = 1.0
+    else:
+        value = _clamp01((ceiling - ctx.utilization_after) / margin)
     return FactorScore(
         name=FACTOR_CAPACITY_BUFFER,
         weight=config.factor_weights[FACTOR_CAPACITY_BUFFER],
         value=value,
         detail=(
-            f"{ctx.remaining_capacity_after} cases headroom "
-            f"({ctx.utilization_after:.0%} utilized post-add)"
+            f"{ctx.remaining_capacity_after} cases of headroom left, putting the truck at "
+            f"about {ctx.utilization_after:.0%} full after this order (comfortably safe up "
+            f"to {safe_utilization:.0%})"
         ),
     )
 
@@ -92,14 +114,20 @@ def window_match(
     pref_minutes = max(1, duration_minutes(slot.window))
     time_frac = _clamp01(ctx.window_overlap_minutes / pref_minutes)
     value = 0.5 * (1.0 if day_ok else 0.0) + 0.5 * time_frac
-    day_note = f"{route.day.value}={'✓' if day_ok else '✗'} vs pref {slot.day.value}"
+    if day_ok:
+        day_note = f"the route runs on {day_label(route.day)}, matching the customer's preference"
+    else:
+        day_note = (
+            f"the route runs on {day_label(route.day)} rather than the "
+            f"{day_label(slot.day)} the customer asked for"
+        )
     return FactorScore(
         name=FACTOR_WINDOW_MATCH,
         weight=weight,
         value=value,
         detail=(
-            f"day {day_note}; {ctx.window_overlap_minutes}/{pref_minutes} min of "
-            f"preferred time covered"
+            f"{day_note}, and covers {ctx.window_overlap_minutes} of the {pref_minutes} "
+            f"minutes of their preferred time"
         ),
     )
 

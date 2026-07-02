@@ -28,6 +28,18 @@ from smart_assignment.shared.models import (
 )
 from smart_assignment.shared.timeutils import best_overlapping_window
 
+# Canonical names of the two hard constraints, and a natural-language label
+# for each -- used anywhere a constraint failure is explained to a person
+# (reasoning text, the generated pages), so nothing underscored leaks into
+# prose.
+CONSTRAINT_GEOGRAPHIC_SERVICEABILITY = "geographic_serviceability"
+CONSTRAINT_ROUTE_CAPACITY = "route_capacity"
+
+CONSTRAINT_LABEL = {
+    CONSTRAINT_GEOGRAPHIC_SERVICEABILITY: "service area",
+    CONSTRAINT_ROUTE_CAPACITY: "truck capacity",
+}
+
 
 @dataclass
 class EvalContext:
@@ -82,7 +94,7 @@ def geographic_serviceability(
     limit = min(route.service_radius_miles, config.max_service_distance_miles)
     passed = ctx.distance_miles <= limit
     return ConstraintOutcome(
-        name="geographic_serviceability",
+        name=CONSTRAINT_GEOGRAPHIC_SERVICEABILITY,
         passed=passed,
         detail=(f"{ctx.distance_miles:.1f} mi from route center " f"(limit {limit:.1f} mi)"),
     )
@@ -96,7 +108,7 @@ def route_capacity(
         and ctx.utilization_after <= config.max_utilization_after_assignment
     )
     return ConstraintOutcome(
-        name="route_capacity",
+        name=CONSTRAINT_ROUTE_CAPACITY,
         passed=passed,
         detail=(
             f"utilization {ctx.utilization_after:.0%} post-add "
