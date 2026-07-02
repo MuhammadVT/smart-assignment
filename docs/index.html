@@ -382,7 +382,31 @@
 </div>
 
 <div class="tabpanel" id="tab-simulator" role="tabpanel">
-  <section>
+  <section id="try">
+    <div class="wrap">
+      <span class="eyebrow">Try it yourself</span>
+      <h2>Run the agent on a customer</h2>
+      <p class="sub">Enter a mock customer number (or pick one below) and watch the agent execute each step —
+        including the scoring math for every feasible route — then render its recommendation. Everything
+        runs in your browser; no data leaves the page.</p>
+      <div class="sim">
+        <div class="sim-controls">
+          <input id="cust-input" placeholder="e.g. 067-100002" aria-label="Customer number" autocomplete="off" />
+          <button id="run-btn" class="run">▶ Run agent workflow</button>
+        </div>
+        <div class="sim-hint" id="sim-hint"></div>
+        <div class="sim-error" id="sim-error"></div>
+        <div class="picker">
+          <span class="picker-label">Sample customer numbers — click one to load it into the box above, then press <b>Run agent workflow</b>:</span>
+          <div class="chips" id="chips"></div>
+        </div>
+        <div id="sim-steps"></div>
+        <div class="sim-output" id="sim-output"></div>
+      </div>
+    </div>
+  </section>
+
+  <section style="border-top:1px solid var(--line);">
     <div class="wrap">
       
     <span class="eyebrow">How the agent scores &amp; ranks</span>
@@ -458,31 +482,7 @@
     </div>
   </section>
 
-  <section style="border-top:1px solid var(--line); border-bottom:1px solid var(--line);" id="try">
-    <div class="wrap">
-      <span class="eyebrow">Try it yourself</span>
-      <h2>Run the agent on a customer</h2>
-      <p class="sub">Enter a mock customer number (or pick one below) and watch the agent execute each step —
-        including the scoring math for every feasible route — then render its recommendation. Everything
-        runs in your browser; no data leaves the page.</p>
-      <div class="sim">
-        <div class="sim-controls">
-          <input id="cust-input" placeholder="e.g. 067-100002" aria-label="Customer number" autocomplete="off" />
-          <button id="run-btn" class="run">▶ Run agent workflow</button>
-        </div>
-        <div class="sim-hint" id="sim-hint"></div>
-        <div class="sim-error" id="sim-error"></div>
-        <div class="picker">
-          <span class="picker-label">Sample customer numbers — click one to load it into the box above, then press <b>Run agent workflow</b>:</span>
-          <div class="chips" id="chips"></div>
-        </div>
-        <div id="sim-steps"></div>
-        <div class="sim-output" id="sim-output"></div>
-      </div>
-    </div>
-  </section>
-
-  <section>
+  <section style="border-top:1px solid var(--line);">
     <div class="wrap">
       <span class="eyebrow">All outcomes at a glance</span>
       <h2>What the agent decided for each mock customer</h2>
