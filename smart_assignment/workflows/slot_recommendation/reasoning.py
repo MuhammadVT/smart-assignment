@@ -1,6 +1,6 @@
 """
-Confidence scoring and the pluggable *reasoning* layer (spec step 5:
-"output the top-ranked slot with a full reasoning trace").
+Escalation gating and the pluggable *reasoning* layer (spec step 5: "output
+the top-ranked slot with a full reasoning trace").
 
 Two reasoners are provided behind a common `Reasoner` protocol:
 
@@ -36,21 +36,22 @@ from smart_assignment.shared.models import (
 from smart_assignment.shared.timeutils import day_label, fmt_window
 
 
-def compute_confidence(ranked: list[CandidateEvaluation], config: Config) -> float:
+def compute_total_score(ranked: list[CandidateEvaluation]) -> float:
     """
-    Confidence blends how *good* the top option is with how *clearly* it beats
-    the runner-up. A strong, clearly-separated winner scores high; a mediocre
-    option or a near-tie scores low (and will trip the escalation threshold).
+    The winning route's own total_score IS the decision-gating number -- there
+    is no separate "confidence" computed from how close a runner-up scored.
+
+    Earlier designs blended in a bonus/penalty for how clearly the winner beat
+    the #2 option, which had a real flaw: two routes tied at a high score both
+    got marked down as "uncertain," even though either one would serve the
+    customer well. A route's own merit should stand on its own -- if it clears
+    the bar, it clears it, regardless of what else was nearby. (The runner-up
+    is still surfaced to the reader via `rejected_alternatives` -- it's just no
+    longer an input to the number that gates auto-assignment.)
     """
     if not ranked:
         return 0.0
-    top = ranked[0].total_score
-    if len(ranked) == 1:
-        # Only one feasible slot: fairly certain, but capped by its own quality.
-        return round(0.5 + 0.5 * top, 2)
-    margin = top - ranked[1].total_score
-    separation = max(0.0, min(1.0, margin / config.confidence_separation_ref))
-    return round(0.6 * top + 0.4 * separation, 2)
+    return round(ranked[0].total_score, 2)
 
 
 class Reasoner(Protocol):
@@ -59,7 +60,7 @@ class Reasoner(Protocol):
         customer: CustomerProfile,
         ranked: list[CandidateEvaluation],
         infeasible: list[CandidateEvaluation],
-        confidence: float,
+        total_score: float,
         config: Config,
     ) -> str: ...
 
@@ -77,8 +78,13 @@ def _clustering_sentence(f: FactorScore) -> str:
 def _capacity_sentence(f: FactorScore) -> str:
     if f.value >= 0.999:
         body = "the truck still has plenty of room to spare after this order"
+    elif f.value >= 0.5:
+        body = "the truck is getting fuller, though it stays inside a comfortable enough margin"
     elif f.value > 0:
-        body = "the truck is getting fuller, though it stays inside the safe margin I look for"
+        body = (
+            "the truck is getting quite full for this order — there's still some "
+            "room, but not a lot of cushion"
+        )
     else:
         body = "the truck would end up right at the edge of what it is allowed to carry"
     return f"On capacity, {body} — {f.detail}."
@@ -124,12 +130,12 @@ class DeterministicReasoner:
         customer: CustomerProfile,
         ranked: list[CandidateEvaluation],
         infeasible: list[CandidateEvaluation],
-        confidence: float,
+        total_score: float,
         config: Config,
     ) -> str:
         if not ranked:
             return self._no_feasible_slot(customer, infeasible)
-        return self._recommendation(customer, ranked, confidence, config)
+        return self._recommendation(customer, ranked, total_score, config)
 
     def _no_feasible_slot(
         self, customer: CustomerProfile, infeasible: list[CandidateEvaluation]
@@ -161,7 +167,7 @@ class DeterministicReasoner:
         self,
         customer: CustomerProfile,
         ranked: list[CandidateEvaluation],
-        confidence: float,
+        total_score: float,
         config: Config,
     ) -> str:
         winner = ranked[0]
@@ -195,17 +201,19 @@ class DeterministicReasoner:
                 "anything else to weigh it against."
             )
 
-        if confidence < config.confidence_threshold:
+        if total_score < config.total_score_threshold:
             closing = (
-                f"Putting all of that together, I'd put my confidence at {confidence:.0%}, which "
-                f"falls short of the {config.confidence_threshold:.0%} bar I use before "
-                f"auto-assigning. Rather than commit on my own, I'd like a specialist to take a "
-                f"quick look before this goes out."
+                f"Putting all of that together, this pick's total score comes out to "
+                f"{total_score:.0%}, which falls short of the {config.total_score_threshold:.0%} "
+                f"bar I use before auto-assigning. Rather than commit on my own, I'd like a "
+                f"specialist to take a quick look before this goes out."
             )
         else:
             closing = (
-                f"Putting all of that together, I'm confident in this pick — about "
-                f"{confidence:.0%} — and comfortable moving ahead without a specialist review."
+                f"Putting all of that together, this pick earns a total score of "
+                f"{total_score:.0%} — comfortably above the {config.total_score_threshold:.0%} "
+                f"bar I use before auto-assigning, so I'm comfortable moving ahead without a "
+                f"specialist review."
             )
 
         return " ".join([opening, factor_text, compare, closing])
@@ -228,10 +236,10 @@ class LLMReasoner:
         customer: CustomerProfile,
         ranked: list[CandidateEvaluation],
         infeasible: list[CandidateEvaluation],
-        confidence: float,
+        total_score: float,
         config: Config,
     ) -> str:
-        facts = self._fallback.explain(customer, ranked, infeasible, confidence, config)
+        facts = self._fallback.explain(customer, ranked, infeasible, total_score, config)
         try:
             from google import genai  # imported lazily; only needed when used
 

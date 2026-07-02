@@ -2,7 +2,7 @@
 [MOCK] Sample new-customer intake records in a Sysco context.
 
 Each account is chosen to exercise a different branch of the workflow so the
-demo shows the full range of outcomes (clear recommend, low-confidence
+demo shows the full range of outcomes (clear recommend, low-total-score
 escalation, no-feasible-slot escalation). Addresses resolve via
 integrations/geocoding_client.py.
 
@@ -27,13 +27,16 @@ SAMPLE_CUSTOMERS: list[CustomerProfile] = [
         order_quantity_cases=90,
         preferred_slot=PreferredSlot(DayOfWeek.TUE, (time(7, 0), time(10, 0))),
     ),
-    # Galleria caterer, larger order, no stated slot.
-    # -> two routes are plausible and close in score -> low-confidence review.
+    # Galleria caterer, a large catering order, no stated slot.
+    # -> the order is big enough that only one nearby route can still take
+    #    it, and even that route ends up quite full -> its own total score
+    #    lands below the auto-assign bar -> escalate for a specialist's
+    #    sanity check (a genuine quality concern, not a tie-breaking artifact).
     CustomerProfile(
         customer_number="067-100002",
         name="Galleria Grill & Catering",
         address="5085 Westheimer Rd, Houston, TX 77056",
-        order_quantity_cases=140,
+        order_quantity_cases=400,
         preferred_slot=None,
     ),
     # Far-west Katy steakhouse, large order, prefers Tuesday early morning.

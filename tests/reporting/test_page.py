@@ -46,7 +46,7 @@ def test_page_reflects_live_decisions_and_reasoning():
     # All three outcome states are exercised by the sample set.
     decisions = {r.recommendation.decision for r in results}
     assert Decision.RECOMMENDED in decisions
-    assert Decision.ESCALATED_LOW_CONFIDENCE in decisions
+    assert Decision.ESCALATED_LOW_SCORE in decisions
     assert Decision.ESCALATED_NO_FEASIBLE_SLOT in decisions
 
 
@@ -107,8 +107,12 @@ def test_scoring_section_shows_real_formulas():
     assert "capacity_buffer_safety_margin" in html
     assert "up to 75% full" in html  # default margin -> 90% ceiling - 15pp
     assert "15%-point safety margin" in html
-    # The confidence formula from reasoning.compute_confidence is shown.
-    assert "0.6·" in html and "0.5 + 0.5·" in html
+    # total_score IS the gating number -- there's no separate confidence
+    # formula, and a route's own score is never discounted for a close
+    # runner-up (see reasoning.compute_total_score).
+    assert "total_score = (" in html
+    assert "no separate" in html and "confidence" in html
+    assert "Total score threshold (auto-assign bar)" in html
 
     # The per-step simulator payload shows the scoring arithmetic for a scored route.
     marker = '<script type="application/json" id="workflow-data">'
@@ -127,6 +131,12 @@ def test_scoring_section_shows_real_formulas():
     # so the demo actually exercises the decaying branch, not just the flat one.
     woodlands_joined = " ".join(payload["067-100004"]["steps"][3]["lines"])
     assert "capacity buffer = clamp((" in woodlands_joined
+
+    # Galleria (067-100002) is mock-tuned so her only feasible route's OWN
+    # score is mediocre -- a genuine low-total-score escalation, not a
+    # tie-breaking artifact between two good options.
+    galleria_joined = " ".join(payload["067-100002"]["steps"][3]["lines"])
+    assert "capacity buffer = clamp((" in galleria_joined
 
     # Intake step now surfaces the preferred slot (day + time).
     intake_lines = " ".join(payload["067-100001"]["steps"][0]["lines"])

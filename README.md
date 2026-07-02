@@ -27,7 +27,7 @@ when nothing fits or the call is too close.
 3. Constraints   drop routes failing any HARD constraint (deterministic code)
 4. Score & Rank  weighted multi-factor scoring over the survivors
 5. Recommend     output the top slot + full reasoning trace,
-                 or ESCALATE (no feasible slot / low confidence)
+                 or ESCALATE (no feasible slot / low total score)
 ```
 
 **Hard constraints (step 3) — objective, code-enforced, never LLM judgment:**
@@ -67,20 +67,24 @@ fully-quantified result into a fluent natural-language explanation.
 
 ```
 START
-  -> geo_lookup_node            (intake + geocode + Top-N nearest routes)
+  -> intake_node                (intake + geocode + Top-N nearest routes)
   -> constraint_and_score_node  (hard constraints, then weighted scoring)
   -> route_on_feasibility       (conditional)
        NO_OPTIONS  -> escalate_no_feasible_slot     (human input)
        HAS_OPTIONS -> build_recommendation_node
-                        -> confidence_gate            (conditional)
-                             LOW_CONFIDENCE  -> escalate_low_confidence (human input)
-                             HIGH_CONFIDENCE -> format_output
+                        -> total_score_gate           (conditional)
+                             LOW_SCORE  -> escalate_low_score (human input)
+                             HIGH_SCORE -> format_output
 ```
 
-Confidence blends *how good* the top option is with *how clearly* it beats the
-runner-up; below `SMART_ASSIGNMENT_CONFIDENCE_THRESHOLD` (default 0.70) it
-escalates for a human sanity-check (a slot is still proposed, so the reviewer
-has something to approve/override).
+The winning route's own `total_score` from Step 4 **is** the gating number —
+there's no separate "confidence" computed from how close a runner-up scored.
+A route's own merit shouldn't be discounted just because another candidate
+happened to score nearly as well: two routes tied at a high score both clear
+the bar, and either is a safe pick; a route only gets flagged when *its own*
+score is mediocre. Below `SMART_ASSIGNMENT_TOTAL_SCORE_THRESHOLD` (default
+0.70) it escalates for a human sanity-check (a slot is still proposed, so the
+reviewer has something to approve/override).
 
 ## Repo structure
 
@@ -99,7 +103,7 @@ smart-assignment/
 │   │   └── config.py                   # env-driven thresholds & weights
 │   ├── workflows/slot_recommendation/
 │   │   ├── pipeline.py                 # the 5-step orchestration (source of truth)
-│   │   ├── reasoning.py                # confidence + pluggable reasoner (LLM default)
+│   │   ├── reasoning.py                # total-score gating + pluggable reasoner (LLM default)
 │   │   ├── prompts.py                  # LLM reasoning prompt text
 │   │   ├── graph.py                    # ADK Workflow wrapper (delegates to pipeline)
 │   │   └── nodes.py                    # ADK nodes (delegate to pipeline)
@@ -146,10 +150,10 @@ exercise a different branch:
 
 | Customer number | Customer | Situation | Outcome |
 |---|---|---|---|
-| `067-100001` | Bayou City Bistro (downtown) | sits in the dense Central route, well under the capacity safety margin | **RECOMMENDED** (~99%) |
-| `067-100002` | Galleria Grill & Catering | two routes plausible, scores close | **ESCALATE – low confidence** (~48%) |
+| `067-100001` | Bayou City Bistro (downtown) | sits in the dense Central route, well under the capacity safety margin | **RECOMMENDED** (~97%) |
+| `067-100002` | Galleria Grill & Catering | large catering order — only one nearby route can still take it, and even that route's own score is mediocre (getting quite full) | **ESCALATE – low total score** (~57%) |
 | `067-100003` | Katy Prairie Steakhouse (far west) | all routes out of range / over capacity | **ESCALATE – no feasible slot** |
-| `067-100004` | Woodlands Fresh Cafe | North route fits well but is getting full — the one demo route inside the capacity-buffer decay zone (81% utilized) | **RECOMMENDED** (~93%) |
+| `067-100004` | Woodlands Fresh Cafe | North route fits well but is getting full — the one demo route inside the capacity-buffer decay zone (81% utilized) | **RECOMMENDED** (~86%) |
 
 ### Reasoning: deterministic vs. LLM
 
@@ -175,10 +179,10 @@ to the first customer).
 **CLI (`adk run`)** — one-shot, prints the recommendation to the terminal:
 
 ```bash
-adk run smart_assignment "067-100001"   # RECOMMENDED (~99%)
-adk run smart_assignment "067-100002"   # ESCALATE - low confidence (~48%)
+adk run smart_assignment "067-100001"   # RECOMMENDED (~97%)
+adk run smart_assignment "067-100002"   # ESCALATE - low total score (~57%)
 adk run smart_assignment "067-100003"   # ESCALATE - no feasible slot
-adk run smart_assignment "067-100004"   # RECOMMENDED (~93%)
+adk run smart_assignment "067-100004"   # RECOMMENDED (~86%)
 
 # Omit the query for an interactive prompt (type a customer number, then Enter):
 adk run smart_assignment
@@ -195,19 +199,19 @@ Sample `adk run` output (`067-100002`):
 
 ```
 [smart_assignment_slot_recommendation]: Customer: Galleria Grill & Catering (067-100002)
-Decision: ESCALATE -> human review (low confidence)  |  confidence 48%
+Decision: ESCALATE -> human review (low total score)  |  total score 57%
 Proposed slot: RTE-4200 (West Houston / Energy Corridor), WED, window 07:30-11:00
-Score factors: geographic_clustering=0.67(w0.45)  capacity_buffer=1.00(w0.30)  window_match=0.60(w0.25)
+Score factors: geographic_clustering=0.67(w0.45)  capacity_buffer=0.39(w0.30)  window_match=0.60(w0.25)
 Reasoning: For Galleria Grill & Catering, I recommend route RTE-4200 (West Houston / Energy
 Corridor), delivering on Wednesday between 07:30-11:00. Geographically, it lines up reasonably
-well with the stops already on this route — avg 5.0 mi to existing stops. On capacity, the truck
-still has plenty of room to spare after this order — 410 cases of headroom left, putting the truck
-at about 57% full after this order (comfortably safe up to 75%). The customer did not name a
-preferred day or time, so I treated every option evenly on that front. I did weigh this against
-route RTE-4100 on Tuesday, and honestly the two were close — it trailed by only 0.01 points, so
-this wasn't an obvious choice. Putting all of that together, I'd put my confidence at 48%, which
-falls short of the 70% bar I use before auto-assigning. Rather than commit on my own, I'd like a
-specialist to take a quick look before this goes out.
+well with the stops already on this route — avg 5.0 mi to existing stops. The customer did not
+name a preferred day or time, so I treated every option evenly on that front. On capacity, the
+truck is getting quite full for this order — there's still some room, but not a lot of cushion —
+150 cases of headroom left, putting the truck at about 84% full after this order (comfortably
+safe up to 75%). It was also the only route that cleared every requirement, so there wasn't
+anything else to weigh it against. Putting all of that together, this pick's total score comes
+out to 57%, which falls short of the 70% bar I use before auto-assigning. Rather than commit on
+my own, I'd like a specialist to take a quick look before this goes out.
 ```
 
 Because every ADK node delegates to `pipeline.py`, the deployed graph and the
@@ -221,8 +225,8 @@ narratives instead of the deterministic fallback, set `GOOGLE_API_KEY` in
 pytest tests/              # fast, deterministic unit tests — no LLM/network
 ```
 
-Constraints, scoring, confidence math, the end-to-end pipeline decisions, and
-the ADK routers are all covered.
+Constraints, scoring, total-score gating, the end-to-end pipeline decisions,
+and the ADK routers are all covered.
 
 ## [ASSUMPTIONS / MOCKS REQUIRING REPLACEMENT]
 
@@ -237,9 +241,9 @@ This is a **first-pass** on mock data. Highest-priority items to replace:
 3. **`geographic_clustering`** uses average distance to a route's committed
    stops as a proxy — real clustering quality should come from the routing
    engine's marginal stop-insertion cost / drive-time delta.
-4. **Thresholds & weights** (90% utilization, 0.70 confidence, service radius,
-   factor weights) are starting points in `shared/config.py`, not validated
-   Sysco policy — tune against real operational data.
+4. **Thresholds & weights** (90% utilization, 0.70 total-score threshold,
+   service radius, factor weights) are starting points in `shared/config.py`,
+   not validated Sysco policy — tune against real operational data.
 5. **Human-input UX** — the escalation nodes yield an ADK `RequestInput`; the
    client that surfaces it to an ops reviewer (dashboard, Slack, etc.) is out
    of scope for this pass.

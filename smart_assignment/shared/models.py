@@ -180,17 +180,25 @@ class CandidateEvaluation:
 class Decision(str, Enum):
     RECOMMENDED = "RECOMMENDED"
     ESCALATED_NO_FEASIBLE_SLOT = "ESCALATED_NO_FEASIBLE_SLOT"
-    ESCALATED_LOW_CONFIDENCE = "ESCALATED_LOW_CONFIDENCE"
+    ESCALATED_LOW_SCORE = "ESCALATED_LOW_SCORE"
 
 
 @dataclass
 class SlotRecommendation:
-    """The explainable output of the workflow for one customer."""
+    """
+    The explainable output of the workflow for one customer.
+
+    `total_score` is the winning route's own weighted score from Step 4 (see
+    `shared/scoring.score_candidate`) — not a separately-computed "confidence."
+    A route's own merit shouldn't be discounted just because another candidate
+    happened to score nearly as well, so the escalation gate compares this
+    number directly against `Config.total_score_threshold`.
+    """
 
     customer_number: str
     customer_name: str
     decision: Decision
-    confidence: float
+    total_score: float
     reasoning: str
     recommended_route_id: Optional[str] = None
     recommended_route_name: Optional[str] = None
