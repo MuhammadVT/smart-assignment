@@ -99,8 +99,9 @@ def test_scoring_section_shows_real_formulas():
     assert "Exactly how each dimension is scored" in html
     assert "avg_miles_to_stops" in html
     assert "preferred_window_minutes" in html
-    # Slot match now includes the day-of-week term.
-    assert "route_day == preferred_day" in html
+    # Slot match gates on the day-of-week term -- wrong day (or no time
+    # overlap at all) scores 0, it's not a source of partial credit.
+    assert "route_day</b> ≠ <b>preferred_day" in html
     assert "Slot match (day + time)" in html
     # Capacity buffer is a flat-then-decay curve anchored on the safety margin,
     # not a straight "more headroom always wins" ratio.
@@ -124,7 +125,7 @@ def test_scoring_section_shows_real_formulas():
     assert payload["067-100001"]["steps"][3]["title"] == "Score & Rank"
     assert "clustering = clamp(" in bayou_joined
     assert "total =" in bayou_joined
-    assert "slot match = 0.5×day(" in bayou_joined  # day-of-week is part of the slot score
+    assert "slot match = day(" in bayou_joined  # day-of-week gates the slot score
     assert "capacity buffer = 1.00 flat" in bayou_joined
 
     # Woodlands (067-100004) is mock-tuned to land in the 75-90% decay band,

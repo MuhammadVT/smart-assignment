@@ -92,14 +92,19 @@ def window_match(
     """
     How well the route matches the customer's preferred **slot** (day + time).
 
-    The preferred slot always carries a day of week, so the score gives equal
-    weight to the day matching and to the time-of-day overlap:
+    The day of week is a gate, not a source of partial credit: a route only
+    earns any slot-match score once it lands on the customer's preferred day.
+    From there, the score is simply how much of the preferred window the
+    route actually covers:
 
-        0.5 * (route.day == preferred.day) + 0.5 * (overlap / preferred_minutes)
+        0.0                                   if route.day != preferred.day
+        0.0                                   if the day matches but there is no time overlap at all
+        overlap_minutes / preferred_minutes    otherwise
 
-    A route on the right day covering the whole window scores 1.0; the right day
-    but wrong time, or the wrong day but overlapping time, scores 0.5; neither
-    scores 0.0. With no stated preference, a neutral score is used.
+    A route on the wrong day, or on the right day with zero time overlap, is
+    not a real match and scores 0 -- it shouldn't collect credit just for
+    getting half of the slot right. With no stated preference, a neutral
+    score is used.
     """
     slot = customer.preferred_slot
     weight = config.factor_weights[FACTOR_WINDOW_MATCH]
@@ -113,22 +118,30 @@ def window_match(
     day_ok = route.day == slot.day
     pref_minutes = max(1, duration_minutes(slot.window))
     time_frac = _clamp01(ctx.window_overlap_minutes / pref_minutes)
-    value = 0.5 * (1.0 if day_ok else 0.0) + 0.5 * time_frac
-    if day_ok:
-        day_note = f"the route runs on {day_label(route.day)}, matching the customer's preference"
+    value = time_frac if (day_ok and time_frac > 0) else 0.0
+    if day_ok and time_frac > 0:
+        detail = (
+            f"the route runs on {day_label(route.day)}, matching the customer's preference, "
+            f"and covers {ctx.window_overlap_minutes} of the {pref_minutes} minutes of their "
+            f"preferred time"
+        )
+    elif day_ok:
+        detail = (
+            f"the route runs on {day_label(route.day)}, matching the customer's preference, "
+            f"but its time window doesn't overlap their preferred hours at all, so this "
+            f"doesn't count as a real match"
+        )
     else:
-        day_note = (
+        detail = (
             f"the route runs on {day_label(route.day)} rather than the "
-            f"{day_label(slot.day)} the customer asked for"
+            f"{day_label(slot.day)} the customer asked for, so this doesn't count as a "
+            f"match regardless of the time overlap"
         )
     return FactorScore(
         name=FACTOR_WINDOW_MATCH,
         weight=weight,
         value=value,
-        detail=(
-            f"{day_note}, and covers {ctx.window_overlap_minutes} of the {pref_minutes} "
-            f"minutes of their preferred time"
-        ),
+        detail=detail,
     )
 
 
