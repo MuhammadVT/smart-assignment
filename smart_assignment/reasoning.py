@@ -241,16 +241,11 @@ class LLMReasoner:
     ) -> str:
         facts = self._fallback.explain(customer, ranked, infeasible, total_score, config)
         try:
-            from google import genai  # imported lazily; only needed when used
-
             from smart_assignment.reasoning_prompts import build_reasoning_prompt
+            from smart_assignment.shared.llm import generate_text
 
-            client = genai.Client()
-            resp = client.models.generate_content(
-                model=config.model, contents=build_reasoning_prompt(facts)
-            )
-            text = (resp.text or "").strip()
+            text = generate_text(config, build_reasoning_prompt(facts)).strip()
             return text or facts
         except Exception:
-            # No key, no network, or SDK change -> deterministic trace still works.
+            # No credentials, no network, or SDK unavailable -> deterministic trace still works.
             return facts

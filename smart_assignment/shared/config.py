@@ -84,8 +84,16 @@ class Config:
     # NOT a function of how close a runner-up scored (see reasoning.py).
     total_score_threshold: float = 0.60
 
-    # --- Optional LLM reasoning layer ---
+    # --- LLM backend ---
+    # "sage"     → enterprise-governed SageLlmRegistry (requires SAGE_CLIENT_ID,
+    #              SAGE_CLIENT_SECRET, SAGE_ENVIRONMENT to be set).
+    # "standard" → plain Google ADK / genai string model name (local dev,
+    #              requires GOOGLE_API_KEY or Vertex credentials).
+    llm_backend: str = "sage"
+    # Model name used when llm_backend == "standard".
     model: str = "gemini-2.5-flash"
+    # Model name used when llm_backend == "sage" (Sage-prefixed identifier).
+    sage_model: str = "sage-gemini-2.5-flash"
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -100,7 +108,9 @@ class Config:
                 "SMART_ASSIGNMENT_CAPACITY_SAFETY_MARGIN", 0.15
             ),
             total_score_threshold=_float_env("SMART_ASSIGNMENT_TOTAL_SCORE_THRESHOLD", 0.60),
+            llm_backend=os.environ.get("SMART_ASSIGNMENT_LLM_BACKEND", "sage"),
             model=os.environ.get("SMART_ASSIGNMENT_MODEL", "gemini-2.5-flash"),
+            sage_model=os.environ.get("SMART_ASSIGNMENT_SAGE_MODEL", "sage-gemini-2.5-flash"),
         )
 
 
