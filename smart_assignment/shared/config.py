@@ -85,7 +85,7 @@ class Config:
     total_score_threshold: float = 0.60
 
     # --- Optional LLM reasoning layer ---
-    model: str = "gemini-flash-latest"
+    model: str = "gemini-2.5-flash"
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -100,7 +100,7 @@ class Config:
                 "SMART_ASSIGNMENT_CAPACITY_SAFETY_MARGIN", 0.15
             ),
             total_score_threshold=_float_env("SMART_ASSIGNMENT_TOTAL_SCORE_THRESHOLD", 0.60),
-            model=os.environ.get("SMART_ASSIGNMENT_MODEL", "gemini-flash-latest"),
+            model=os.environ.get("SMART_ASSIGNMENT_MODEL", "gemini-2.5-flash"),
         )
 
 
