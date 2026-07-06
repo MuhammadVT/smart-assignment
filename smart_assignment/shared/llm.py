@@ -1,8 +1,13 @@
 """
 LLM factory: routes every model-creation and content-generation call through
-the Sysco Sage SDK (enterprise-governed, TLS-injected) when
-SMART_ASSIGNMENT_LLM_BACKEND=sage, or through the standard Google ADK / genai
-path when =standard.  A single env-var flip switches the entire project.
+one of three backends, selected by SMART_ASSIGNMENT_LLM_BACKEND:
+
+  "sage"     → the Sysco Sage SDK (enterprise-governed, TLS-injected).
+  "standard" → plain Google ADK / genai (Gemini via API key or Vertex).
+  "openai"   → an OpenAI model via ADK's built-in LiteLLM wrapper (requires
+               the `openai` extra -- see pyproject.toml -- and OPENAI_API_KEY).
+
+A single env-var flip switches the entire project between them.
 
 Exports
 -------
@@ -11,7 +16,7 @@ get_llm(config)
 
 generate_text(config, prompt)
     One-shot content generation — used by LLMReasoner so that path also flows
-    through enterprise governance when the Sage backend is active.
+    through the same backend.
 """
 
 from __future__ import annotations
@@ -100,6 +105,28 @@ def _check_sage_env_vars() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Internal: OpenAI via ADK's built-in LiteLLM wrapper
+# ---------------------------------------------------------------------------
+
+
+def _openai_litellm_model(model: str) -> str:
+    """litellm's provider-prefixed model name for a bare OpenAI model name."""
+    return f"openai/{model}"
+
+
+def _load_lite_llm(model: str) -> Any:
+    """
+    Wrap an OpenAI model for use as an ADK LlmAgent's ``model=``, via ADK's
+    own LiteLlm class. Requires OPENAI_API_KEY -- litellm reads it directly,
+    so there's nothing to check here. Raises ImportError with an actionable
+    message (pip install the `openai` extra) if litellm isn't installed.
+    """
+    from google.adk.models.lite_llm import LiteLlm  # requires the `openai` extra
+
+    return LiteLlm(model=_openai_litellm_model(model))
+
+
+# ---------------------------------------------------------------------------
 # Internal: async content generation through ADK BaseLlm
 # ---------------------------------------------------------------------------
 
@@ -129,11 +156,14 @@ def get_llm(config: "Config") -> Any:
     Return the value for an ADK LlmAgent ``model=`` parameter.
 
     sage     → SageLlmRegistry LLM object (enterprise-governed, TLS-injected)
+    openai   → LiteLlm-wrapped OpenAI model (requires OPENAI_API_KEY)
     standard → plain model-name string (standard ADK / local dev)
     """
     if config.llm_backend == "sage":
         _check_sage_env_vars()
         return _load_sage_registry().get_llm(config.sage_model)
+    if config.llm_backend == "openai":
+        return _load_lite_llm(config.openai_model)
     return config.model
 
 
@@ -142,6 +172,7 @@ def generate_text(config: "Config", prompt: str) -> str:
     One-shot content generation that honours the backend toggle.
 
     sage     → SageLlmRegistry LLM object via ADK BaseLlm (enterprise-governed)
+    openai   → litellm.completion(...) directly (requires OPENAI_API_KEY)
     standard → google.genai.Client directly (standard / local dev)
 
     Raises on failure; callers should guard with ``except Exception``.
@@ -155,10 +186,18 @@ def generate_text(config: "Config", prompt: str) -> str:
         llm = _load_sage_registry().get_llm(config.sage_model)
         return asyncio.run(_generate_via_sage_async(llm, prompt))
 
+    if config.llm_backend == "openai":
+        import litellm  # requires the `openai` extra
+
+        resp = litellm.completion(
+            model=_openai_litellm_model(config.openai_model),
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return (resp.choices[0].message.content or "").strip()
+
     # standard path — matches the original LLMReasoner implementation
     from google import genai  # type: ignore[import-untyped]
 
     client = genai.Client()
     resp = client.models.generate_content(model=config.model, contents=prompt)
     return (resp.text or "").strip()
-

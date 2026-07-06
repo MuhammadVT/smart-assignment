@@ -23,6 +23,12 @@ dev = [
     "black",
     "isort",
     "flake8",
+    "google-adk[extensions]>=2.3.0",  # litellm, so tests can exercise the "openai" LLM backend
+]
+# SMART_ASSIGNMENT_LLM_BACKEND=openai (see shared/llm.py) needs litellm,
+# pulled in via ADK's own "extensions" extra.
+openai = [
+    "google-adk[extensions]>=2.3.0",
 ]
 
 [tool.setuptools.packages.find]
