@@ -7,12 +7,29 @@ needed.
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
+import pytest
+
+from smart_assignment.integrations.geocoding_client import MockGeocoder
+from smart_assignment.shared.geo import AddressNotFoundError, GeocodingServiceError
+from smart_assignment.tools import slot_recommendation as tools_module
 from smart_assignment.tools.slot_recommendation import (
     evaluate_and_score_routes,
     find_candidate_routes,
     intake_customer,
     recommend_or_escalate,
 )
+
+
+@pytest.fixture(autouse=True)
+def _use_mock_geocoder():
+    # The tools default to the real CensusGeocoder (network calls). Swap in
+    # the deterministic MockGeocoder for this whole file so these tests stay
+    # offline -- the geocoding-failure tests below patch it again per-test to
+    # something that raises instead.
+    with patch.object(tools_module, "_GEOCODER", MockGeocoder()):
+        yield
 
 
 class _FakeToolContext:
@@ -152,3 +169,49 @@ def test_revision_flows_through_to_a_new_recommendation():
     assert second["decision"] == "RECOMMENDED"
     assert second["total_score"] > first["total_score"]
     assert ctx.state["sa_profile"]["address"] == "5085 Westheimer Rd, Houston, TX 77056"
+
+
+# --- Geocoding failure handling ----------------------------------------------
+
+
+def test_find_candidate_routes_relays_address_not_found():
+    ctx = _FakeToolContext()
+    intake_customer(address="not a real place", order_quantity_cases=90, tool_context=ctx)
+    with patch.object(
+        tools_module._GEOCODER,
+        "geocode",
+        side_effect=AddressNotFoundError("not a real place", "no match"),
+    ):
+        result = find_candidate_routes(tool_context=ctx)
+    assert result["ok"] is False
+    assert "not a real place" in result["error"]
+
+
+def test_evaluate_and_score_routes_relays_service_error():
+    ctx = _FakeToolContext()
+    intake_customer(
+        address="1200 McKinney St, Houston, TX 77010", order_quantity_cases=90, tool_context=ctx
+    )
+    with patch.object(
+        tools_module._GEOCODER,
+        "geocode",
+        side_effect=GeocodingServiceError("1200 McKinney St, Houston, TX 77010", "timed out"),
+    ):
+        result = evaluate_and_score_routes(tool_context=ctx)
+    assert result["ok"] is False
+    assert "temporarily unavailable" in result["error"]
+
+
+def test_recommend_or_escalate_relays_geocoding_failure_instead_of_crashing():
+    ctx = _FakeToolContext()
+    intake_customer(
+        address="1200 McKinney St, Houston, TX 77010", order_quantity_cases=90, tool_context=ctx
+    )
+    with patch.object(
+        tools_module._GEOCODER,
+        "geocode",
+        side_effect=GeocodingServiceError("1200 McKinney St, Houston, TX 77010", "boom"),
+    ):
+        result = recommend_or_escalate(tool_context=ctx)
+    assert result["ok"] is False
+    assert "sa_last_recommendation" not in ctx.state  # nothing half-written on failure

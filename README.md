@@ -123,9 +123,10 @@ smart-assignment/
 │   │   ├── constraints.py              # pluggable HARD constraints (step 3)
 │   │   ├── scoring.py                  # pluggable weighted factors (step 4)
 │   │   └── config.py                   # env-driven thresholds & weights
-│   ├── integrations/                   # [MOCKED] external systems
-│   │   ├── route_capacity_client.py    # route/capacity data (TMS stand-in)
-│   │   └── geocoding_client.py         # address -> lat/lng
+│   ├── integrations/
+│   │   ├── route_capacity_client.py    # [MOCKED] route/capacity data (TMS stand-in)
+│   │   ├── geocoding_client.py         # [MOCK] address -> lat/lng, offline/test default
+│   │   └── census_geocoder.py          # REAL free geocoder (US Census), used by root_agent
 │   └── reporting/page.py               # generates the GitHub Pages overview site
 ├── scripts/run_local.py                # OFFLINE demo over the mock customers, no ADK/LLM
 ├── tests/                              # fast, deterministic unit tests (mirrors the layout above)
@@ -229,6 +230,10 @@ pytest tests/              # fast, deterministic unit tests — no LLM/network
 Constraints, scoring, total-score gating, the end-to-end pipeline decisions,
 and the conversational tool wrappers (`tools/slot_recommendation.py`, called
 directly with a fake tool context -- no LLM needed) are all covered.
+`CensusGeocoder` is tested with mocked HTTP responses (no real network
+calls) in `tests/integrations/test_census_geocoder.py`, which also has one
+opt-in live test against the real service (`RUN_LIVE_GEOCODER_TESTS=1`,
+skipped by default).
 
 ## [ASSUMPTIONS / MOCKS REQUIRING REPLACEMENT]
 
@@ -237,9 +242,17 @@ This is a **first-pass** on mock data. Highest-priority items to replace:
 1. **Route/capacity source** (`integrations/route_capacity_client.py`) is
    mocked Houston data. Replace with a real Sysco TMS/routing integration —
    as long as it populates `Route`/`RouteStop`, nothing downstream changes.
-2. **Geocoding** (`integrations/geocoding_client.py`) resolves a handful of
-   demo addresses and otherwise returns a deterministic Houston-area point.
-   Swap for a real geocoder implementing the `Geocoder` protocol.
+2. **Geocoding** — `root_agent`'s tools (`tools/slot_recommendation.py`) use
+   `integrations/census_geocoder.py`'s `CensusGeocoder`, a real, free,
+   keyless implementation backed by the U.S. Census Bureau's public
+   geocoding service (US addresses only, no uptime SLA). The offline demo,
+   `pipeline.run_slot_recommendation(...)`'s own default, and the test suite
+   all still use `MockGeocoder` deliberately, to stay network-free and
+   reproducible. Swap `CensusGeocoder` for a paid provider (e.g. Google
+   Maps) later by adding a class that implements the same `Geocoder`
+   protocol and raises the same `AddressNotFoundError`/`GeocodingServiceError`
+   (see `shared/geo.py`), then changing the one import in
+   `tools/slot_recommendation.py` — nothing else needs to change.
 3. **`geographic_clustering`** uses average distance to a route's committed
    stops as a proxy — real clustering quality should come from the routing
    engine's marginal stop-insertion cost / drive-time delta.

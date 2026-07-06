@@ -1,12 +1,18 @@
 """
 [MOCK] Geocoding client — turns a street address into a GeoPoint.
 
-Stands in for a real provider (Google Maps Geocoding API, or an internal
-Sysco territory/geocoding service). Known demo addresses resolve to curated
+Stands in for a real provider. Known demo addresses resolve to curated
 Houston-area coordinates; anything else falls back to a deterministic
 pseudo-location near the Houston metro so the pipeline never crashes on an
-unrecognized address. Replace `MockGeocoder` with a real client implementing
-the `Geocoder` protocol (see shared/geo.py) — nothing downstream changes.
+unrecognized address. This is deliberately kept as the default for
+`pipeline.run_slot_recommendation(...)`, `scripts/run_local.py`, the GitHub
+Pages generator, and the test suite, so all of those stay fully offline,
+deterministic, and reproducible with no network/API key.
+
+For a real geocoder, see `integrations/census_geocoder.py`'s
+`CensusGeocoder` (used by the conversational agent's tools, see
+`tools/slot_recommendation.py`) — it implements the same `Geocoder` protocol
+(see shared/geo.py), so nothing downstream changes when swapping providers.
 """
 
 from __future__ import annotations

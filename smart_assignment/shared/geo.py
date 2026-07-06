@@ -4,8 +4,15 @@ Geocoder abstraction.
 
 Kept deterministic and dependency-free so the constraint/scoring logic is
 unit-testable without any network or API key. The `Geocoder` protocol is the
-seam where a real geocoding provider (Google Maps, an internal territory
-service, etc.) gets swapped in — see `integrations/geocoding_client.py`.
+seam where a real geocoding provider gets swapped in -- see
+`integrations/geocoding_client.py` (MockGeocoder, the offline/test default)
+and `integrations/census_geocoder.py` (CensusGeocoder, a real, free, US-only
+implementation; swap in a paid provider like Google Maps behind the same
+protocol later without touching any caller).
+
+Every real `Geocoder` implementation should raise the exceptions below (not
+ad hoc errors), so callers can handle "bad address" and "service problem"
+distinctly regardless of which provider is behind the protocol.
 """
 
 from __future__ import annotations
@@ -32,3 +39,29 @@ class Geocoder(Protocol):
     """Anything that can turn a street address into a GeoPoint."""
 
     def geocode(self, address: str) -> GeoPoint: ...
+
+
+class GeocodingError(Exception):
+    """Base for all real-geocoder failures -- always carries the address that failed."""
+
+    def __init__(self, address: str, message: str):
+        self.address = address
+        super().__init__(f"{message} (address: {address!r})")
+
+
+class AddressNotFoundError(GeocodingError):
+    """The geocoder ran successfully but found no match for this address.
+
+    Not transient -- retrying the same address won't help. The fix is a
+    different/corrected address, so this should be relayed to whoever
+    supplied it, not retried automatically.
+    """
+
+
+class GeocodingServiceError(GeocodingError):
+    """The geocoder itself couldn't be reached or misbehaved: a network
+    failure, timeout, HTTP error, or a response that didn't match the
+    expected shape. Distinct from `AddressNotFoundError` because this is a
+    service/transport problem, not a comment on the address -- callers may
+    reasonably retry later.
+    """
