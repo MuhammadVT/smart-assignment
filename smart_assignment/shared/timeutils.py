@@ -67,6 +67,12 @@ def fmt_time(t: time) -> str:
     return t.strftime("%H:%M")
 
 
+def parse_time(value: str) -> time:
+    """Parse a 24-hour ``"HH:MM"`` string into a ``time`` (inverse of `fmt_time`)."""
+    hour_str, minute_str = value.strip().split(":", 1)
+    return time(int(hour_str), int(minute_str))
+
+
 def fmt_window(window: Optional[Window]) -> str:
     if window is None:
         return "n/a"

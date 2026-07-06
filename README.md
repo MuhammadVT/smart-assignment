@@ -110,8 +110,10 @@ smart-assignment/
 │   │   ├── pipeline.py                 # the 5-step orchestration (source of truth)
 │   │   ├── reasoning.py                # total-score gating + pluggable reasoner (LLM default)
 │   │   ├── prompts.py                  # LLM reasoning prompt text
-│   │   ├── graph.py                    # ADK Workflow wrapper (delegates to pipeline)
-│   │   └── nodes.py                    # ADK nodes (delegate to pipeline)
+│   │   ├── graph.py                    # ADK Workflow wrapper (delegates to pipeline) -- batch path
+│   │   ├── nodes.py                    # ADK nodes (delegate to pipeline)
+│   │   ├── conversational_agent.py     # ADK LlmAgent -- conversational path (default root_agent)
+│   │   └── agent_tools.py              # tool wrappers around pipeline steps, for the LlmAgent
 │   └── integrations/                   # [MOCKED] external systems
 │       ├── route_capacity_client.py    # route/capacity data (TMS stand-in)
 │       └── geocoding_client.py         # address -> lat/lng
@@ -169,62 +171,64 @@ narratives, `cp .env.example .env`, set `GOOGLE_API_KEY`, and re-run. To force
 the deterministic reasoner in code, pass
 `run_slot_recommendation(customer, reasoner=DeterministicReasoner())`.
 
-## Running on the mock examples with `adk run` / `adk web`
+## Talking to it conversationally with `adk run` / `adk web`
 
-`graph.py` wraps the same pipeline as an ADK `Workflow` (`root_agent`). Because
-`adk run`/`adk web` send the agent a free-text message, the entry node
-resolves it to one of the mock customers **by address by default** (an exact
-match, or a substring like `Westheimer`) — since new customers are prospects
-with no Sysco number yet. A customer number (`NNN-NNNNNN`) is still matched as
-a fallback, for the case where one is already on file. Names are never
-accepted. Reasoning defaults to the LLM layer with a deterministic fallback,
-so no API key is required to see output.
-
-Unrecognized/blank input falls back to the first sample customer.
-
-**CLI (`adk run`)** — one-shot, prints the recommendation to the terminal:
+`smart_assignment/agent.py`'s `root_agent` — what `adk run`/`adk web` launch by
+default — is a conversational ADK `LlmAgent`
+(`workflows/slot_recommendation/conversational_agent.py`). It collects a
+prospect's address, order quantity, and (optional) preferred slot over
+multiple turns, then calls the exact same deterministic pipeline as **tools**
+(`workflows/slot_recommendation/agent_tools.py`) — the model never computes a
+distance, a constraint check, or a score itself, only when to call which tool
+and how to narrate the result. Because it's LLM-driven end to end (not just
+for narration), **this path requires `GOOGLE_API_KEY`**: `cp .env.example .env`
+and set it first.
 
 ```bash
-adk run smart_assignment "1200 McKinney St, Houston, TX 77010"          # RECOMMENDED (~97%)
-adk run smart_assignment "5085 Westheimer Rd, Houston, TX 77056"        # ESCALATE - low total score (~57%)
-adk run smart_assignment "24600 Katy Fwy, Katy, TX 77494"               # ESCALATE - no feasible slot
-adk run smart_assignment "1201 Lake Woodlands Dr, The Woodlands, TX 77380"  # RECOMMENDED (~86%)
-
-# Omit the query for an interactive prompt (type an address, then Enter):
-adk run smart_assignment
+adk web smart_assignment          # serves http://127.0.0.1:8000, chat in the browser
+adk run smart_assignment          # interactive terminal chat
 ```
 
-**Web UI (`adk web`)** — point it directly at the agent folder, open the URL,
-pick `smart_assignment`, and type a customer's address in the chat:
+A conversation walks through the same 5 steps as the batch pipeline, visibly:
+
+```
+you> New prospect at 5085 Westheimer Rd, Houston, TX 77056, 400 cases.
+agent> [intake_customer] Got it — 5085 Westheimer Rd, 400 cases, no preferred slot yet.
+agent> [find_candidate_routes] Nearest routes: RTE-4100 (5.9 mi), RTE-4200 (9.3 mi), RTE-4400 (13.3 mi).
+agent> [evaluate_and_score_routes] Only RTE-4200 clears both hard rules; the others fail on
+       capacity or service area.
+agent> [recommend_or_escalate] RTE-4200 scores 57%, below the 60% auto-assign bar — I'd like a
+       specialist to confirm before this goes out.
+agent> [request_input] Pausing for a specialist's sign-off...
+```
+(Illustrative — exact wording depends on the model; the tool calls, numbers,
+and decision are always real, straight from `agent_tools.py`.)
+
+If the user then says "actually make it 140 cases", the agent calls
+`intake_customer` again with just that field — the address is kept
+automatically — and re-runs the scoring/recommendation steps, which now clear
+the bar.
+
+### The original deterministic batch path still works too
+
+`workflows/slot_recommendation/graph.py`'s `root_agent` — the plain ADK
+`Workflow` graph this repo started with — is unchanged: a one-shot, fully
+offline path (LLM reasoning still falls back to the deterministic trace
+without an API key) for a single free-text address in, one recommendation
+out. Point `adk run`/`adk web` at it directly instead of the conversational
+agent:
 
 ```bash
-adk web smart_assignment          # serves http://127.0.0.1:8000
+adk run smart_assignment/workflows/slot_recommendation "5085 Westheimer Rd, Houston, TX 77056"
+adk web smart_assignment/workflows/slot_recommendation
 ```
 
-Sample `adk run` output (Galleria Grill & Catering, by address):
+See `scripts/run_local.py` above for the same batch behavior with zero ADK
+runtime at all.
 
-```
-[smart_assignment_slot_recommendation]: Customer: Galleria Grill & Catering (5085 Westheimer Rd, Houston, TX 77056)
-Decision: ESCALATE -> human review (low total score)  |  total score 57%
-Proposed slot: RTE-4200 (West Houston / Energy Corridor), WED, window 07:30-11:00
-Score factors: geographic_clustering=0.67(w0.45)  capacity_buffer=0.39(w0.30)  window_match=0.60(w0.25)
-Reasoning: For Galleria Grill & Catering, I recommend route RTE-4200 (West Houston / Energy
-Corridor), delivering on Wednesday between 07:30-11:00. Geographically, it lines up reasonably
-well with the stops already on this route — avg 5.0 mi to existing stops. The customer did not
-name a preferred day or time, so I treated every option evenly on that front — no stated
-preference (neutral score). On capacity, the truck is getting quite full for this order — there's
-still some room, but not a lot of cushion — 150 cases of headroom left, putting the truck at
-about 84% full after this order (comfortably safe up to 75%). It was also the only route that
-cleared every requirement, so there wasn't anything else to weigh it against. Putting all of that
-together, this pick's total score comes out to 57%, which falls short of the 60% bar I use before
-auto-assigning. Rather than commit on my own, I'd like a specialist to take a quick look before
-this goes out.
-```
-
-Because every ADK node delegates to `pipeline.py`, the deployed graph and the
-offline demo can never disagree on business logic. To get real Gemini
-narratives instead of the deterministic fallback, set `GOOGLE_API_KEY` in
-`.env` first. `adk deploy` uses the same `root_agent`.
+Both paths delegate to the same `pipeline.py`, so the conversational agent,
+the batch graph, and the offline demo can never disagree on business logic.
+`adk deploy` uses whichever `root_agent` you point it at.
 
 ## Testing
 
@@ -233,7 +237,8 @@ pytest tests/              # fast, deterministic unit tests — no LLM/network
 ```
 
 Constraints, scoring, total-score gating, the end-to-end pipeline decisions,
-and the ADK routers are all covered.
+the ADK routers, and the conversational tool wrappers (`agent_tools.py`,
+called directly with a fake tool context -- no LLM needed) are all covered.
 
 ## [ASSUMPTIONS / MOCKS REQUIRING REPLACEMENT]
 
@@ -251,11 +256,21 @@ This is a **first-pass** on mock data. Highest-priority items to replace:
 4. **Thresholds & weights** (90% utilization, 0.60 total-score threshold,
    service radius, factor weights) are starting points in `shared/config.py`,
    not validated Sysco policy — tune against real operational data.
-5. **Human-input UX** — the escalation nodes yield an ADK `RequestInput`; the
-   client that surfaces it to an ops reviewer (dashboard, Slack, etc.) is out
-   of scope for this pass.
+5. **Human-input UX** — the conversational agent's escalation calls ADK's
+   real `request_input` tool, which pauses and waits for a reply in whatever
+   client is running the conversation (terminal, `adk web`, etc.); a
+   dedicated ops reviewer surface (dashboard, Slack, etc.) is out of scope
+   for this pass. The batch graph (`graph.py`) still just returns terminal
+   text on escalation — it has no conversation to pause.
 6. **Customer intake source** — new customers are prospects with no Sysco
    customer number yet, so their address (the primary lookup key) is assumed
    to be pulled from Salesforce/CRM. `customer_number` is an optional
    placeholder, matched only when this workflow is run for an account that
    already has one.
+7. **Conversational guardrails are instruction-level, not code-level** — the
+   conversational agent's system instruction tells the model to never state
+   a number it didn't get from a tool call and to follow the 5 steps in
+   order, but an LLM can still deviate. The business logic itself
+   (`pipeline.py`) stays 100% deterministic Python regardless, so the worst
+   case is a confused conversation, never a wrong decision silently computed
+   by the model.
