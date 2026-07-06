@@ -2,9 +2,9 @@
 Domain models for the Smart Assignment slot-recommendation workflow.
 
 These are intentionally small, framework-agnostic dataclasses so that any
-orchestration layer (the plain-Python pipeline in
-`workflows/slot_recommendation/pipeline.py`, the ADK graph, a future
-sequential/multi-agent workflow) shares the exact same data contracts.
+orchestration layer (the plain-Python pipeline in `pipeline.py`, the
+conversational agent's tool wrappers in `tools/slot_recommendation.py`, a
+future sub-agent split) shares the exact same data contracts.
 
 [MOCK / ASSUMPTION]
 None of Sysco's real schemas were provided. Field choices below model a

@@ -1,9 +1,9 @@
 """
-Runs the slot_recommendation workflow's golden dataset through ADK's
-AgentEvaluator. This tests TRAJECTORY (did the workflow call nodes in the
-right order, e.g. filter_feasible_slots_node before recommend_slot_agent)
-and FINAL RESPONSE quality (does the recommendation match expectations),
-not just whether the code runs.
+Runs the smart_assignment conversational agent's golden dataset through
+ADK's AgentEvaluator. This tests TRAJECTORY (did the agent call its tools
+in the right order, e.g. intake_customer before recommend_or_escalate) and
+FINAL RESPONSE quality (does the recommendation match expectations), not
+just whether the code runs.
 
 [VERIFIED against installed google-adk 2.3.0] AgentEvaluator.evaluate()
 auto-discovers eval criteria from a `test_config.json` file located in
@@ -26,7 +26,7 @@ import pytest
 from google.adk.evaluation.agent_evaluator import AgentEvaluator
 
 REPO_ROOT = pathlib.Path(__file__).parent.parent
-AGENT_MODULE_PATH = "smart_assignment.workflows.slot_recommendation"
+AGENT_MODULE_PATH = "smart_assignment"
 EVAL_DATASET = str(REPO_ROOT / "eval" / "data" / "slot_recommendation.test.json")
 
 

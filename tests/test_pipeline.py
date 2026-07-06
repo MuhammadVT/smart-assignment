@@ -1,24 +1,17 @@
 """
-Tests for the slot_recommendation workflow: the end-to-end pipeline decisions
-and the ADK graph's conditional routers. All deterministic — the LLM reasoning
-layer is bypassed via the DeterministicReasoner so no API key/network is used.
+Tests for the slot_recommendation pipeline's end-to-end decisions and the
+total-score gating math. All deterministic -- the LLM reasoning layer is
+bypassed via the DeterministicReasoner so no API key/network is used.
 """
 
 from __future__ import annotations
 
 from datetime import time
 
+from smart_assignment.pipeline import run_slot_recommendation
+from smart_assignment.reasoning import DeterministicReasoner, compute_total_score
 from smart_assignment.shared.config import Config
 from smart_assignment.shared.models import CustomerProfile, DayOfWeek, Decision, PreferredSlot
-from smart_assignment.workflows.slot_recommendation.nodes import (
-    route_on_feasibility,
-    total_score_gate,
-)
-from smart_assignment.workflows.slot_recommendation.pipeline import run_slot_recommendation
-from smart_assignment.workflows.slot_recommendation.reasoning import (
-    DeterministicReasoner,
-    compute_total_score,
-)
 
 _DETERMINISTIC = DeterministicReasoner()
 
@@ -130,51 +123,3 @@ def test_total_score_is_the_winners_own_score_untouched_by_the_runner_up():
     assert compute_total_score([_Cand(0.55), _Cand(0.54)]) == 0.55
     # No feasible candidates at all.
     assert compute_total_score([]) == 0.0
-
-
-# --- ADK conditional routers (no live model needed) -------------------------
-
-
-class _Feasible:
-    feasible = True
-
-
-class _Infeasible:
-    feasible = False
-
-
-def test_route_on_feasibility_no_options():
-    event = route_on_feasibility([_Infeasible(), _Infeasible()])
-    assert event.actions.route == ["NO_OPTIONS"]
-
-
-def test_route_on_feasibility_has_options():
-    event = route_on_feasibility([_Infeasible(), _Feasible()])
-    assert event.actions.route == ["HAS_OPTIONS"]
-
-
-class _FakeContext:
-    def __init__(self, state):
-        self.state = state
-
-
-def _rec(decision):
-    from smart_assignment.shared.models import SlotRecommendation
-
-    return SlotRecommendation(
-        customer_number="067-100000",
-        customer_name="n",
-        decision=decision,
-        total_score=0.9,
-        reasoning="",
-    )
-
-
-def test_total_score_gate_high_score():
-    event = total_score_gate(_rec(Decision.RECOMMENDED), _FakeContext({}))
-    assert event.actions.route == ["HIGH_SCORE"]
-
-
-def test_total_score_gate_low_score():
-    event = total_score_gate(_rec(Decision.ESCALATED_LOW_SCORE), _FakeContext({}))
-    assert event.actions.route == ["LOW_SCORE"]

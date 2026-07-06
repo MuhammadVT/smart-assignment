@@ -1,14 +1,13 @@
 """
 Unit tests for the conversational tool wrappers
-(workflows/slot_recommendation/agent_tools.py). These call the plain-Python
-wrapper functions directly with a fake tool context -- no LLM, no ADK
-runtime -- mirroring how test_slot_recommendation.py exercises the ADK
-node functions with a `_FakeContext`.
+(tools/slot_recommendation.py). These call the plain-Python wrapper
+functions directly with a fake tool context -- no LLM, no ADK runtime
+needed.
 """
 
 from __future__ import annotations
 
-from smart_assignment.workflows.slot_recommendation.agent_tools import (
+from smart_assignment.tools.slot_recommendation import (
     evaluate_and_score_routes,
     find_candidate_routes,
     intake_customer,

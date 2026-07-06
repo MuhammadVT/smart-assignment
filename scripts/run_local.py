@@ -20,10 +20,10 @@ from __future__ import annotations
 import argparse
 
 from smart_assignment.mock_customers import SAMPLE_CUSTOMERS
+from smart_assignment.pipeline import run_slot_recommendation
 from smart_assignment.shared.config import DEFAULT_CONFIG
 from smart_assignment.shared.models import Decision, RecommendationResult
 from smart_assignment.shared.timeutils import fmt_window
-from smart_assignment.workflows.slot_recommendation.pipeline import run_slot_recommendation
 
 _RULE = "=" * 78
 _DECISION_MARK = {

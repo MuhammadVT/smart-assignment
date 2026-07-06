@@ -1,25 +1,31 @@
 # Architecture diagrams
 
-Place one diagram per workflow here, named to match its workflow folder
-(e.g. `slot_recommendation.png`).
+Place a diagram of the agent's tool-calling flow here (e.g. `smart_assignment.png`).
 
-For `slot_recommendation`, the current architecture is:
+The current architecture is a single ADK `LlmAgent` (`smart_assignment/agent.py`)
+that talks to the user and calls one tool per step, in order:
 
 ```
-START
-  -> intake_node                (code — intake + geocode + Top-N nearest routes)
-  -> constraint_and_score_node  (code — HARD constraints, then weighted scoring)
-  -> route_on_feasibility       (code, conditional)
-       NO_OPTIONS  -> escalate_no_feasible_slot     (human input)
-       HAS_OPTIONS -> build_recommendation_node     (code — rank + total score)
-                        -> total_score_gate           (code, conditional)
-                             LOW_SCORE  -> escalate_low_score (human input)
-                             HIGH_SCORE -> format_output      (code)
+intake_customer            (code — validate/merge address, cases, preferred slot)
+find_candidate_routes      (code — geocode + Top-N nearest routes)
+evaluate_and_score_routes  (code — HARD constraints, then weighted scoring)
+recommend_or_escalate      (code — rank + total-score gate -> decision + reasoning)
+  -> requires_human_review? -> agent calls request_input (ADK built-in, human input)
 ```
 
-Reasoning (the natural-language trace on the final recommendation) is produced
-by a pluggable reasoner — LLM by default, with a deterministic fallback.
+The agent (the LLM) decides *when* to call which tool and narrates the
+result in conversation; it never computes a distance, a constraint check, or
+a score itself -- every number comes back from the tool call. See
+`smart_assignment/tools/slot_recommendation.py` for the tool implementations
+and `smart_assignment/prompts.py` for the instruction that enforces this.
+
+Reasoning (the natural-language trace on the final recommendation) is
+produced deterministically inside `recommend_or_escalate` and then narrated
+by the agent; the pipeline's own optional LLM-narrated reasoner
+(`reasoning.LLMReasoner`, with a deterministic fallback) is a separate,
+lower-level option used when calling `pipeline.run_slot_recommendation(...)`
+directly (e.g. `scripts/run_local.py`), not by the conversational agent.
 
 No image file is included in this package — generate one (e.g. via the
-ADK Web UI's graph view, or any diagramming tool) and drop it here as
-`slot_recommendation.png` once available.
+ADK Web UI's trace view, or any diagramming tool) and drop it here as
+`smart_assignment.png` once available.
