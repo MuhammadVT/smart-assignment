@@ -1,19 +1,12 @@
 name: Deploy GitHub Pages
 
 # Publishes the static site in docs/ (the Smart Assignment overview page) to
-# GitHub Pages. One-time setup: in the repo, go to Settings -> Pages and set
+# GitHub Pages. Trigger manually from Actions -> Deploy GitHub Pages -> Run workflow.
+# One-time setup: in the repo, go to Settings -> Pages and set
 # "Build and deployment" -> Source to "GitHub Actions".
 
 on:
-  push:
-    branches: [main]
-    # The page is generated from the code, so republish when either changes.
-    paths:
-      - "docs/**"
-      - "smart_assignment/**"
-      - "scripts/generate_page.py"
-      - ".github/workflows/pages.yml"
-  workflow_dispatch: {}
+  workflow_dispatch:
 
 permissions:
   contents: read
