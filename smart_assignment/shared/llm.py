@@ -47,12 +47,21 @@ def _load_sage_registry() -> Any:
     try:
         from sage_adk import SageLlmRegistry  # type: ignore[import-untyped]
     except ModuleNotFoundError:
-        # Local workshop layout: SDK lives as a sibling directory of the
-        # project root.  From this file (smart_assignment/shared/llm.py),
-        # parents[3] is the same workspace root that tmp.py reached via
-        # parents[1].
-        workspace_root = Path(__file__).resolve().parents[3]
-        sdk_root = workspace_root / "sage-ai-sdk-python-sage-adk_1.0.0"
+        # Local workshop layouts supported:
+        # 1) <repo>/smart_assignment/sage-ai-sdk-python-sage-adk_1.0.0
+        # 2) <repo>/sage-ai-sdk-python-sage-adk_1.0.0
+        # From this file (smart_assignment/shared/llm.py), parents[2] is
+        # the repository root.
+        repo_root = Path(__file__).resolve().parents[2]
+        sdk_roots = [
+            repo_root / "smart_assignment" / "sage-ai-sdk-python-sage-adk_1.0.0",
+            repo_root / "sage-ai-sdk-python-sage-adk_1.0.0",
+        ]
+
+        sdk_root = next((root for root in sdk_roots if root.exists()), None)
+        if sdk_root is None:
+            raise
+
         local_src_paths = [
             sdk_root / "sage_adk" / "src",
             sdk_root / "sage_core" / "src",
@@ -60,7 +69,9 @@ def _load_sage_registry() -> Any:
         ]
         for src_path in local_src_paths:
             if src_path.exists():
-                sys.path.insert(0, str(src_path))
+                src_path_str = str(src_path)
+                if src_path_str not in sys.path:
+                    sys.path.insert(0, src_path_str)
 
         if (sdk_root / "sage_adk" / "src").exists():
             from sage_adk import SageLlmRegistry  # type: ignore[import-untyped]
