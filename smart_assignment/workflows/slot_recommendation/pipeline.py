@@ -49,11 +49,17 @@ from smart_assignment.workflows.slot_recommendation.reasoning import (
 
 
 def intake(customer: CustomerProfile) -> CustomerProfile:
-    # Enforce the Sysco customer-number format up front (raises on malformed).
-    customer.customer_number = validate_customer_number(customer.customer_number)
+    # New customers are prospects -- address (sourced from Salesforce/CRM) is
+    # the required, primary identifier and drives geocoding.
+    if not customer.address or not customer.address.strip():
+        raise ValueError("customer address is required (it's the primary identifier)")
+    # customer_number is an optional placeholder for accounts that already
+    # have a Sysco number; only enforce the format when one was given.
+    if customer.customer_number:
+        customer.customer_number = validate_customer_number(customer.customer_number)
     if customer.order_quantity_cases <= 0:
         raise ValueError(
-            f"{customer.customer_number}: order_quantity_cases must be positive, "
+            f"{customer.lookup_key}: order_quantity_cases must be positive, "
             f"got {customer.order_quantity_cases}"
         )
     return customer
@@ -134,6 +140,7 @@ def decide(
     if not ranked:
         return SlotRecommendation(
             customer_number=customer.customer_number,
+            customer_address=customer.address,
             customer_name=customer.name,
             decision=Decision.ESCALATED_NO_FEASIBLE_SLOT,
             total_score=total_score,
@@ -147,6 +154,7 @@ def decide(
     decision = Decision.ESCALATED_LOW_SCORE if escalate else Decision.RECOMMENDED
     return SlotRecommendation(
         customer_number=customer.customer_number,
+        customer_address=customer.address,
         customer_name=customer.name,
         decision=decision,
         total_score=total_score,

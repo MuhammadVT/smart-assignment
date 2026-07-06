@@ -66,18 +66,27 @@ class CustomerProfile:
     """
     New-customer intake (address, order quantity, optional preferred slot).
 
-    `customer_number` is the Sysco identifier in ``NNN-NNNNNN`` form (site/OpCo
-    + per-site number); see `shared/customer.py`. `location` is populated by the
-    geocoding step; it is None until then. `name` is descriptive only — the
-    workflow identifies customers by `customer_number`, never by name.
+    New customers are **prospects** — Salesforce/CRM has their address, but
+    they don't have a Sysco customer number yet, so `address` (not
+    `customer_number`) is the primary identifier and drives geocoding.
+    `customer_number` is an optional placeholder in the Sysco ``NNN-NNNNNN``
+    form (site/OpCo + per-site number; see `shared/customer.py`) for the case
+    where this workflow is run for an account that already has one.
+    `location` is populated by the geocoding step; it is None until then.
+    `name` is descriptive only.
     """
 
-    customer_number: str
     name: str
     address: str
     order_quantity_cases: int
+    customer_number: Optional[str] = None  # optional Sysco number, if already on file
     preferred_slot: Optional[PreferredSlot] = None  # soft preference: day + time window
     location: Optional[GeoPoint] = None  # filled in by geo-lookup
+
+    @property
+    def lookup_key(self) -> str:
+        """Stable identifier for this customer: the Sysco number if on file, else address."""
+        return self.customer_number or self.address
 
 
 # ---------------------------------------------------------------------------
@@ -193,13 +202,18 @@ class SlotRecommendation:
     A route's own merit shouldn't be discounted just because another candidate
     happened to score nearly as well, so the escalation gate compares this
     number directly against `Config.total_score_threshold`.
+
+    `customer_number` is optional -- most new customers are prospects with no
+    Sysco number yet, so `customer_address` is always populated as the
+    fallback identifier for display.
     """
 
-    customer_number: str
     customer_name: str
     decision: Decision
     total_score: float
     reasoning: str
+    customer_number: Optional[str] = None
+    customer_address: Optional[str] = None
     recommended_route_id: Optional[str] = None
     recommended_route_name: Optional[str] = None
     recommended_day: Optional[str] = None

@@ -331,16 +331,17 @@ _SIM_JS = """
   var outEl = document.getElementById('sim-output');
   var errEl = document.getElementById('sim-error');
   var hintEl = document.getElementById('sim-hint');
-  var nums = Object.keys(DATA);
+  var keys = Object.keys(DATA);  // each key is a customer's address (or Sysco number if on file)
 
-  nums.forEach(function (num) {
+  keys.forEach(function (key) {
     var b = document.createElement('button');
     b.className = 'chip-btn';
-    b.innerHTML = num + ' · ' + DATA[num].name;
-    // Clicking a sample loads it INTO the input box (it does not run) so the
-    // relationship is obvious; the user then presses Run.
+    b.innerHTML = DATA[key].name;
+    b.title = DATA[key].address;
+    // Clicking a sample loads its address INTO the input box (it does not
+    // run) so the relationship is obvious; the user then presses Run.
     b.addEventListener('click', function () {
-      input.value = num;
+      input.value = key;
       chipsEl.querySelectorAll('.chip-btn').forEach(function (x) { x.classList.remove('selected'); });
       b.classList.add('selected');
       input.classList.remove('flash');
@@ -348,7 +349,7 @@ _SIM_JS = """
       input.classList.add('flash');
       input.focus();
       errEl.textContent = '';
-      hintEl.textContent = 'Loaded ' + num + ' into the box above — now press “Run agent workflow”.';
+      hintEl.textContent = 'Loaded ' + DATA[key].name + '’s address into the box above — now press “Run agent workflow”.';
     });
     chipsEl.appendChild(b);
   });
@@ -356,14 +357,18 @@ _SIM_JS = """
   function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
   async function run() {
-    var num = (input.value || '').trim();
+    var key = (input.value || '').trim();
     errEl.textContent = ''; hintEl.textContent = ''; outEl.innerHTML = ''; stepsEl.innerHTML = '';
-    var d = DATA[num];
-    if (!d) { errEl.textContent = 'Enter a valid mock customer number: ' + nums.join(', '); return; }
+    var d = DATA[key];
+    if (!d) {
+      errEl.textContent = 'No matching sample prospect. Click one of the sample cards below, '
+        + 'or paste one of their addresses exactly.';
+      return;
+    }
     runBtn.disabled = true;
     var head = document.createElement('div');
     head.className = 'sim-cust';
-    head.innerHTML = '🤖 Agent running for <b>' + d.name + '</b> <span class="cnum">' + num + '</span>';
+    head.innerHTML = '🤖 Agent running for <b>' + d.name + '</b> <span class="cnum">' + d.address + '</span>';
     stepsEl.appendChild(head);
     for (var i = 0; i < d.steps.length; i++) {
       var s = d.steps[i];
@@ -516,10 +521,11 @@ def _example_card(result: RecommendationResult) -> str:
     )
     reason_label = "Why the agent escalated" if rec.requires_human_review else "Why the agent chose this"
 
+    cnum_text = _esc(c.customer_number) if c.customer_number else "new prospect — no Sysco number yet"
     return f"""
       <article class="result">
         <div class="rhead">
-          <div class="cnum">{_esc(c.customer_number)}</div>
+          <div class="cnum">{cnum_text}</div>
           <h3>{_esc(c.name)}</h3>
           <div class="addr">{_esc(c.address)}</div>
           <div class="facts">
@@ -562,8 +568,15 @@ def _sim_steps(result: RecommendationResult, config: Config) -> list[dict]:
     margin = config.capacity_buffer_safety_margin
     safe = ceiling - margin
 
+    if c.customer_number:
+        id_line = f'Customer number <b>{_esc(c.customer_number)}</b> <span class="ok">✓ valid</span>'
+    else:
+        id_line = (
+            f'No Sysco customer number yet (new prospect) — using <b>address</b> as the '
+            f'identifier: <b>{_esc(c.address)}</b>'
+        )
     intake = [
-        f'Customer number <b>{_esc(c.customer_number)}</b> <span class="ok">✓ valid</span>',
+        id_line,
         f"Order quantity: <b>{c.order_quantity_cases}</b> cases",
         f"Preferred slot (day + time): <b>{_esc(pref)}</b>",
     ]
@@ -655,7 +668,7 @@ def _sim_steps(result: RecommendationResult, config: Config) -> list[dict]:
     return [
         {
             "title": "Intake",
-            "action": "The agent validates the customer number and captures the intake profile.",
+            "action": "The agent validates the intake profile (address, order quantity, preferred slot).",
             "lines": intake,
         },
         {
@@ -791,9 +804,10 @@ def _config_sources(config: Config, results: list[RecommendationResult]) -> str:
     )
     intake_rows = "".join(
         [
-            row("Address → geocoded point", "per customer", "geocoding"),
+            row("Address → geocoded point", "per customer", "geocoding — the primary identifier"),
             row("Order quantity", "cases", "capacity math"),
             row("Preferred slot: day + time (optional)", "soft", "slot scoring only"),
+            row("Sysco customer number (optional)", "placeholder", "unset for prospects; matched if on file"),
         ]
     )
     return f"""
@@ -822,8 +836,9 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
     top_n = config.top_n_candidate_routes
     cards = "".join(_example_card(r) for r in results)
     payload = {
-        r.customer.customer_number: {
+        r.customer.lookup_key: {
             "name": _esc(r.customer.name),
+            "address": _esc(r.customer.address),
             "steps": _sim_steps(r, config),
             "resultHtml": _example_card(r),
         }
@@ -896,7 +911,7 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
         phases of the same agent's workflow, not five separate agents. A person is involved only if the
         agent decides to escalate at the final stage.</div></div>
       <div class="flow">
-        <div class="step"><div class="num">1</div><h3>Intake</h3><p>Capture the customer's address, order quantity (cases), and preferred slot (day + time).</p><p class="action">Validate the number &amp; build the profile.</p></div>
+        <div class="step"><div class="num">1</div><h3>Intake</h3><p>Capture the customer's address, order quantity (cases), and preferred slot (day + time).</p><p class="action">Validate the intake profile &amp; build it.</p></div>
         <div class="step"><div class="num">2</div><h3>Geo-Lookup</h3><p>Geocode the address and find the nearest candidate routes.</p><p class="action">Geocode &amp; pick the Top-{top_n} nearest.</p></div>
         <div class="step"><div class="num">3</div><h3>Constraint Check</h3><p>Drop any route that fails a hard rule.</p><p class="action">Enforce serviceability &amp; capacity.</p></div>
         <div class="step"><div class="num">4</div><h3>Score &amp; Rank</h3><p>Rank survivors on weighted business factors.</p><p class="action">Score &amp; order the options.</p></div>
@@ -978,18 +993,18 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
     <div class="wrap">
       <span class="eyebrow">Try it yourself</span>
       <h2>Run the agent on a customer</h2>
-      <p class="sub">Enter a mock customer number (or pick one below) and watch the agent execute each step —
+      <p class="sub">Enter a mock customer's address (or pick one below) and watch the agent execute each step —
         including the scoring math for every feasible route — then render its recommendation. Everything
         runs in your browser; no data leaves the page.</p>
       <div class="sim">
         <div class="sim-controls">
-          <input id="cust-input" placeholder="e.g. 067-100002" aria-label="Customer number" autocomplete="off" />
+          <input id="cust-input" placeholder="e.g. 5085 Westheimer Rd, Houston, TX 77056" aria-label="Customer address" autocomplete="off" />
           <button id="run-btn" class="run">▶ Run agent workflow</button>
         </div>
         <div class="sim-hint" id="sim-hint"></div>
         <div class="sim-error" id="sim-error"></div>
         <div class="picker">
-          <span class="picker-label">Sample customer numbers — click one to load it into the box above, then press <b>Run agent workflow</b>:</span>
+          <span class="picker-label">Sample prospects — click one to load their address into the box above, then press <b>Run agent workflow</b>:</span>
           <div class="chips" id="chips"></div>
         </div>
         <div id="sim-steps"></div>
