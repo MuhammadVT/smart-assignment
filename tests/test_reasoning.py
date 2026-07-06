@@ -1,16 +1,16 @@
 """
-Unit tests for the natural-language reasoning layer
-(workflows/slot_recommendation/reasoning.py). The DeterministicReasoner is
-meant to read like a colleague explaining their own decision -- verbose,
-first-person, no underscored identifiers leaking into the prose.
+Unit tests for the natural-language reasoning layer (reasoning.py). The
+DeterministicReasoner is meant to read like a colleague explaining their own
+decision -- verbose, first-person, no underscored identifiers leaking into
+the prose.
 """
 
 from __future__ import annotations
 
 from smart_assignment.mock_customers import SAMPLE_CUSTOMERS
+from smart_assignment.pipeline import run_slot_recommendation
+from smart_assignment.reasoning import DeterministicReasoner
 from smart_assignment.shared.config import Config
-from smart_assignment.workflows.slot_recommendation.pipeline import run_slot_recommendation
-from smart_assignment.workflows.slot_recommendation.reasoning import DeterministicReasoner
 
 
 def _run_all():

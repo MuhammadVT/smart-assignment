@@ -1,14 +1,17 @@
 # smart-assignment
 
-Agentic workflow for automated delivery **slot assignment** for new
+A conversational AI agent for automated delivery **slot assignment** for new
 customers (Sysco context), built on Google's
 [Agent Development Kit (ADK)](https://google.github.io/adk-docs/) and verified
 against **google-adk 2.3.0**.
 
-Given a new customer (address, order quantity in cases, and an optional
-preferred slot — a **day of week plus a time window**), the workflow finds the
+You talk to the agent (address, order quantity in cases, and an optional
+preferred slot — a **day of week plus a time window**) and it finds the
 delivery route+day that best serves them — or escalates to a human specialist
-when nothing fits or the call is too close.
+when nothing fits or the call is too close. The agent orchestrates the
+conversation and decides *when* to call which tool, but every distance,
+constraint check, and score is computed by deterministic Python, not the
+model, so the outcome stays reproducible and auditable.
 
 New customers are **prospects**: Salesforce/CRM has their address, but they
 don't have a Sysco customer number yet. **Address is therefore the primary
@@ -65,22 +68,29 @@ down, decaying linearly to 0 exactly at the ceiling.
 Constraints and scoring are **deterministic Python** — reproducible and
 auditable. An LLM is *structurally unable* to place a customer onto a full
 truck or outside the serviceable area, because those checks are code, not
-prompting. The LLM's only (optional) job is turning the already-decided,
-fully-quantified result into a fluent natural-language explanation.
+prompting. The conversational agent (see below) decides when to call each
+step and narrates the result, but never computes one itself.
 
 ## Architecture / decision flow
 
+A single ADK `LlmAgent` (`smart_assignment/agent.py`) drives the conversation
+and calls one tool per pipeline step, in order:
+
 ```
-START
-  -> intake_node                (intake + geocode + Top-N nearest routes)
-  -> constraint_and_score_node  (hard constraints, then weighted scoring)
-  -> route_on_feasibility       (conditional)
-       NO_OPTIONS  -> escalate_no_feasible_slot     (human input)
-       HAS_OPTIONS -> build_recommendation_node
-                        -> total_score_gate           (conditional)
-                             LOW_SCORE  -> escalate_low_score (human input)
-                             HIGH_SCORE -> format_output
+intake_customer            -> validate/merge the profile (address, cases, slot)
+find_candidate_routes      -> geocode + Top-N nearest routes
+evaluate_and_score_routes  -> hard constraints, then weighted scoring
+recommend_or_escalate      -> rank + total-score gate -> decision + reasoning
+  -> requires_human_review? -> agent calls ADK's request_input tool
+                                (pauses, waits for a specialist's reply)
 ```
+
+Each tool is a thin wrapper around the same pipeline functions (see
+`tools/slot_recommendation.py`) — the agent's system instruction (see
+`prompts.py`) tells it the order to call them in and bans it from stating
+any number that didn't come back from a tool call. See
+[**Talking to it conversationally**](#talking-to-it-conversationally-with-adk-run--adk-web)
+below for a walkthrough.
 
 The winning route's own `total_score` from Step 4 **is** the gating number —
 there's no separate "confidence" computed from how close a runner-up scored.
@@ -96,9 +106,16 @@ reviewer has something to approve/override).
 ```
 smart-assignment/
 ├── smart_assignment/
-│   ├── agent.py                        # ADK entry point (root_agent)
+│   ├── __init__.py                     # from smart_assignment import agent (ADK convention)
+│   ├── agent.py                        # ADK entry point: root_agent = LlmAgent(...)
+│   ├── prompts.py                      # root_agent's system instruction
+│   ├── pipeline.py                     # the 5-step orchestration (source of truth)
+│   ├── reasoning.py                    # total-score gating + pluggable reasoner (LLM default)
+│   ├── reasoning_prompts.py            # prompt for the *optional* LLM reasoning trace
 │   ├── mock_customers.py               # [MOCK] sample Sysco new-customer intakes
-│   ├── shared/                         # cross-workflow, framework-agnostic core
+│   ├── tools/                          # ADK FunctionTools exposed to root_agent
+│   │   └── slot_recommendation.py      # one tool per pipeline step, state-keyed
+│   ├── shared/                         # framework-agnostic domain core
 │   │   ├── models.py                   # data contracts (CustomerProfile, Route, ...)
 │   │   ├── customer.py                 # Sysco customer-number format (NNN-NNNNNN)
 │   │   ├── geo.py                      # haversine + Geocoder protocol
@@ -106,19 +123,12 @@ smart-assignment/
 │   │   ├── constraints.py              # pluggable HARD constraints (step 3)
 │   │   ├── scoring.py                  # pluggable weighted factors (step 4)
 │   │   └── config.py                   # env-driven thresholds & weights
-│   ├── workflows/slot_recommendation/
-│   │   ├── pipeline.py                 # the 5-step orchestration (source of truth)
-│   │   ├── reasoning.py                # total-score gating + pluggable reasoner (LLM default)
-│   │   ├── prompts.py                  # LLM reasoning prompt text
-│   │   ├── graph.py                    # ADK Workflow wrapper (delegates to pipeline) -- batch path
-│   │   ├── nodes.py                    # ADK nodes (delegate to pipeline)
-│   │   ├── conversational_agent.py     # ADK LlmAgent -- conversational path (default root_agent)
-│   │   └── agent_tools.py              # tool wrappers around pipeline steps, for the LlmAgent
-│   └── integrations/                   # [MOCKED] external systems
-│       ├── route_capacity_client.py    # route/capacity data (TMS stand-in)
-│       └── geocoding_client.py         # address -> lat/lng
-├── scripts/run_local.py                # OFFLINE demo over the mock customers
-├── tests/                              # fast, deterministic unit tests
+│   ├── integrations/                   # [MOCKED] external systems
+│   │   ├── route_capacity_client.py    # route/capacity data (TMS stand-in)
+│   │   └── geocoding_client.py         # address -> lat/lng
+│   └── reporting/page.py               # generates the GitHub Pages overview site
+├── scripts/run_local.py                # OFFLINE demo over the mock customers, no ADK/LLM
+├── tests/                              # fast, deterministic unit tests (mirrors the layout above)
 └── deployment/ · eval/ · docs/
 ```
 
@@ -173,23 +183,20 @@ the deterministic reasoner in code, pass
 
 ## Talking to it conversationally with `adk run` / `adk web`
 
-`smart_assignment/agent.py`'s `root_agent` — what `adk run`/`adk web` launch by
-default — is a conversational ADK `LlmAgent`
-(`workflows/slot_recommendation/conversational_agent.py`). It collects a
-prospect's address, order quantity, and (optional) preferred slot over
-multiple turns, then calls the exact same deterministic pipeline as **tools**
-(`workflows/slot_recommendation/agent_tools.py`) — the model never computes a
-distance, a constraint check, or a score itself, only when to call which tool
-and how to narrate the result. Because it's LLM-driven end to end (not just
-for narration), **this path requires `GOOGLE_API_KEY`**: `cp .env.example .env`
-and set it first.
+`smart_assignment/agent.py`'s `root_agent` is a conversational ADK `LlmAgent`.
+It collects a prospect's address, order quantity, and (optional) preferred
+slot over multiple turns, then calls the deterministic pipeline as **tools**
+(`tools/slot_recommendation.py`) — the model never computes a distance, a
+constraint check, or a score itself, only when to call which tool and how to
+narrate the result. Because it's LLM-driven end to end, **this path requires
+`GOOGLE_API_KEY`**: `cp .env.example .env` and set it first.
 
 ```bash
 adk web smart_assignment          # serves http://127.0.0.1:8000, chat in the browser
 adk run smart_assignment          # interactive terminal chat
 ```
 
-A conversation walks through the same 5 steps as the batch pipeline, visibly:
+A conversation walks through the 5 steps visibly, one tool call at a time:
 
 ```
 you> New prospect at 5085 Westheimer Rd, Houston, TX 77056, 400 cases.
@@ -202,33 +209,16 @@ agent> [recommend_or_escalate] RTE-4200 scores 57%, below the 60% auto-assign ba
 agent> [request_input] Pausing for a specialist's sign-off...
 ```
 (Illustrative — exact wording depends on the model; the tool calls, numbers,
-and decision are always real, straight from `agent_tools.py`.)
+and decision are always real, straight from `tools/slot_recommendation.py`.)
 
 If the user then says "actually make it 140 cases", the agent calls
 `intake_customer` again with just that field — the address is kept
 automatically — and re-runs the scoring/recommendation steps, which now clear
 the bar.
 
-### The original deterministic batch path still works too
-
-`workflows/slot_recommendation/graph.py`'s `root_agent` — the plain ADK
-`Workflow` graph this repo started with — is unchanged: a one-shot, fully
-offline path (LLM reasoning still falls back to the deterministic trace
-without an API key) for a single free-text address in, one recommendation
-out. Point `adk run`/`adk web` at it directly instead of the conversational
-agent:
-
-```bash
-adk run smart_assignment/workflows/slot_recommendation "5085 Westheimer Rd, Houston, TX 77056"
-adk web smart_assignment/workflows/slot_recommendation
-```
-
-See `scripts/run_local.py` above for the same batch behavior with zero ADK
-runtime at all.
-
-Both paths delegate to the same `pipeline.py`, so the conversational agent,
-the batch graph, and the offline demo can never disagree on business logic.
-`adk deploy` uses whichever `root_agent` you point it at.
+For a fully offline look at the same pipeline with zero ADK/LLM runtime, see
+`scripts/run_local.py` above. `adk deploy` uses whichever `root_agent` you
+point it at (see `deployment/deploy.py`).
 
 ## Testing
 
@@ -237,8 +227,8 @@ pytest tests/              # fast, deterministic unit tests — no LLM/network
 ```
 
 Constraints, scoring, total-score gating, the end-to-end pipeline decisions,
-the ADK routers, and the conversational tool wrappers (`agent_tools.py`,
-called directly with a fake tool context -- no LLM needed) are all covered.
+and the conversational tool wrappers (`tools/slot_recommendation.py`, called
+directly with a fake tool context -- no LLM needed) are all covered.
 
 ## [ASSUMPTIONS / MOCKS REQUIRING REPLACEMENT]
 
@@ -256,12 +246,10 @@ This is a **first-pass** on mock data. Highest-priority items to replace:
 4. **Thresholds & weights** (90% utilization, 0.60 total-score threshold,
    service radius, factor weights) are starting points in `shared/config.py`,
    not validated Sysco policy — tune against real operational data.
-5. **Human-input UX** — the conversational agent's escalation calls ADK's
-   real `request_input` tool, which pauses and waits for a reply in whatever
-   client is running the conversation (terminal, `adk web`, etc.); a
-   dedicated ops reviewer surface (dashboard, Slack, etc.) is out of scope
-   for this pass. The batch graph (`graph.py`) still just returns terminal
-   text on escalation — it has no conversation to pause.
+5. **Human-input UX** — escalation calls ADK's real `request_input` tool,
+   which pauses and waits for a reply in whatever client is running the
+   conversation (terminal, `adk web`, etc.); a dedicated ops reviewer surface
+   (dashboard, Slack, etc.) is out of scope for this pass.
 6. **Customer intake source** — new customers are prospects with no Sysco
    customer number yet, so their address (the primary lookup key) is assumed
    to be pulled from Salesforce/CRM. `customer_number` is an optional

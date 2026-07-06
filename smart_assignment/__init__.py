@@ -1,1 +1,5 @@
-"""smart_assignment: agentic workflows for automated delivery slot assignment."""
+"""smart_assignment: a conversational agent for automated delivery slot assignment."""
+
+from smart_assignment import agent
+
+__all__ = ["agent"]

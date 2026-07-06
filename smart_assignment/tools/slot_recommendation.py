@@ -2,12 +2,12 @@
 Conversational tool wrappers around the slot_recommendation pipeline.
 
 Each function here is a thin, self-contained wrapper around a single
-pipeline.py step -- the LLM (see conversational_agent.py) calls these as
+pipeline.py step -- the LLM (see smart_assignment/agent.py) calls these as
 tools instead of computing anything itself. This keeps the whole thing
 deterministic and auditable: the agent orchestrates *when* to call a step
 and narrates the result, but every distance, constraint check, score, and
 decision still comes straight from the same plain Python already covered by
-tests/workflows/test_slot_recommendation.py.
+tests/test_pipeline.py.
 
 State: the in-progress customer profile lives in `tool_context.state` as a
 plain JSON-serializable dict (see `_profile_to_state_dict` /
@@ -46,13 +46,8 @@ from smart_assignment.shared.models import (
     PreferredSlot,
 )
 from smart_assignment.shared.timeutils import fmt_time, parse_time
-from smart_assignment.workflows.slot_recommendation.pipeline import (
-    decide,
-    evaluate_candidates,
-    geo_lookup,
-    intake,
-)
-from smart_assignment.workflows.slot_recommendation.reasoning import DeterministicReasoner
+from smart_assignment.pipeline import decide, evaluate_candidates, geo_lookup, intake
+from smart_assignment.reasoning import DeterministicReasoner
 
 # Namespaced so this doesn't collide with other state a larger app might keep.
 _STATE_PROFILE_KEY = "sa_profile"

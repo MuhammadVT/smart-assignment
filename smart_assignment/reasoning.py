@@ -243,9 +243,7 @@ class LLMReasoner:
         try:
             from google import genai  # imported lazily; only needed when used
 
-            from smart_assignment.workflows.slot_recommendation.prompts import (
-                build_reasoning_prompt,
-            )
+            from smart_assignment.reasoning_prompts import build_reasoning_prompt
 
             client = genai.Client()
             resp = client.models.generate_content(

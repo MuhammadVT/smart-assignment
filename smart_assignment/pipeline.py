@@ -1,8 +1,9 @@
 """
 Plain-Python orchestration of the Smart Assignment workflow — the single
-source of truth for the 5-step process. The ADK graph (`graph.py`) and the
-demo (`scripts/run_local.py`) both drive these same functions, so there is no
-logic drift between "runnable now" and "deployable on ADK".
+source of truth for the 5-step process. The conversational agent's tools
+(`tools/slot_recommendation.py`) and the offline demo (`scripts/run_local.py`)
+both drive these same functions, so there is no logic drift between
+"runnable now" and "deployable on ADK".
 
     1. intake            — validate the new customer's profile
     2. geo_lookup        — geocode + pick Top-N nearest candidate routes
@@ -39,11 +40,7 @@ from smart_assignment.shared.models import (
 )
 from smart_assignment.shared.scoring import score_candidate
 from smart_assignment.shared.timeutils import fmt_window
-from smart_assignment.workflows.slot_recommendation.reasoning import (
-    LLMReasoner,
-    Reasoner,
-    compute_total_score,
-)
+from smart_assignment.reasoning import LLMReasoner, Reasoner, compute_total_score
 
 # --- Step 1: intake ---------------------------------------------------------
 

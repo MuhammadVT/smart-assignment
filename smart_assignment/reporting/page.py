@@ -24,6 +24,8 @@ from pathlib import Path
 from typing import Optional
 
 from smart_assignment.mock_customers import SAMPLE_CUSTOMERS
+from smart_assignment.pipeline import run_slot_recommendation
+from smart_assignment.reasoning import DeterministicReasoner
 from smart_assignment.shared.config import (
     DEFAULT_CONFIG,
     FACTOR_CAPACITY_BUFFER,
@@ -38,8 +40,6 @@ from smart_assignment.shared.models import (
     RecommendationResult,
 )
 from smart_assignment.shared.timeutils import duration_minutes, fmt_window
-from smart_assignment.workflows.slot_recommendation.pipeline import run_slot_recommendation
-from smart_assignment.workflows.slot_recommendation.reasoning import DeterministicReasoner
 
 DEFAULT_OUTPUT = Path(__file__).resolve().parents[2] / "docs" / "index.html"
 
@@ -263,7 +263,7 @@ _ARCH_SVG = """
   <line x1="490" y1="52" x2="490" y2="86" stroke="#1257a6" stroke-width="2" marker-end="url(#arw)"/>
 
   <rect x="24" y="88" width="620" height="440" rx="18" fill="#eef5fd" stroke="#1257a6" stroke-width="2"/>
-  <text x="44" y="118" fill="#1257a6" font-size="15" font-weight="800">🤖 AI AGENT — autonomous ADK Workflow orchestrator</text>
+  <text x="44" y="118" fill="#1257a6" font-size="15" font-weight="800">🤖 AI AGENT — conversational ADK LlmAgent orchestrator</text>
 
   <rect x="44" y="146" width="136" height="80" rx="12" fill="#fff" stroke="#c7d6ea"/>
   <text x="112" y="180" text-anchor="middle" font-size="13" font-weight="700" fill="#0b2e59">1 · Intake</text>
@@ -959,16 +959,17 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
     <div class="wrap">
       <span class="eyebrow">Architecture</span>
       <h2>The agentic workflow, end to end</h2>
-      <p class="sub">The agent is a Google ADK <em>Workflow</em> that orchestrates the five steps. It calls
-        deterministic tools for the objective checks and an LLM only to narrate its decision — the
-        decision itself is code, so it's reproducible and auditable.</p>
+      <p class="sub">The agent is a Google ADK <em>LlmAgent</em> that talks to the user and calls a tool for
+        each of the five steps — it decides <em>when</em> to call which tool and narrates the result, but
+        every distance, constraint check, and score comes back from the tool itself, so the decision stays
+        reproducible and auditable.</p>
       <div class="arch">
         {_ARCH_SVG}
         <div class="arch-legend">
-          <div class="card"><div class="icon">🤖</div><h4>Agent orchestrator</h4><p>An ADK Workflow drives all five steps and the branching, autonomously.</p></div>
+          <div class="card"><div class="icon">🤖</div><h4>Agent orchestrator</h4><p>An ADK LlmAgent drives all five steps via tool calls, conversationally.</p></div>
           <div class="card"><div class="icon">🧭</div><h4>Deterministic tools</h4><p>Geo, hard constraints, and weighted scoring — plain code the agent calls.</p></div>
-          <div class="card"><div class="icon">🧠</div><h4>LLM reasoner</h4><p>Gemini turns the agent's decision into a plain-English rationale.</p></div>
-          <div class="card"><div class="icon">🙋</div><h4>Human-in-the-loop</h4><p>Only engaged when the agent escalates — low total score or no feasible slot.</p></div>
+          <div class="card"><div class="icon">🗣️</div><h4>Narrates, doesn't decide</h4><p>The same agent explains the already-decided result in its own words — it never computes a number itself.</p></div>
+          <div class="card"><div class="icon">🙋</div><h4>Human-in-the-loop</h4><p>On escalation, the agent pauses the conversation and waits for a specialist's reply.</p></div>
         </div>
       </div>
     </div>
@@ -979,10 +980,10 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
       <span class="eyebrow">Key mechanics</span>
       <h2>What makes it trustworthy</h2>
       <div class="grid-2">
-        <div class="card"><h4>🤖 One agent, five steps</h4><p>A single ADK Workflow runs Intake → Geo-Lookup → Constraint Check → Score &amp; Rank → Decide, and branches to escalate.</p></div>
+        <div class="card"><h4>🤖 One agent, five steps</h4><p>A single ADK LlmAgent calls one tool per step — Intake → Geo-Lookup → Constraint Check → Score &amp; Rank → Decide — and pauses to escalate when needed.</p></div>
         <div class="card"><h4>✅ Decisions are code, not vibes</h4><p>Constraints and scoring are deterministic Python, so identical inputs always yield the identical recommendation.</p></div>
-        <div class="card"><h4>🧠 The LLM reasons and explains</h4><p>Gemini writes the human-readable rationale; it never changes the decision, and falls back to a deterministic explanation.</p></div>
-        <div class="card"><h4>🙋 Human-in-the-loop on escalation</h4><p>A specialist is engaged only when the agent finds no feasible slot, or the best option's own total score falls short of the auto-assign bar.</p></div>
+        <div class="card"><h4>🧠 The agent narrates, never computes</h4><p>It presents the deterministic reasoning trace in its own words; it never changes a number, a route, or the decision itself.</p></div>
+        <div class="card"><h4>🙋 Human-in-the-loop on escalation</h4><p>The agent pauses and waits for a specialist's reply (via ADK's request_input tool) when it finds no feasible slot, or the best option's own total score falls short of the auto-assign bar.</p></div>
       </div>
     </div>
   </section>

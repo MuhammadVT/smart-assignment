@@ -12,11 +12,11 @@ import json
 from html import escape as html_escape
 
 from smart_assignment.mock_customers import SAMPLE_CUSTOMERS
+from smart_assignment.pipeline import run_slot_recommendation
+from smart_assignment.reasoning import DeterministicReasoner
 from smart_assignment.reporting.page import build_page, generate
 from smart_assignment.shared.config import Config
 from smart_assignment.shared.models import Decision
-from smart_assignment.workflows.slot_recommendation.pipeline import run_slot_recommendation
-from smart_assignment.workflows.slot_recommendation.reasoning import DeterministicReasoner
 
 
 def _results(config):
