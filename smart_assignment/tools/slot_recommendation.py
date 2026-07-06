@@ -13,14 +13,15 @@ State: the in-progress customer profile lives in `tool_context.state` as a
 plain JSON-serializable dict (see `_profile_to_state_dict` /
 `_profile_from_state_dict`), not as a CustomerProfile object -- ADK session
 state must be JSON-safe, and a plain dict is also the easiest thing to
-inspect while debugging a conversation. Downstream products (geocoded
-location, candidate routes, scores) are recomputed fresh from that profile
-on every call rather than cached, so a revision (a changed address, cases,
-or preferred slot) always flows through correctly with no invalidation
-logic to get wrong. These are cheap, deterministic, offline operations, so
-the extra recomputation is not a real cost; if that ever changes, caching
-can be added inside these functions without touching the agent or its
-instructions.
+inspect while debugging a conversation. Downstream products (candidate
+routes, constraint outcomes, scores) are recomputed fresh from that profile
+on every call rather than cached here, so a revision (a changed address,
+cases, or preferred slot) always flows through correctly with no
+invalidation logic to get wrong. The one exception is geocoding itself: a
+real geocode is a network call, not free the way MockGeocoder's was, so
+`CensusGeocoder` (see integrations/census_geocoder.py) caches successful
+lookups process-wide by address -- geocoding the same address on 3
+different tool calls in one turn costs one real request, not three.
 
 Flexibility note: each tool below is independent, keyed only through
 session state -- none of them call each other directly. That means any one
@@ -35,15 +36,17 @@ from typing import Optional
 
 from google.adk.tools import ToolContext
 
-from smart_assignment.integrations.geocoding_client import MockGeocoder
+from smart_assignment.integrations.census_geocoder import CensusGeocoder
 from smart_assignment.integrations.route_capacity_client import fetch_candidate_routes
 from smart_assignment.shared.config import DEFAULT_CONFIG
 from smart_assignment.shared.constraints import CONSTRAINT_LABEL, build_context
+from smart_assignment.shared.geo import AddressNotFoundError, GeocodingError
 from smart_assignment.shared.models import (
     CandidateEvaluation,
     CustomerProfile,
     DayOfWeek,
     PreferredSlot,
+    Route,
 )
 from smart_assignment.shared.timeutils import fmt_time, parse_time
 from smart_assignment.pipeline import decide, evaluate_candidates, geo_lookup, intake
@@ -52,6 +55,11 @@ from smart_assignment.reasoning import DeterministicReasoner
 # Namespaced so this doesn't collide with other state a larger app might keep.
 _STATE_PROFILE_KEY = "sa_profile"
 _STATE_LAST_RECOMMENDATION_KEY = "sa_last_recommendation"
+
+# Real geocoder for the conversational path (pipeline.run_slot_recommendation's
+# own default stays MockGeocoder -- see geocoding_client.py's docstring -- so
+# the offline demo, GitHub Pages generator, and test suite are unaffected).
+_GEOCODER = CensusGeocoder()
 
 
 def _error(message: str) -> dict:
@@ -115,6 +123,26 @@ def _serialize_evaluation(e: CandidateEvaluation) -> dict:
         ]
         out["total_score"] = round(e.total_score, 4)
     return out
+
+
+def _find_candidates(customer: CustomerProfile) -> list[Route]:
+    """Geocode + Top-N lookup (step 2), shared by every tool below that needs
+    it. Raises `GeocodingError` (see shared/geo.py) on failure; callers
+    convert that to the `{"ok": False, "error": ...}` tool-result shape via
+    `_geocoding_error_result` rather than letting it crash the tool call."""
+    return geo_lookup(customer, fetch_candidate_routes(), _GEOCODER, DEFAULT_CONFIG)
+
+
+def _geocoding_error_result(exc: GeocodingError) -> dict:
+    if isinstance(exc, AddressNotFoundError):
+        return _error(
+            f"I couldn't find a location for '{exc.address}' -- ask the customer to "
+            f"double-check it, or provide a more complete address (street, city, state, ZIP)."
+        )
+    return _error(
+        "The geocoding service is temporarily unavailable -- ask the customer to try "
+        "again in a moment."
+    )
 
 
 # --- Step 1: intake (conversational, mergeable) -----------------------------
@@ -237,13 +265,17 @@ def find_candidate_routes(tool_context: ToolContext) -> dict:
       {"ok": true,
        "geocoded_location": {"latitude": .., "longitude": ..},
        "candidate_routes": [{"route_id", "name", "day", "distance_miles"}, ...]}
-      or {"ok": false, "error": "..."} if intake hasn't been completed yet.
+      or {"ok": false, "error": "..."} if intake hasn't been completed yet, or
+      if the address couldn't be geocoded.
     """
     profile = tool_context.state.get(_STATE_PROFILE_KEY)
     if not profile:
         return _error("Call intake_customer first -- there's no address on file yet.")
     customer = _profile_from_state_dict(profile)
-    candidates = geo_lookup(customer, fetch_candidate_routes(), MockGeocoder(), DEFAULT_CONFIG)
+    try:
+        candidates = _find_candidates(customer)
+    except GeocodingError as exc:
+        return _geocoding_error_result(exc)
     return {
         "ok": True,
         "geocoded_location": {
@@ -288,7 +320,10 @@ def evaluate_and_score_routes(tool_context: ToolContext) -> dict:
     if not profile:
         return _error("Call intake_customer first -- there's no address on file yet.")
     customer = _profile_from_state_dict(profile)
-    candidates = geo_lookup(customer, fetch_candidate_routes(), MockGeocoder(), DEFAULT_CONFIG)
+    try:
+        candidates = _find_candidates(customer)
+    except GeocodingError as exc:
+        return _geocoding_error_result(exc)
     evaluations = evaluate_candidates(customer, candidates, DEFAULT_CONFIG)
     return {"ok": True, "routes": [_serialize_evaluation(e) for e in evaluations]}
 
@@ -318,7 +353,10 @@ def recommend_or_escalate(tool_context: ToolContext) -> dict:
     if not profile:
         return _error("Call intake_customer first -- there's no address on file yet.")
     customer = _profile_from_state_dict(profile)
-    candidates = geo_lookup(customer, fetch_candidate_routes(), MockGeocoder(), DEFAULT_CONFIG)
+    try:
+        candidates = _find_candidates(customer)
+    except GeocodingError as exc:
+        return _geocoding_error_result(exc)
     evaluations = evaluate_candidates(customer, candidates, DEFAULT_CONFIG)
     # Deterministic (not LLM-backed) reasoning: this tool is already called
     # from inside an LLM conversation, so generating the natural-language
