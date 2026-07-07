@@ -87,10 +87,14 @@ class Config:
     # --- LLM backend ---
     # "sage"     → enterprise-governed SageLlmRegistry (requires SAGE_CLIENT_ID,
     #              SAGE_CLIENT_SECRET, SAGE_ENVIRONMENT to be set).
-    # "standard" → plain Google ADK / genai string model name (local dev,
-    #              requires GOOGLE_API_KEY or Vertex credentials).
+    # "standard" → `model` below, used directly by Google ADK / genai
+    #              (requires GOOGLE_API_KEY or Vertex credentials) -- unless
+    #              it's a litellm-style "<provider>/<model>" string (e.g.
+    #              "openai/gpt-4o-mini"), in which case shared/llm.py routes
+    #              it through litellm instead (see that module's docstring).
     llm_backend: str = "sage"
-    # Model name used when llm_backend == "standard".
+    # Model name used when llm_backend == "standard" -- a bare Gemini name,
+    # or a "<provider>/<model>" litellm string for any other provider.
     model: str = "gemini-2.5-flash"
     # Model name used when llm_backend == "sage" (Sage-prefixed identifier).
     sage_model: str = "sage-gemini-2.5-flash"

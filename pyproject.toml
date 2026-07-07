@@ -23,6 +23,12 @@ dev = [
     "black",
     "isort",
     "flake8",
+    "google-adk[extensions]>=2.3.0",  # litellm, so tests can exercise a litellm-routed model
+]
+# A litellm-style SMART_ASSIGNMENT_MODEL (see shared/llm.py), e.g.
+# "openai/gpt-4o-mini", needs litellm -- pulled in via ADK's "extensions" extra.
+litellm = [
+    "google-adk[extensions]>=2.3.0",
 ]
 
 [tool.setuptools.packages.find]

@@ -1,8 +1,18 @@
 """
 LLM factory: routes every model-creation and content-generation call through
-the Sysco Sage SDK (enterprise-governed, TLS-injected) when
-SMART_ASSIGNMENT_LLM_BACKEND=sage, or through the standard Google ADK / genai
-path when =standard.  A single env-var flip switches the entire project.
+one of two backends, selected by SMART_ASSIGNMENT_LLM_BACKEND:
+
+  "sage"     → the Sysco Sage SDK (enterprise-governed, TLS-injected).
+  "standard" → SMART_ASSIGNMENT_MODEL is either a bare Gemini model name
+               (e.g. "gemini-2.5-flash", used as-is) or a litellm-style
+               "<provider>/<model>" string (e.g. "openai/gpt-4o-mini",
+               "anthropic/claude-3-7-sonnet-latest"), wrapped in ADK's
+               built-in LiteLlm so litellm handles that provider -- see
+               https://docs.litellm.ai/docs/providers for the full list.
+               Each provider's own env vars apply (e.g. OPENAI_API_KEY);
+               requires the `litellm` extra -- see pyproject.toml.
+
+A single env-var flip switches the entire project between them.
 
 Exports
 -------
@@ -11,7 +21,7 @@ get_llm(config)
 
 generate_text(config, prompt)
     One-shot content generation — used by LLMReasoner so that path also flows
-    through enterprise governance when the Sage backend is active.
+    through the same backend.
 """
 
 from __future__ import annotations
@@ -124,16 +134,28 @@ async def _generate_via_sage_async(llm: Any, prompt: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _is_litellm_model(model: str) -> bool:
+    """True for a litellm-style "<provider>/<model>" string, e.g.
+    "openai/gpt-4o-mini" -- as opposed to a bare Gemini model name."""
+    return "/" in model
+
+
 def get_llm(config: "Config") -> Any:
     """
     Return the value for an ADK LlmAgent ``model=`` parameter.
 
     sage     → SageLlmRegistry LLM object (enterprise-governed, TLS-injected)
-    standard → plain model-name string (standard ADK / local dev)
+    standard → config.model as-is if it's a bare Gemini name, or wrapped in
+               ADK's LiteLlm if it's a "<provider>/<model>" string (any
+               provider litellm supports, e.g. "openai/gpt-4o-mini")
     """
     if config.llm_backend == "sage":
         _check_sage_env_vars()
         return _load_sage_registry().get_llm(config.sage_model)
+    if _is_litellm_model(config.model):
+        from google.adk.models.lite_llm import LiteLlm  # requires the `litellm` extra
+
+        return LiteLlm(model=config.model)
     return config.model
 
 
@@ -142,7 +164,9 @@ def generate_text(config: "Config", prompt: str) -> str:
     One-shot content generation that honours the backend toggle.
 
     sage     → SageLlmRegistry LLM object via ADK BaseLlm (enterprise-governed)
-    standard → google.genai.Client directly (standard / local dev)
+    standard → litellm.completion(...) if config.model is a
+               "<provider>/<model>" string, else google.genai.Client
+               directly for a bare Gemini model name
 
     Raises on failure; callers should guard with ``except Exception``.
 
@@ -155,10 +179,17 @@ def generate_text(config: "Config", prompt: str) -> str:
         llm = _load_sage_registry().get_llm(config.sage_model)
         return asyncio.run(_generate_via_sage_async(llm, prompt))
 
-    # standard path — matches the original LLMReasoner implementation
+    if _is_litellm_model(config.model):
+        import litellm  # requires the `litellm` extra
+
+        resp = litellm.completion(
+            model=config.model, messages=[{"role": "user", "content": prompt}]
+        )
+        return (resp.choices[0].message.content or "").strip()
+
+    # bare Gemini model name — matches the original LLMReasoner implementation
     from google import genai  # type: ignore[import-untyped]
 
     client = genai.Client()
     resp = client.models.generate_content(model=config.model, contents=prompt)
     return (resp.text or "").strip()
-
