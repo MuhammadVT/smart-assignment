@@ -50,7 +50,7 @@ from smart_assignment.shared.models import (
 )
 from smart_assignment.shared.timeutils import fmt_time, parse_time
 from smart_assignment.pipeline import decide, evaluate_candidates, geo_lookup, intake
-from smart_assignment.reasoning import DeterministicReasoner
+from smart_assignment.reasoning import LLMReasoner
 
 # Namespaced so this doesn't collide with other state a larger app might keep.
 _STATE_PROFILE_KEY = "sa_profile"
@@ -358,12 +358,11 @@ def recommend_or_escalate(tool_context: ToolContext) -> dict:
     except GeocodingError as exc:
         return _geocoding_error_result(exc)
     evaluations = evaluate_candidates(customer, candidates, DEFAULT_CONFIG)
-    # Deterministic (not LLM-backed) reasoning: this tool is already called
-    # from inside an LLM conversation, so generating the natural-language
-    # trace via a second, nested model call would be slower, harder to
-    # debug, and unnecessary -- the conversational agent can narrate this
-    # deterministic trace in its own words if it wants to.
-    rec = decide(customer, evaluations, DeterministicReasoner(), DEFAULT_CONFIG)
+    # LLM-backed reasoning by default (LLMReasoner), for a more fluent
+    # narrative; it transparently falls back to the deterministic trace on
+    # any error (no credentials, no network, SDK issue), so this is safe
+    # even when the model/credentials are unavailable.
+    rec = decide(customer, evaluations, LLMReasoner(DEFAULT_CONFIG), DEFAULT_CONFIG)
 
     result = {
         "ok": True,
