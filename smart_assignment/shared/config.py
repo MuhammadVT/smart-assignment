@@ -87,18 +87,17 @@ class Config:
     # --- LLM backend ---
     # "sage"     → enterprise-governed SageLlmRegistry (requires SAGE_CLIENT_ID,
     #              SAGE_CLIENT_SECRET, SAGE_ENVIRONMENT to be set).
-    # "standard" → plain Google ADK / genai string model name (local dev,
-    #              requires GOOGLE_API_KEY or Vertex credentials).
-    # "openai"   → an OpenAI model via litellm (requires OPENAI_API_KEY; see
-    #              shared/llm.py and the `openai` extra in pyproject.toml).
+    # "standard" → `model` below, used directly by Google ADK / genai
+    #              (requires GOOGLE_API_KEY or Vertex credentials) -- unless
+    #              it's a litellm-style "<provider>/<model>" string (e.g.
+    #              "openai/gpt-4o-mini"), in which case shared/llm.py routes
+    #              it through litellm instead (see that module's docstring).
     llm_backend: str = "sage"
-    # Model name used when llm_backend == "standard".
+    # Model name used when llm_backend == "standard" -- a bare Gemini name,
+    # or a "<provider>/<model>" litellm string for any other provider.
     model: str = "gemini-2.5-flash"
     # Model name used when llm_backend == "sage" (Sage-prefixed identifier).
     sage_model: str = "sage-gemini-2.5-flash"
-    # Model name used when llm_backend == "openai" (bare OpenAI model name;
-    # shared/llm.py adds the "openai/" litellm provider prefix).
-    openai_model: str = "gpt-4o-mini"
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -116,7 +115,6 @@ class Config:
             llm_backend=os.environ.get("SMART_ASSIGNMENT_LLM_BACKEND", "sage"),
             model=os.environ.get("SMART_ASSIGNMENT_MODEL", "gemini-2.5-flash"),
             sage_model=os.environ.get("SMART_ASSIGNMENT_SAGE_MODEL", "sage-gemini-2.5-flash"),
-            openai_model=os.environ.get("SMART_ASSIGNMENT_OPENAI_MODEL", "gpt-4o-mini"),
         )
 
 
