@@ -24,6 +24,7 @@ dev = [
     "isort",
     "flake8",
     "google-adk[extensions]>=2.3.0",  # litellm, so tests can exercise a litellm-routed model
+    "ds-utils-lite",
 ]
 # A litellm-style SMART_ASSIGNMENT_MODEL (see shared/llm.py), e.g.
 # "openai/gpt-4o-mini", needs litellm -- pulled in via ADK's "extensions" extra.
@@ -44,3 +45,6 @@ line_length = 100
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+
+[tool.uv.sources]
+ds-utils-lite = { path = "smart_assignment/ds_utils_lite", editable = true }
