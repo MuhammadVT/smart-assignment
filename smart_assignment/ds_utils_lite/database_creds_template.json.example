@@ -1,0 +1,40 @@
+{
+    "comment": "Fill this template, and move it outside of your git repo. Create an environment variable called DATABASE_CREDENTIALS_LOCATION, whose value is the path of your new database credentials json file.",
+    "credentials": [
+        {
+            "clusternm": "SEED_PROD",
+            "user": "",
+            "pswd": ""
+        },
+        {
+            "clusternm": "CATMAN_PROD",
+            "user": "",
+            "pswd": ""
+        },
+        {
+            "clusternm": "SEED_DEV",
+            "user": "",
+            "pswd": ""
+        },
+        {
+            "clusternm": "SDR_PROD",
+            "user": "",
+            "pswd": ""
+        },
+        {
+            "clusternm": "SDR_DEV",
+            "user": "",
+            "pswd": ""
+        },
+        {
+            "clusternm": "ODI_PROD",
+            "user": "",
+            "pswd": ""
+        },
+        {
+            "clusternm": "ODI_DEV",
+            "user": "",
+            "pswd": ""
+        }
+    ]
+}

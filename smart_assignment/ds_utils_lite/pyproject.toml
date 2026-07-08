@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ds-utils-lite"
+version = "0.3.6-beta"
+description = "Lightweight SQL and data-cache subset of ds_utils for data prep scripts."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pandas>=2.0",
+    "psycopg2-binary>=2.9",
+]
+
+[project.optional-dependencies]
+aws = ["boto3>=1.26"]
+mssql = ["pyodbc>=4.0"]
+parquet = ["pyarrow>=14.0"]
+dev = ["pytest>=8.0"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["ds_utils*"]
