@@ -68,6 +68,15 @@
   var MILES_TO_METERS = 1609.34;
   var currentMapData = null;
   var selectedRoutes = {};  // route_id -> bool (which routes to draw)
+  var routeColors = {};     // route_id -> hex colour (distinguishes routes)
+  var routeFeasible = {};   // route_id -> bool
+  // Distinct, non-clashing hues so two routes are never the same colour.
+  // Feasibility is shown by FILL (solid = feasible, hollow ring = infeasible),
+  // not by hue -- so several feasible routes stay distinguishable.
+  var ROUTE_PALETTE = [
+    '#1257a6', '#1a7f37', '#c2410c', '#7b2fb0',
+    '#0e7c7b', '#b8860b', '#9d174d', '#4b5563'
+  ];
 
   function ensureMap() {
     if (mapInstance) { return mapInstance; }
@@ -106,6 +115,15 @@
     return path;
   }
 
+  // Marker fill by feasibility: solid dot when feasible, hollow ring (white
+  // centre) when not -- so a route reads as "in play" vs "ruled out" while its
+  // hue still identifies which route it is.
+  function markerStyle(color, feasible, radius) {
+    return feasible
+      ? { radius: radius, color: color, fillColor: color, fillOpacity: 0.9, weight: 2 }
+      : { radius: radius, color: color, fillColor: '#ffffff', fillOpacity: 1, weight: 2.5 };
+  }
+
   function drawMapLayers() {
     if (!currentMapData || !mapInstance) { return; }
     mapLayer.clearLayers();
@@ -119,7 +137,7 @@
 
     currentMapData.routes.forEach(function (r) {
       if (!selectedRoutes[r.route_id]) { return; }
-      var color = r.feasible ? '#1a7f37' : '#b42318';
+      var color = routeColors[r.route_id];
       var centerLatLng = [r.service_center.lat, r.service_center.lng];
       bounds.push(centerLatLng);
 
@@ -132,7 +150,7 @@
 
       var scoreLine = (r.total_score !== null && r.total_score !== undefined)
         ? ('<br>Score: ' + Math.round(r.total_score * 100) + '%') : '';
-      L.circleMarker(centerLatLng, { radius: 7, color: color, fillColor: color, fillOpacity: 0.85, weight: 2 })
+      L.circleMarker(centerLatLng, markerStyle(color, r.feasible, 7))
         .bindPopup(
           '<b>' + r.route_id + ' · ' + r.name + '</b><br>' + r.day + ' · ' + r.distance_miles + ' mi' +
           '<br>' + (r.feasible ? 'FEASIBLE' : 'INFEASIBLE') + scoreLine
@@ -150,8 +168,7 @@
       ordered.forEach(function (s) {
         var latlng = [s.lat, s.lng];
         bounds.push(latlng);
-        L.circleMarker(latlng, { radius: 3.5, color: color, fillColor: color, fillOpacity: 0.55, weight: 1 })
-          .addTo(mapLayer);
+        L.circleMarker(latlng, markerStyle(color, r.feasible, 3.5)).addTo(mapLayer);
       });
     });
 
@@ -161,24 +178,36 @@
     setTimeout(function () { mapInstance.invalidateSize(); }, 60);
   }
 
+  // Apply a route's colour to a swatch element (solid if feasible, ring if not).
+  function paintSwatch(el, color, feasible) {
+    el.className = 'route-swatch';
+    if (feasible) {
+      el.style.background = color;
+      el.style.border = '2px solid ' + color;
+    } else {
+      el.style.background = 'transparent';
+      el.style.border = '2px solid ' + color;
+    }
+  }
+
   function buildFilterMenu() {
     filterMenu.innerHTML = '';
     currentMapData.routes.forEach(function (r) {
-      var id = 'rtf-' + r.route_id;
       var label = document.createElement('label');
       label.className = 'route-filter-item';
       var cb = document.createElement('input');
       cb.type = 'checkbox';
       cb.checked = !!selectedRoutes[r.route_id];
-      cb.id = id;
       cb.addEventListener('change', function () {
         selectedRoutes[r.route_id] = cb.checked;
         drawMapLayers();
       });
       var swatch = document.createElement('span');
-      swatch.className = 'dot ' + (r.feasible ? 'dot-feasible' : 'dot-infeasible');
+      paintSwatch(swatch, routeColors[r.route_id], r.feasible);
       var text = document.createElement('span');
+      text.className = 'route-filter-name';
       text.textContent = r.route_id + ' · ' + r.name;
+      text.title = r.route_id + ' · ' + r.name + (r.feasible ? ' (feasible)' : ' (infeasible)');
       label.appendChild(cb);
       label.appendChild(swatch);
       label.appendChild(text);
@@ -186,12 +215,35 @@
     });
   }
 
+  // Prefix each evaluated-route card with its map colour so the card, the map
+  // marker, and the filter row all read as the same route.
+  function paintRouteCards() {
+    var cards = routesPanel.querySelectorAll('.routecard[data-route-id]');
+    for (var i = 0; i < cards.length; i++) {
+      var id = cards[i].getAttribute('data-route-id');
+      var color = routeColors[id];
+      if (!color) { continue; }
+      var titleSpan = cards[i].querySelector('.rtitle span');
+      if (!titleSpan || titleSpan.querySelector('.route-swatch')) { continue; }
+      var swatch = document.createElement('span');
+      paintSwatch(swatch, color, routeFeasible[id]);
+      swatch.style.marginRight = '7px';
+      titleSpan.insertBefore(swatch, titleSpan.firstChild);
+    }
+  }
+
   function renderMap(mapData) {
     if (!mapData || !window.L) { mapPanel.style.display = 'none'; return; }
     mapPanel.style.display = '';
     currentMapData = mapData;
     selectedRoutes = {};
-    mapData.routes.forEach(function (r) { selectedRoutes[r.route_id] = true; });  // all on by default
+    routeColors = {};
+    routeFeasible = {};
+    mapData.routes.forEach(function (r, i) {
+      selectedRoutes[r.route_id] = true;  // all on by default
+      routeColors[r.route_id] = ROUTE_PALETTE[i % ROUTE_PALETTE.length];
+      routeFeasible[r.route_id] = r.feasible;
+    });
     ensureMap();
     buildFilterMenu();
     drawMapLayers();
@@ -245,8 +297,9 @@
     outEl.innerHTML = d.resultHtml;
     viz.classList.remove('running');
     viz.classList.add('has-result');
-    renderMap(d.map);
     routesPanel.innerHTML = d.routesHtml || '';
+    renderMap(d.map);        // assigns each route its colour
+    paintRouteCards();       // colour-match the cards to the map markers
   }
 
   // --- Phase 1: deterministic one-shot ---
