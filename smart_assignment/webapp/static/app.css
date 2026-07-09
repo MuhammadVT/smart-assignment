@@ -28,7 +28,9 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
-  min-height: 220px;
+  /* No min-height: the transcript hugs its content and grows with the
+     conversation (up to max-height, then scrolls) -- no blank space under a
+     short greeting. */
   max-height: 58vh;
   overflow-y: auto;
   padding: 4px 2px 8px;
@@ -114,7 +116,48 @@
   gap: 8px;
   margin-bottom: 8px;
 }
-.map-title { font-weight: 700; font-size: 13px; color: var(--navy); }
+.map-title { font-weight: 700; font-size: 13px; color: var(--navy); margin-right: auto; }
+
+/* --- Route filter dropdown --- */
+.map-filter { position: relative; }
+.map-filter-btn {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--blue);
+  background: var(--blue-soft);
+  border: 1px solid #c7d6ea;
+  border-radius: 8px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+.map-filter-btn:hover { background: #dde9fa; }
+.map-filter-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 500;
+  min-width: 220px;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  padding: 6px;
+}
+.route-filter-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: #33415c;
+  padding: 6px 8px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+.route-filter-item:hover { background: var(--blue-soft); }
+.route-filter-item input { accent-color: var(--blue); flex: none; }
+
 .map-legend { display: flex; gap: 12px; font-size: 11.5px; color: var(--muted); flex-wrap: wrap; }
 .legend-item { display: inline-flex; align-items: center; gap: 5px; }
 .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: none; }
@@ -138,6 +181,22 @@
 /* Leaflet popup content reuses the app's font instead of its own default. */
 .leaflet-popup-content { font-family: inherit; font-size: 12.5px; line-height: 1.5; }
 .leaflet-popup-content b { color: var(--navy); }
+
+/* --- Evaluated routes (below the map) --- */
+.routes-panel {
+  display: none;
+  margin-top: 18px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 16px 18px 18px;
+}
+.viz.has-result .routes-panel { display: block; }
+/* The section arrives as <details class="routes">; inside its own card it needs
+   no top divider/margin (that was for sitting under the result card body). */
+.routes-panel .routes { margin-top: 0; border-top: none; padding-top: 0; }
+.routes-panel .routes summary { font-size: 14px; }
 
 @media (max-width: 860px) {
   .transcript { max-height: 46vh; }

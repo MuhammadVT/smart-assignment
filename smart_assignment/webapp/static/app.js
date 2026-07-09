@@ -20,6 +20,9 @@
   var outEl = document.getElementById('sim-output');
   var viz = document.querySelector('.viz');
   var mapPanel = document.getElementById('map-panel');
+  var routesPanel = document.getElementById('routes-panel');
+  var filterBtn = document.getElementById('route-filter-btn');
+  var filterMenu = document.getElementById('route-filter-menu');
 
   var MODE = 'deterministic';
   var SESSION_ID = (window.crypto && window.crypto.randomUUID)
@@ -63,6 +66,8 @@
   var mapInstance = null;
   var mapLayer = null;
   var MILES_TO_METERS = 1609.34;
+  var currentMapData = null;
+  var selectedRoutes = {};  // route_id -> bool (which routes to draw)
 
   function ensureMap() {
     if (mapInstance) { return mapInstance; }
@@ -75,20 +80,45 @@
     return mapInstance;
   }
 
-  function renderMap(mapData) {
-    if (!mapData || !window.L) { mapPanel.style.display = 'none'; return; }
-    mapPanel.style.display = '';
-    var map = ensureMap();
+  // Order a route's stops into a path by nearest-neighbour, starting from the
+  // stop closest to the service center. committed_stops has no real visit
+  // sequence, so this is only a legibility aid: it connects each stop to its
+  // nearest neighbour rather than fanning every stop back to the center.
+  function orderStops(stops, center) {
+    if (stops.length <= 1) { return stops.slice(); }
+    function d2(a, b) {
+      var dx = a.lat - b.lat, dy = a.lng - b.lng;
+      return dx * dx + dy * dy;
+    }
+    var remaining = stops.slice();
+    var path = [];
+    var curr = center;
+    while (remaining.length) {
+      var bestIdx = 0, bestD = Infinity;
+      for (var i = 0; i < remaining.length; i++) {
+        var dd = d2(curr, remaining[i]);
+        if (dd < bestD) { bestD = dd; bestIdx = i; }
+      }
+      curr = remaining[bestIdx];
+      path.push(curr);
+      remaining.splice(bestIdx, 1);
+    }
+    return path;
+  }
+
+  function drawMapLayers() {
+    if (!currentMapData || !mapInstance) { return; }
     mapLayer.clearLayers();
     var bounds = [];
 
-    var custLatLng = [mapData.customer.lat, mapData.customer.lng];
+    var custLatLng = [currentMapData.customer.lat, currentMapData.customer.lng];
     bounds.push(custLatLng);
     L.circleMarker(custLatLng, { radius: 9, color: '#5b3fb0', fillColor: '#5b3fb0', fillOpacity: 0.9, weight: 2 })
-      .bindPopup('<b>' + mapData.customer.name + '</b><br>Prospect location')
+      .bindPopup('<b>' + currentMapData.customer.name + '</b><br>Prospect location')
       .addTo(mapLayer);
 
-    mapData.routes.forEach(function (r) {
+    currentMapData.routes.forEach(function (r) {
+      if (!selectedRoutes[r.route_id]) { return; }
       var color = r.feasible ? '#1a7f37' : '#b42318';
       var centerLatLng = [r.service_center.lat, r.service_center.lng];
       bounds.push(centerLatLng);
@@ -109,24 +139,78 @@
         )
         .addTo(mapLayer);
 
-      r.stops.forEach(function (s) {
+      // Dashed path connecting adjacent stops (nearest-neighbour order), so it's
+      // clear which stops belong to this route without implying a delivery order.
+      var ordered = orderStops(r.stops, r.service_center);
+      if (ordered.length > 1) {
+        L.polyline(ordered.map(function (s) { return [s.lat, s.lng]; }), {
+          color: color, weight: 1.5, opacity: 0.55, dashArray: '5 6'
+        }).addTo(mapLayer);
+      }
+      ordered.forEach(function (s) {
         var latlng = [s.lat, s.lng];
         bounds.push(latlng);
-        // Dashed line back to the route's service center, so it's visually
-        // obvious which stops belong to which route (no real visit order is
-        // implied -- committed_stops isn't a delivery sequence).
-        L.polyline([centerLatLng, latlng], {
-          color: color, weight: 1.5, opacity: 0.5, dashArray: '5 6'
-        }).addTo(mapLayer);
         L.circleMarker(latlng, { radius: 3.5, color: color, fillColor: color, fillOpacity: 0.55, weight: 1 })
           .addTo(mapLayer);
       });
     });
 
-    if (bounds.length) { map.fitBounds(bounds, { padding: [30, 30], maxZoom: 14 }); }
-    // The panel was just made visible (display:none -> block), so Leaflet's
-    // last-known container size is stale until we tell it to re-measure.
-    setTimeout(function () { map.invalidateSize(); }, 60);
+    if (bounds.length) { mapInstance.fitBounds(bounds, { padding: [30, 30], maxZoom: 14 }); }
+    // The panel may have just become visible (display:none -> block), so
+    // Leaflet's last-known container size can be stale until it re-measures.
+    setTimeout(function () { mapInstance.invalidateSize(); }, 60);
+  }
+
+  function buildFilterMenu() {
+    filterMenu.innerHTML = '';
+    currentMapData.routes.forEach(function (r) {
+      var id = 'rtf-' + r.route_id;
+      var label = document.createElement('label');
+      label.className = 'route-filter-item';
+      var cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = !!selectedRoutes[r.route_id];
+      cb.id = id;
+      cb.addEventListener('change', function () {
+        selectedRoutes[r.route_id] = cb.checked;
+        drawMapLayers();
+      });
+      var swatch = document.createElement('span');
+      swatch.className = 'dot ' + (r.feasible ? 'dot-feasible' : 'dot-infeasible');
+      var text = document.createElement('span');
+      text.textContent = r.route_id + ' · ' + r.name;
+      label.appendChild(cb);
+      label.appendChild(swatch);
+      label.appendChild(text);
+      filterMenu.appendChild(label);
+    });
+  }
+
+  function renderMap(mapData) {
+    if (!mapData || !window.L) { mapPanel.style.display = 'none'; return; }
+    mapPanel.style.display = '';
+    currentMapData = mapData;
+    selectedRoutes = {};
+    mapData.routes.forEach(function (r) { selectedRoutes[r.route_id] = true; });  // all on by default
+    ensureMap();
+    buildFilterMenu();
+    drawMapLayers();
+  }
+
+  // Route-filter dropdown open/close.
+  if (filterBtn) {
+    filterBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var open = filterMenu.hidden;
+      filterMenu.hidden = !open;
+      filterBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+    document.addEventListener('click', function (e) {
+      if (!filterMenu.hidden && !filterMenu.contains(e.target) && e.target !== filterBtn) {
+        filterMenu.hidden = true;
+        filterBtn.setAttribute('aria-expanded', 'false');
+      }
+    });
   }
 
   async function animate(d) {
@@ -162,6 +246,7 @@
     viz.classList.remove('running');
     viz.classList.add('has-result');
     renderMap(d.map);
+    routesPanel.innerHTML = d.routesHtml || '';
   }
 
   // --- Phase 1: deterministic one-shot ---

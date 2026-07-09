@@ -229,6 +229,37 @@ def test_workflow_payload_embeds_map_data_for_every_sample():
         assert len(payload["map"]["routes"]) == len(result.candidates_considered)
 
 
+def test_workflow_payload_splits_result_card_and_routes_section():
+    config = Config()
+    bayou = _results(config)[0]
+    payload = build_workflow_payload(bayou, config)
+    # The recommended-route card no longer embeds the routes list -- that moves
+    # to routesHtml (rendered separately, below the map in the web app).
+    assert "Routes the agent evaluated" not in payload["resultHtml"]
+    # routesHtml is a default-open <details> with one rich card per candidate.
+    routes = payload["routesHtml"]
+    assert routes.startswith('<details class="routes" open>')
+    assert f"Routes the agent evaluated ({len(bayou.candidates_considered)})" in routes
+    # Feasible routes get the weighted-factor bar chart; the recommended route is tagged.
+    assert 'class="factors"' in routes
+    assert "★ recommended" in routes
+    assert bayou.recommendation.recommended_route_id in routes
+
+
+def test_route_cards_show_bars_for_feasible_and_checks_for_infeasible():
+    from smart_assignment.reporting.page import _route_cards
+
+    config = Config()
+    # Katy: all routes infeasible -> no factor bars, but every route still shown
+    # with its constraint checks.
+    katy = _results(config)[2]
+    assert all(not e.feasible for e in katy.candidates_considered)
+    html = _route_cards(katy, config)
+    assert "INFEASIBLE" in html
+    assert 'class="factors"' not in html  # nothing scored
+    assert html.count('class="route routecard"') == len(katy.candidates_considered)
+
+
 def test_page_embeds_map_data_in_workflow_json():
     config = Config()
     html = build_page(_results(config), config)
