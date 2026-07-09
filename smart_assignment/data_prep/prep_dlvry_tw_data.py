@@ -1,6 +1,5 @@
 import logging
 import os
-import numpy as np
 import pandas as pd
 import ds_utils
 
@@ -17,6 +16,7 @@ os.environ['DATABASE_CREDENTIALS_LOCATION'] = os.path.realpath(os.path.join(BASE
 # Directory setup
 QUERY_DIR = os.path.realpath(os.path.join(BASE_DIR, '..', 'queries'))
 DATA_LOCATION = os.path.realpath(os.path.join(BASE_DIR, '..', '..', 'data'))
+ROUTES_CACHE_PATH = os.path.join(DATA_LOCATION, 'dev', 'routes.csv.gz')
 OUTPUT_DIR = os.path.realpath(os.path.join(DATA_LOCATION, 'output'))
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 INPUT_DIR = os.path.realpath(os.path.join(DATA_LOCATION, 'input'))
@@ -42,7 +42,6 @@ QUERIES = {
     #     'params': {},
     #     'cache_name': 'co_itm_dim'
     # },
-
 }
 
 
@@ -53,8 +52,7 @@ def fillin_qry_params(qry, qry_params):
     return qry
 
 
-def pull_routes_data(sql, qry=QUERIES['routes'], cache_nm='routes'):
-
+def fetch_route_stop_records(sql, qry=QUERIES['routes'], cache_nm='routes'):
     df = sql.select_sql(qry)
 
     assert len(df) > 0
@@ -63,45 +61,69 @@ def pull_routes_data(sql, qry=QUERIES['routes'], cache_nm='routes'):
 
     return df
 
-def calculate_route_capacity(df):
 
-    df_cap = df.groupby(['route_id', 'route_start_date', 'dlvry_day_nm']).agg(
+def summarize_route_capacity_by_weekday(df):
+    route_capacity_daily = df.groupby(['route_id', 'route_start_date', 'dlvry_day_nm']).agg(
         route_weight_capacity=('route_weight_capacity', 'mean'),
-        route_cube_capacity = ('route_cube_capacity', 'mean'),
-        weight_sum = ('weight', 'sum'),
-        cubes_sum = ('cubes', 'sum'),
-        cases_sum = ('cases', 'sum'),
+        route_cube_capacity=('route_cube_capacity', 'mean'),
+        weight_sum=('weight', 'sum'),
+        cubes_sum=('cubes', 'sum'),
+        cases_sum=('cases', 'sum'),
     ).reset_index()
 
-    df_cap = df_cap.groupby(['route_id', 'dlvry_day_nm']).agg(
-        # route_dayofweek = ('dlvry_day_nm', lambda x: ':'.join(sorted(set(x)))),
+    route_capacity_summary = route_capacity_daily.groupby(['route_id', 'dlvry_day_nm']).agg(
         route_weight_capacity=('route_weight_capacity', 'mean'),
         route_cube_capacity=('route_cube_capacity', 'mean'),
         weight_sum=('weight_sum', 'mean'),
         cubes_sum=('cubes_sum', 'mean'),
         cases_sum=('cases_sum', 'mean'),
     ).reset_index()
-    df_cap['route_weigh_capacity_pct'] = df_cap['weight_sum'] / df_cap['route_weight_capacity']
-    df_cap['route_cube_capacity_pct'] = df_cap['cubes_sum'] / df_cap['route_cube_capacity']
-    df_cap['route_case_capacity'] = df_cap['cases_sum'] / df_cap['route_cube_capacity_pct']  # TODO: validate this assumption
+    route_capacity_summary['route_weigh_capacity_pct'] = (
+        route_capacity_summary['weight_sum'] / route_capacity_summary['route_weight_capacity']
+    )
+    route_capacity_summary['route_cube_capacity_pct'] = (
+        route_capacity_summary['cubes_sum'] / route_capacity_summary['route_cube_capacity']
+    )
+    route_capacity_summary['route_case_capacity'] = (
+        route_capacity_summary['cases_sum'] / route_capacity_summary['route_cube_capacity_pct']
+    )  # TODO: validate this assumption
 
-    return df_cap
+    return route_capacity_summary
 
-def get_route_stops_locations(df):
+
+def summarize_stop_geographies(df):
     """Stop coordinates and route service centers keyed by route_id and dlvry_day_nm."""
 
-    df_stop_locations = df.groupby(['route_id', 'route_nm', 'dlvry_day_nm', 'co_cust_nbr']).agg(
+    stop_locations = df.groupby(['route_id', 'route_nm', 'dlvry_day_nm', 'co_cust_nbr']).agg(
         latitude=('latitude', 'mean'),
         longitude=('longitude', 'mean'),
     ).reset_index()
 
     # TODO: find the center point in a more accurate way
-    df_service_centers = df_stop_locations.groupby(['route_id', 'route_nm', 'dlvry_day_nm']).agg(
+    service_centers = stop_locations.groupby(['route_id', 'route_nm', 'dlvry_day_nm']).agg(
         service_center_latitude=('latitude', 'mean'),
         service_center_longitude=('longitude', 'mean'),
     ).reset_index()
 
-    return df_stop_locations, df_service_centers
+    return stop_locations, service_centers
+
+
+def build_route_summary_tables(raw_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    route_capacity_summary = summarize_route_capacity_by_weekday(raw_df)
+    stop_locations, service_centers = summarize_stop_geographies(raw_df)
+    route_summary = route_capacity_summary.merge(
+        service_centers,
+        on=['route_id', 'dlvry_day_nm'],
+        how='inner',
+        validate='1:1',
+    )
+    return route_summary, stop_locations
+
+
+# Backward-compatible aliases for existing callers/tests.
+pull_routes_data = fetch_route_stop_records
+calculate_route_capacity = summarize_route_capacity_by_weekday
+get_route_stops_locations = summarize_stop_geographies
 
 # def pull_dot_base_data(sql, strt_wk, end_wk, markets, qry=QUERIES['dot_base'], cache_nm=None):
 #
@@ -130,10 +152,6 @@ if __name__ == '__main__':
                            ignore_cache=IGNORE_CACHE, default_cache_extension=DEFAULT_CACHE_EXTENSION)
     sql = ds_utils.SQLAccess(RUN_MODE, data=cachey)
 
-    df = pull_routes_data(sql)
-
-    df_route_capacity = calculate_route_capacity(df)
-
-    df_stop_locations, df_service_centers = get_route_stops_locations(df)
-
-    df_route = df_route_capacity.merge(df_service_centers, on=['route_id', 'dlvry_day_nm'], how='inner', validate='1:1')
+    raw_df = fetch_route_stop_records(sql)
+    df_routes, df_stop_locations = build_route_summary_tables(raw_df)
+

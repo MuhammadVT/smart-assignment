@@ -91,7 +91,10 @@ ConstraintFn = Callable[[CustomerProfile, Route, EvalContext, Config], Constrain
 def geographic_serviceability(
     customer: CustomerProfile, route: Route, ctx: EvalContext, config: Config
 ) -> ConstraintOutcome:
-    limit = min(route.service_radius_miles, config.max_service_distance_miles)
+    if route.service_radius_miles is None:
+        limit = config.max_service_distance_miles
+    else:
+        limit = min(route.service_radius_miles, config.max_service_distance_miles)
     passed = ctx.distance_miles <= limit
     return ConstraintOutcome(
         name=CONSTRAINT_GEOGRAPHIC_SERVICEABILITY,

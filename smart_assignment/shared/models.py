@@ -100,7 +100,6 @@ class RouteStop:
 
     customer_number: str  # Sysco customer number (NNN-NNNNNN)
     location: GeoPoint
-    case_volume: int
 
 
 @dataclass
@@ -110,21 +109,26 @@ class Route:
 
     `service_center` + `service_radius_miles` describe the route's
     serviceable area; `committed_stops` are the accounts already on it (used
-    for both remaining-capacity and geographic-clustering math).
+    for geographic-clustering math). Load and capacity fields feed capacity math.
     """
 
     route_id: str
     name: str
     day: DayOfWeek
     service_center: GeoPoint
-    service_radius_miles: float
-    vehicle_capacity_cases: int
+    service_radius_miles: Optional[float] = None
+    vehicle_capacity_weight: float = 0.0
+    vehicle_capacity_cases: float = 0.0
+    vehicle_capacity_cubes: float = 0.0
+    avg_load_weight: float = 0.0
+    avg_load_cases: float = 0.0
+    avg_load_cubes: float = 0.0
     available_windows: list[Window] = field(default_factory=list)
     committed_stops: list[RouteStop] = field(default_factory=list)
 
     @property
     def committed_volume_cases(self) -> int:
-        return sum(stop.case_volume for stop in self.committed_stops)
+        return self.avg_load_cases
 
 
 # ---------------------------------------------------------------------------

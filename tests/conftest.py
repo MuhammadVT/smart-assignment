@@ -45,9 +45,10 @@ def open_route() -> Route:
         service_center=GeoPoint(29.7589, -95.3677),
         service_radius_miles=12.0,
         vehicle_capacity_cases=1000,
+        avg_load_cases=120,
         available_windows=[(time(7, 0), time(10, 0))],
         committed_stops=[
-            RouteStop("067-090001", GeoPoint(29.7560, -95.3650), 120),
+            RouteStop("067-090001", GeoPoint(29.7560, -95.3650)),
         ],
     )
 
@@ -62,9 +63,10 @@ def full_route() -> Route:
         service_center=GeoPoint(29.7589, -95.3677),
         service_radius_miles=12.0,
         vehicle_capacity_cases=500,
+        avg_load_cases=470,
         available_windows=[(time(7, 0), time(10, 0))],
         committed_stops=[
-            RouteStop("067-090002", GeoPoint(29.7560, -95.3650), 470),
+            RouteStop("067-090002", GeoPoint(29.7560, -95.3650)),
         ],
     )
 
