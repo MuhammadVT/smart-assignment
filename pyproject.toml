@@ -16,6 +16,7 @@ dependencies = [
     "truststore>=0.9.1",
     "pandas>=2.0",
     "ds-utils-lite",
+    "python-dotenv>=1.0",
     # Transitive deps for the vendored Sage SDK (loaded via sys.path in shared/llm.py)
     "json-repair>=0.52.3",
     "litellm==1.83.7",

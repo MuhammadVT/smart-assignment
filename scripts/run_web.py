@@ -16,11 +16,19 @@ from __future__ import annotations
 import argparse
 import os
 
+from dotenv import load_dotenv
+
+# Load .env (if present) first, so a real SMART_ASSIGNMENT_LLM_BACKEND/credential
+# set there is already in os.environ before the "standard" default below is
+# considered -- load_dotenv() never overrides a variable that's already set.
+load_dotenv()
+
 # Importing the package is credential-free (root_agent is built lazily), so this
 # is not needed just to start the app. It defaults the webapp to the
 # credential-free "standard" backend as a convenience, so conversational (llm)
 # mode activates as soon as you add a GOOGLE_API_KEY -- without also having to
-# set the backend. An explicitly-set SMART_ASSIGNMENT_LLM_BACKEND still wins.
+# set the backend. An explicitly-set SMART_ASSIGNMENT_LLM_BACKEND (including one
+# from .env) still wins.
 os.environ.setdefault("SMART_ASSIGNMENT_LLM_BACKEND", "standard")
 
 

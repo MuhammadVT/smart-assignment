@@ -32,6 +32,14 @@ import json
 from pathlib import Path
 from typing import Optional
 
+from dotenv import load_dotenv
+
+# Load .env (if present) before any smart_assignment import below, so a backend
+# choice or credentials set there are in os.environ before Config.from_env()
+# resolves DEFAULT_CONFIG at import time. Covers running this module directly
+# (e.g. `uvicorn smart_assignment.webapp.app:app`) without scripts/run_web.py.
+load_dotenv()
+
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
