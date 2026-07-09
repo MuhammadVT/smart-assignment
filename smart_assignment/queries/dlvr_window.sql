@@ -58,7 +58,7 @@ SELECT twor.co_nbr || '-' || twor.cust_nbr as co_cust_nbr
        , ploc.region1 as cty_nm
        , LEFT(ploc.postalcode,5) as zip_cd
        , decode(twor.tw_days, 'M', 'Monday', 'T', 'Tuesday', 'W', 'Wednesday', 'R', 'Thursday', 'F', 'Friday', 'S',
-                        'Saturday', 'U', 'Sunday', 'NA') as dlvry_day_nm
+                        'Saturday', 'U', 'Sunday', 'NA') as tw_dlvry_day_nm
        , CASE WHEN ploc.deliverydays LIKE '%' || twor.tw_days || '%' THEN 1
            ELSE 0 END AS scheduled_day_ind
        , twor.operatingcompanyid

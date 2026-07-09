@@ -18,6 +18,7 @@ QUERY_DIR = os.path.realpath(os.path.join(BASE_DIR, '..', 'queries'))
 DATA_LOCATION = os.path.realpath(os.path.join(BASE_DIR, '..', '..', 'data'))
 ROUTES_CACHE_PATH = os.path.join(DATA_LOCATION, 'dev', 'routes.csv.gz')
 CUST_TIER_CACHE_PATH = os.path.join(DATA_LOCATION, 'dev', 'cust_tier.csv.gz')
+DLVR_WINDOW_CACHE_PATH = os.path.join(DATA_LOCATION, 'dev', 'dlvr_window.csv.gz')
 OUTPUT_DIR = os.path.realpath(os.path.join(DATA_LOCATION, 'output'))
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 INPUT_DIR = os.path.realpath(os.path.join(DATA_LOCATION, 'input'))
@@ -36,6 +37,12 @@ QUERIES = {
         'clusternm': 'SEED_PROD',
         'params': {},
         'cache_name': 'cust_tier'
+    },
+    'dlvr_window': {
+        'path': os.path.join(QUERY_DIR, 'dlvr_window.sql'),
+        'clusternm': 'ODI_PROD',
+        'params': {},
+        'cache_name': 'dlvr_window'
     },
     # 'dot_base': {
     #     'path': os.path.join(QUERY_DIR, 'dot_base.sql'),
@@ -74,6 +81,15 @@ def fetch_cust_tier_records(sql, qry=QUERIES['cust_tier'], cache_nm='cust_tier')
 
     assert len(df) > 0
     df = df.drop_duplicates(subset=['co_cust_nbr'])
+
+    return df
+
+
+def fetch_dlvr_window_records(sql, qry=QUERIES['dlvr_window'], cache_nm='dlvr_window'):
+    df = sql.select_sql(qry)
+
+    assert len(df) > 0
+    df = df.drop_duplicates()
 
     return df
 
@@ -159,6 +175,7 @@ def build_route_summary_tables(
 # Backward-compatible aliases for existing callers/tests. # TODO: remove these later
 pull_routes_data = fetch_route_stop_records
 pull_cust_tier_data = fetch_cust_tier_records
+pull_dlvr_window_data = fetch_dlvr_window_records
 calculate_route_capacity = summarize_route_capacity_by_weekday
 get_route_stops_locations = summarize_stop_geographies
 
@@ -191,5 +208,7 @@ if __name__ == '__main__':
 
     raw_df = fetch_route_stop_records(sql)
     cust_tier_df = fetch_cust_tier_records(sql)
+    dlvr_window_df = fetch_dlvr_window_records(sql)
+
     df_routes, df_stop_locations = build_route_summary_tables(raw_df, cust_tier_df)
 

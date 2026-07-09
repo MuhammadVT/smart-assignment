@@ -29,7 +29,7 @@ join edwp.sfdc_account_dim as sfdc on sfdc.acct_id = (co.co_nbr||'-'||cust.cust_
 where cust.curr_rec_ind = 'Y'
     and cust.src_sys_cd = 'SUS'
     and cust.acct_typ_cd IN ('TRS', 'LCC', 'CMU', 'OTH')
-    and co.co_skey in (67)  -- {OPCO}
+    and co.co_skey in (67)  -- {OPCO}  -- TODO: make this a parameter
     and cust_tier = 'Perks'
 
 UNION
@@ -39,6 +39,6 @@ select  LEFT(css.co_cust_nbr, 3) || '-' || css.cust_nbr as co_cust_nbr
 from s_eat_cust_seg.cust_lf_cyc_seg_aggr_fact_vw css
 where 1 = 1
     and css.tier in ('4', '5')
-    and css.co_skey IN ('067')-- {OPCO}
+    and css.co_skey IN ('067')-- {OPCO}  -- Make this a parameter
 
 -- limit 10;
