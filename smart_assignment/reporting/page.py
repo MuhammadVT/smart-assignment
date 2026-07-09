@@ -488,7 +488,8 @@ def _route_cards(result: RecommendationResult, config: Config) -> str:
     feasible routes get the same score bar + weighted-factor bars the recommended
     route shows, infeasible routes show why they failed. Open by default (the
     ``<summary>`` still collapses it). Ranked-feasible first (so the recommended
-    route leads), then the infeasible ones."""
+    route leads), then the infeasible ones. Each card carries ``data-route-id``
+    so the web app can tint it to match the route's colour on the map."""
     rec = result.recommendation
     winner_id = rec.recommended_route_id
     threshold = config.total_score_threshold
@@ -515,7 +516,7 @@ def _route_cards(result: RecommendationResult, config: Config) -> str:
             status = '<span class="status bad">INFEASIBLE</span>'
             body = ""
         cards.append(
-            f'<div class="route routecard"><div class="rtitle">'
+            f'<div class="route routecard" data-route-id="{_esc(r.route_id)}"><div class="rtitle">'
             f"<span>{title}{rec_tag}</span>{status}</div>"
             f'{body}<ul class="checks">{_route_checks(cand)}</ul></div>'
         )

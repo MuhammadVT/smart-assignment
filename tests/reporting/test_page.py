@@ -250,14 +250,16 @@ def test_route_cards_show_bars_for_feasible_and_checks_for_infeasible():
     from smart_assignment.reporting.page import _route_cards
 
     config = Config()
-    # Katy: all routes infeasible -> no factor bars, but every route still shown
-    # with its constraint checks.
+    # Katy: all routes infeasible -> no factor bars (they never reach scoring),
+    # but every route still shown with its constraint checks and a data-route-id
+    # for the web app to colour-match to the map.
     katy = _results(config)[2]
     assert all(not e.feasible for e in katy.candidates_considered)
     html = _route_cards(katy, config)
     assert "INFEASIBLE" in html
     assert 'class="factors"' not in html  # nothing scored
     assert html.count('class="route routecard"') == len(katy.candidates_considered)
+    assert html.count("data-route-id=") == len(katy.candidates_considered)
 
 
 def test_page_embeds_map_data_in_workflow_json():
