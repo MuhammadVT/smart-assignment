@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Smart Assignment — Chat with the delivery-slot agent</title>
+<meta name="description" content="Chat with the Smart Assignment agent and watch its five-step delivery-slot workflow run live, step by step." />
+<!-- Shared Simulator CSS is injected at serve time from reporting/page.py (_STYLE). -->
+<style>/*__SHARED_STYLE__*/</style>
+<link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+<header class="hero">
+  <div class="wrap">
+    <span class="chip">🤖 Live agent · Sysco</span>
+    <h1>Smart Assignment — live</h1>
+    <p class="lead">Tell the agent about a new prospect — address, order size in cases,
+      and an optional preferred day + time — and watch it run the five-step workflow
+      and recommend (or escalate) a delivery slot.</p>
+  </div>
+</header>
+
+<main class="wrap app">
+  <div class="app-grid">
+    <!-- Left: the chat -->
+    <section class="chat" aria-label="Chat with the agent">
+      <div id="transcript" class="transcript" role="log" aria-live="polite"></div>
+
+      <div class="picker">
+        <span class="picker-label">Sample prospects — click one to drop it into the box,
+          then press <b>Send</b>:</span>
+        <div id="chips" class="chips"></div>
+      </div>
+
+      <form id="composer" class="composer" autocomplete="off">
+        <input id="msg-input" type="text"
+               placeholder="e.g. 1200 McKinney St, Houston, TX 77010, 90 cases, TUE 07:00-10:00"
+               aria-label="Message to the agent" />
+        <button id="send-btn" type="submit" class="run">Send</button>
+      </form>
+    </section>
+
+    <!-- Right: the live workflow visualization (same cards as the Simulator) -->
+    <section class="sim viz" aria-label="Agent workflow visualization">
+      <div id="sim-steps"></div>
+      <div id="sim-output" class="sim-output"></div>
+      <div id="viz-empty" class="viz-empty">
+        The agent's workflow will appear here — Intake → Geo-Lookup → Constraint Check
+        → Score &amp; Rank → Recommend / Decide.
+      </div>
+    </section>
+  </div>
+</main>
+
+<footer>
+  <div class="wrap">
+    Runs the real deterministic pipeline (<code>run_slot_recommendation</code>) — same numbers
+    as <code>scripts/run_local.py</code> and the published Simulator.
+  </div>
+</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

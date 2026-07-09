@@ -1,0 +1,98 @@
+/*
+ * Chat-specific styles for the live web app.
+ *
+ * The step/result cards, pills, factor bars, and colour variables all come from
+ * the shared Simulator stylesheet (reporting/page.py `_STYLE`), injected into the
+ * page at serve time. This file only adds what the chat layout needs on top.
+ */
+
+.app { padding: 30px 20px 10px; }
+
+.app-grid {
+  display: grid;
+  grid-template-columns: minmax(320px, 440px) 1fr;
+  gap: 22px;
+  align-items: start;
+}
+
+/* --- Chat column --- */
+.chat {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 18px;
+  position: sticky;
+  top: 18px;
+}
+
+.transcript {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 120px;
+  max-height: 46vh;
+  overflow-y: auto;
+  padding: 4px 2px 8px;
+}
+
+.bubble {
+  max-width: 86%;
+  padding: 10px 13px;
+  border-radius: 13px;
+  font-size: 13.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+.bubble.user {
+  align-self: flex-end;
+  background: var(--blue);
+  color: #fff;
+  border-bottom-right-radius: 4px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+.bubble.agent {
+  align-self: flex-start;
+  background: var(--blue-soft);
+  color: #22364f;
+  border-bottom-left-radius: 4px;
+}
+.bubble.agent.thinking { color: var(--muted); font-style: italic; }
+.bubble.agent.error { background: var(--red-soft); color: var(--red); }
+
+.composer {
+  display: flex;
+  gap: 9px;
+  margin-top: 14px;
+}
+.composer input {
+  flex: 1;
+  font-size: 14px;
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  font-family: var(--mono);
+  min-width: 0;
+}
+.composer input.flash { animation: flash .8s ease; }
+.composer button:disabled { opacity: .55; cursor: default; box-shadow: none; }
+
+.chips { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* --- Visualization column --- */
+.viz { position: relative; min-height: 220px; }
+.viz-empty {
+  color: var(--muted);
+  font-size: 13.5px;
+  padding: 8px 4px;
+}
+.viz.running .viz-empty,
+.viz.has-result .viz-empty { display: none; }
+
+@media (max-width: 860px) {
+  .app-grid { grid-template-columns: 1fr; }
+  .chat { position: static; }
+  .transcript { max-height: 40vh; }
+}

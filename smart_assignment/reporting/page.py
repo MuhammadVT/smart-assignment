@@ -830,20 +830,29 @@ def _config_sources(config: Config, results: list[RecommendationResult]) -> str:
     </div>"""
 
 
+def build_workflow_payload(result: RecommendationResult, config: Config) -> dict:
+    """The visualization payload for one workflow run: the animated step cards
+    plus the final result card.
+
+    This is the single source of truth for the Simulator's data, shared by the
+    static page generator (``build_page``) and the live web app
+    (``smart_assignment.webapp``) so the interactive UI can never drift from the
+    published examples — both render the exact same structure.
+    """
+    return {
+        "name": _esc(result.customer.name),
+        "address": _esc(result.customer.address),
+        "steps": _sim_steps(result, config),
+        "resultHtml": _example_card(result),
+    }
+
+
 def build_page(results: list[RecommendationResult], config: Config) -> str:
     """Render the full three-tab overview HTML from live workflow results."""
     threshold = f"{config.total_score_threshold:.0%}"
     top_n = config.top_n_candidate_routes
     cards = "".join(_example_card(r) for r in results)
-    payload = {
-        r.customer.lookup_key: {
-            "name": _esc(r.customer.name),
-            "address": _esc(r.customer.address),
-            "steps": _sim_steps(r, config),
-            "resultHtml": _example_card(r),
-        }
-        for r in results
-    }
+    payload = {r.customer.lookup_key: build_workflow_payload(r, config) for r in results}
     data_block = (
         '<script type="application/json" id="workflow-data">'
         + json.dumps(payload, ensure_ascii=False)

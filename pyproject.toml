@@ -31,9 +31,21 @@ dev = [
 litellm = [
     "google-adk[extensions]>=2.3.0",
 ]
+# The live chat web app (smart_assignment/webapp). Runs the deterministic
+# pipeline offline -- no LLM key needed. Serve with:
+#   uvicorn smart_assignment.webapp.app:app --reload
+web = [
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+]
 
 [tool.setuptools.packages.find]
 include = ["smart_assignment*"]
+
+[tool.setuptools.package-data]
+# Ship the web app's static assets (chat HTML/CSS/JS) inside the package so a
+# wheel build serves them, not just editable installs.
+"smart_assignment.webapp" = ["static/*"]
 
 [tool.black]
 line-length = 100

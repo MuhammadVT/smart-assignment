@@ -221,6 +221,36 @@ For a fully offline look at the same pipeline with zero ADK/LLM runtime, see
 `scripts/run_local.py` above. `adk deploy` uses whichever `root_agent` you
 point it at (see `deployment/deploy.py`).
 
+## Live chat web app (`smart_assignment/webapp`)
+
+A small FastAPI app that puts a **chat interface** in front of the workflow and
+**visualizes each step live** — the same animated Intake → Geo-Lookup →
+Constraint Check → Score & Rank → Recommend/Decide cards the GitHub Pages
+**Simulator** shows, but driven by the real pipeline on *any* address you type,
+not just the four bundled samples.
+
+```bash
+pip install -e ".[web]"
+python3 scripts/run_web.py            # http://127.0.0.1:8000
+```
+
+Phase 1 runs **fully offline with no API key** — every recommendation goes
+through the same `run_slot_recommendation` + deterministic reasoner as
+`scripts/run_local.py`, and the browser renders the identical payload built by
+`reporting/page.build_workflow_payload`, so the live UI can't drift from the
+published Simulator. Type an address plus an order size in cases (a preferred
+day + time is optional), e.g.
+`1200 McKinney St, Houston, TX 77010, 90 cases, TUE 07:00-10:00`, or click a
+sample chip. The chat parses intake fields with a small deterministic parser
+(`webapp/parse.py`) and asks a clarifying question when something is missing.
+
+> The `standard` (credential-free) LLM backend is selected automatically by
+> `run_web.py`; to launch via uvicorn directly, set it yourself:
+> `SMART_ASSIGNMENT_LLM_BACKEND=standard uvicorn smart_assignment.webapp.app:app`.
+> A future Phase 2 can stream the real ADK `root_agent` for genuine
+> natural-language conversation (needs LLM creds) while reusing the same
+> step-card rendering.
+
 ## Testing
 
 ```bash
