@@ -51,15 +51,21 @@
       <div id="map-panel" class="map-panel" aria-label="Proximity map">
         <div class="map-head">
           <span class="map-title">Proximity map</span>
+          <div class="map-filter">
+            <button id="route-filter-btn" type="button" class="map-filter-btn" aria-haspopup="true"
+                    aria-expanded="false">Routes ▾</button>
+            <div id="route-filter-menu" class="map-filter-menu" role="menu" hidden></div>
+          </div>
           <span class="map-legend">
             <span class="legend-item"><span class="dot dot-customer"></span>Prospect</span>
             <span class="legend-item"><span class="dot dot-feasible"></span>Feasible route</span>
             <span class="legend-item"><span class="dot dot-infeasible"></span>Infeasible route</span>
-            <span class="legend-item"><span class="dash-swatch"></span>Route ↔ stop</span>
+            <span class="legend-item"><span class="dash-swatch"></span>Stop path</span>
           </span>
         </div>
         <div id="map"></div>
       </div>
+      <div id="routes-panel" class="routes-panel" aria-label="Evaluated routes"></div>
       <div id="viz-empty" class="viz-empty">
         The agent's workflow will appear here — Intake → Geo-Lookup → Constraint Check
         → Score &amp; Rank → Recommend / Decide.

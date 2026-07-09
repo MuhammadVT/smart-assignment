@@ -60,6 +60,11 @@ def test_recommend_returns_five_step_payload_and_result():
     ]
     # A clean downtown recommend should render a recommend pill in the result card.
     assert "Recommended" in payload["resultHtml"]
+    # The evaluated-routes breakdown is a separate default-open section (rendered
+    # below the map in the UI), not embedded in the result card.
+    assert "Routes the agent evaluated" not in payload["resultHtml"]
+    assert payload["routesHtml"].startswith('<details class="routes" open>')
+    assert "★ recommended" in payload["routesHtml"]
     # Proximity-map data rides along in the same payload -- customer + every
     # evaluated route's service center and stops, for the frontend map.
     m = payload["map"]

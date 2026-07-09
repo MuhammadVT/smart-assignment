@@ -227,9 +227,15 @@ _STYLE = """
   .routelist { margin-top: 10px; display: grid; gap: 8px; }
   .route { border: 1px solid var(--line); border-radius: 9px; padding: 9px 11px; font-size: 12.5px; }
   .route .rtitle { display: flex; justify-content: space-between; gap: 8px; font-weight: 600; }
-  .route .status { font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 5px; }
+  .route .status { font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 5px; white-space: nowrap; }
   .route .status.ok { background: var(--green-soft); color: var(--green); }
   .route .status.bad { background: var(--red-soft); color: var(--red); }
+  .route.routecard { padding: 12px 13px; }
+  .route.routecard .score { margin-top: 8px; }
+  .route.routecard .score .bar { height: 8px; }
+  .route.routecard .factors { margin-top: 9px; }
+  .rectag { font-size: 10px; font-weight: 700; color: var(--green); background: var(--green-soft);
+    border-radius: 999px; padding: 2px 7px; margin-left: 6px; white-space: nowrap; }
   .checks { margin: 6px 0 0; padding-left: 0; list-style: none; color: var(--muted); }
   .checks li { padding: 1px 0; }
   .checks li .ok { color: var(--green); font-weight: 700; }
@@ -387,7 +393,7 @@ _SIM_JS = """
       await sleep(260);
     }
     await sleep(180);
-    outEl.innerHTML = d.resultHtml;
+    outEl.innerHTML = d.resultHtml + (d.routesHtml || '');
     runBtn.disabled = false;
   }
 
@@ -451,9 +457,9 @@ def _factor_value(cand: CandidateEvaluation, name: str) -> float:
     return 0.0
 
 
-def _factor_rows(rec) -> str:
+def _factor_bars(factor_scores) -> str:
     rows = []
-    for f in rec.factor_breakdown:
+    for f in factor_scores:
         label = FACTOR_LABEL.get(f.name, f.name)
         pct = round(f.value * 100)
         rows.append(
@@ -464,6 +470,62 @@ def _factor_rows(rec) -> str:
     return "".join(rows)
 
 
+def _factor_rows(rec) -> str:
+    return _factor_bars(rec.factor_breakdown)
+
+
+def _route_checks(cand: CandidateEvaluation) -> str:
+    checks = []
+    for oc in cand.constraint_outcomes:
+        sym = '<span class="ok">✓</span>' if oc.passed else '<span class="no">✗</span>'
+        label = CONSTRAINT_LABEL.get(oc.name, oc.name)
+        checks.append(f"<li>{sym} {_esc(label)}: {_esc(oc.detail)}</li>")
+    return "".join(checks)
+
+
+def _route_cards(result: RecommendationResult, config: Config) -> str:
+    """The "Routes the agent evaluated" section: one rich card per candidate --
+    feasible routes get the same score bar + weighted-factor bars the recommended
+    route shows, infeasible routes show why they failed. Open by default (the
+    ``<summary>`` still collapses it). Ranked-feasible first (so the recommended
+    route leads), then the infeasible ones."""
+    rec = result.recommendation
+    winner_id = rec.recommended_route_id
+    threshold = config.total_score_threshold
+    ordered = list(result.ranked_feasible) + [
+        e for e in result.candidates_considered if not e.feasible
+    ]
+    n = len(result.candidates_considered)
+
+    cards = []
+    for cand in ordered:
+        r = cand.route
+        title = f"{_esc(r.route_id)} · {_esc(r.name)} · {r.day.value} · {cand.distance_miles:.1f} mi"
+        rec_tag = ' <span class="rectag">★ recommended</span>' if r.route_id == winner_id else ""
+        if cand.feasible:
+            status = f'<span class="status ok">FEASIBLE · {cand.total_score:.2f}</span>'
+            score_cls = "g" if cand.total_score >= threshold else "a"
+            pct = round(cand.total_score * 100)
+            body = (
+                f'<div class="score"><div class="bar">'
+                f'<span class="{score_cls}" style="width:{pct}%"></span></div></div>'
+                f'<div class="factors">{_factor_bars(cand.factor_scores)}</div>'
+            )
+        else:
+            status = '<span class="status bad">INFEASIBLE</span>'
+            body = ""
+        cards.append(
+            f'<div class="route routecard"><div class="rtitle">'
+            f"<span>{title}{rec_tag}</span>{status}</div>"
+            f'{body}<ul class="checks">{_route_checks(cand)}</ul></div>'
+        )
+
+    return (
+        f'<details class="routes" open><summary>Routes the agent evaluated ({n})</summary>'
+        f'<div class="routelist">{"".join(cards)}</div></details>'
+    )
+
+
 def _route_rows(candidates: list[CandidateEvaluation]) -> str:
     rows = []
     for cand in candidates:
@@ -472,21 +534,16 @@ def _route_rows(candidates: list[CandidateEvaluation]) -> str:
             status_cls, status = "ok", f"FEASIBLE · {cand.total_score:.2f}"
         else:
             status_cls, status = "bad", "INFEASIBLE"
-        checks = []
-        for oc in cand.constraint_outcomes:
-            sym = '<span class="ok">✓</span>' if oc.passed else '<span class="no">✗</span>'
-            label = CONSTRAINT_LABEL.get(oc.name, oc.name)
-            checks.append(f"<li>{sym} {_esc(label)}: {_esc(oc.detail)}</li>")
         title = f"{_esc(r.route_id)} · {_esc(r.name)} · {r.day.value} · {cand.distance_miles:.1f} mi"
         rows.append(
             f'<div class="route"><div class="rtitle"><span>{title}</span>'
             f'<span class="status {status_cls}">{status}</span></div>'
-            f'<ul class="checks">{"".join(checks)}</ul></div>'
+            f'<ul class="checks">{_route_checks(cand)}</ul></div>'
         )
     return "".join(rows)
 
 
-def _example_card(result: RecommendationResult) -> str:
+def _example_card(result: RecommendationResult, include_routes: bool = True) -> str:
     c = result.customer
     rec = result.recommendation
     pill_cls, pill_text = DECISION_PILL[rec.decision]
@@ -522,6 +579,12 @@ def _example_card(result: RecommendationResult) -> str:
     reason_label = "Why the agent escalated" if rec.requires_human_review else "Why the agent chose this"
 
     cnum_text = _esc(c.customer_number) if c.customer_number else "new prospect — no Sysco number yet"
+    routes_html = (
+        f'<details class="routes"><summary>Routes the agent evaluated ({n_routes})</summary>'
+        f'<div class="routelist">{_route_rows(result.candidates_considered)}</div></details>'
+        if include_routes
+        else ""
+    )
     return f"""
       <article class="result">
         <div class="rhead">
@@ -544,9 +607,7 @@ def _example_card(result: RecommendationResult) -> str:
           {slot_html}
           {factors_html}
           <div class="reason"><span class="lbl">{reason_label}</span>{_esc(rec.reasoning)}</div>
-          <details class="routes"><summary>Routes the agent evaluated ({n_routes})</summary>
-            <div class="routelist">{_route_rows(result.candidates_considered)}</div>
-          </details>
+          {routes_html}
         </div>
       </article>"""
 
@@ -885,7 +946,11 @@ def build_workflow_payload(result: RecommendationResult, config: Config) -> dict
         "name": _esc(result.customer.name),
         "address": _esc(result.customer.address),
         "steps": _sim_steps(result, config),
-        "resultHtml": _example_card(result),
+        # The recommended-route card, without its embedded routes list -- the full
+        # evaluated-routes breakdown is `routesHtml`, rendered separately (below
+        # the map in the web app) so it can be a rich, default-open section.
+        "resultHtml": _example_card(result, include_routes=False),
+        "routesHtml": _route_cards(result, config),
         "map": build_map_data(result),
     }
 
