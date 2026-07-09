@@ -61,6 +61,7 @@
 }
 .bubble.agent.thinking { color: var(--muted); font-style: italic; }
 .bubble.agent.error { background: var(--red-soft); color: var(--red); }
+.bubble.agent.await { background: var(--amber-soft); color: var(--amber); font-weight: 600; }
 
 .composer {
   display: flex;

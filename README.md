@@ -234,22 +234,32 @@ pip install -e ".[web]"
 python3 scripts/run_web.py            # http://127.0.0.1:8000
 ```
 
-Phase 1 runs **fully offline with no API key** — every recommendation goes
-through the same `run_slot_recommendation` + deterministic reasoner as
-`scripts/run_local.py`, and the browser renders the identical payload built by
+Whichever mode is active, the browser renders the identical payload built by
 `reporting/page.build_workflow_payload`, so the live UI can't drift from the
-published Simulator. Type an address plus an order size in cases (a preferred
-day + time is optional), e.g.
-`1200 McKinney St, Houston, TX 77010, 90 cases, TUE 07:00-10:00`, or click a
-sample chip. The chat parses intake fields with a small deterministic parser
-(`webapp/parse.py`) and asks a clarifying question when something is missing.
+published Simulator.
 
-> The `standard` (credential-free) LLM backend is selected automatically by
-> `run_web.py`; to launch via uvicorn directly, set it yourself:
+### Two modes (`SMART_ASSIGNMENT_WEBAPP_MODE`)
+
+| Mode | What it is | Needs |
+|---|---|---|
+| **`llm`** (default) | **Phase 2** — the real ADK `root_agent` drives a genuine multi-turn natural-language conversation, decides which pipeline tool to call, and escalates to a human (ADK `request_input`) when the score is low or no slot fits. Each turn streams over Server-Sent Events; once a recommendation lands, the profile is rebuilt from session state and the same step cards animate. | an LLM backend + credentials (see below) |
+| **`deterministic`** | **Phase 1** — a no-LLM parser (`webapp/parse.py`) fills in address/cases/slot and runs the pipeline directly. Asks a clarifying question when something's missing. | nothing — fully offline |
+
+**`llm` is the default, and it degrades gracefully:** when no credentials are
+detected for the active backend, the app transparently serves deterministic mode
+(and the chat says so), so `python3 scripts/run_web.py` always works offline.
+Add a key (`GOOGLE_API_KEY`, or set `SMART_ASSIGNMENT_LLM_BACKEND=sage` with the
+`SAGE_*` vars) and conversational mode activates automatically. The client reads
+`GET /api/mode` to pick the right path; endpoints are `POST /api/chat` (SSE,
+Phase 2) and `POST /api/recommend` (Phase 1).
+
+Try it: type an address plus an order size in cases (a preferred day + time is
+optional), e.g. `1200 McKinney St, Houston, TX 77010, 90 cases, TUE 07:00-10:00`,
+or click a sample chip.
+
+> `run_web.py` defaults the credential-free `standard` backend so the app imports
+> offline; to launch via uvicorn directly, set it yourself:
 > `SMART_ASSIGNMENT_LLM_BACKEND=standard uvicorn smart_assignment.webapp.app:app`.
-> A future Phase 2 can stream the real ADK `root_agent` for genuine
-> natural-language conversation (needs LLM creds) while reusing the same
-> step-card rendering.
 
 ## Testing
 

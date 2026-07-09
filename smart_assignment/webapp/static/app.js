@@ -1,11 +1,14 @@
 /*
  * Chat + live workflow visualization.
  *
- * The step-by-step animation is adapted from the published Simulator
- * (reporting/page.py `_SIM_JS`): the only change is where the data comes from.
- * Instead of looking up a pre-computed entry in an embedded blob, we POST the
- * chat message to /api/recommend and animate the {steps, resultHtml} the real
- * pipeline returns. The card-by-card timing is identical to the static page.
+ * Two modes, chosen by the server (GET /api/mode):
+ *  - "llm"           → Phase 2: stream the real ADK agent over POST /api/chat
+ *                      (Server-Sent Events), true multi-turn natural language.
+ *  - "deterministic" → Phase 1: POST /api/recommend, one message = one run.
+ *
+ * Either way the step-by-step animation is the same — adapted from the published
+ * Simulator (reporting/page.py `_SIM_JS`) — and renders the identical
+ * {steps, resultHtml} payload the real pipeline produces.
  */
 (function () {
   var input = document.getElementById('msg-input');
@@ -16,6 +19,11 @@
   var stepsEl = document.getElementById('sim-steps');
   var outEl = document.getElementById('sim-output');
   var viz = document.querySelector('.viz');
+
+  var MODE = 'deterministic';
+  var SESSION_ID = (window.crypto && window.crypto.randomUUID)
+    ? window.crypto.randomUUID()
+    : 'sess-' + Date.now() + '-' + Math.floor(Math.random() * 1e9);
 
   function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
@@ -84,12 +92,9 @@
     viz.classList.add('has-result');
   }
 
-  async function send(message) {
-    bubble('user', message);
-    sendBtn.disabled = true;
-    input.disabled = true;
+  // --- Phase 1: deterministic one-shot ---
+  async function sendDeterministic(message) {
     var thinking = bubble('agent', 'Working on it…', 'thinking');
-
     try {
       var res = await fetch('/api/recommend', {
         method: 'POST',
@@ -98,7 +103,6 @@
       });
       var data = await res.json();
       thinking.remove();
-
       if (!data.ok) {
         bubble('agent', data.reply || 'I could not run that. Please try again.');
         return;
@@ -108,6 +112,66 @@
     } catch (err) {
       thinking.remove();
       bubble('agent', 'Something went wrong talking to the agent. Please try again.', 'error');
+    }
+  }
+
+  // --- Phase 2: stream the real ADK agent over SSE ---
+  async function sendLlm(message) {
+    var thinking = bubble('agent', 'Thinking…', 'thinking');
+    var pendingViz = null;
+    try {
+      var res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: SESSION_ID, message: message })
+      });
+      var reader = res.body.getReader();
+      var decoder = new TextDecoder();
+      var buf = '';
+      var first = true;
+
+      while (true) {
+        var chunk = await reader.read();
+        if (chunk.done) { break; }
+        buf += decoder.decode(chunk.value, { stream: true });
+        var parts = buf.split('\n\n');
+        buf = parts.pop();  // keep the trailing partial frame
+        for (var i = 0; i < parts.length; i++) {
+          var line = parts[i].trim();
+          if (line.indexOf('data:') !== 0) { continue; }
+          var frame;
+          try { frame = JSON.parse(line.slice(5).trim()); } catch (e) { continue; }
+          if (first) { thinking.remove(); first = false; }
+
+          if (frame.type === 'tool') {
+            bubble('agent', '🔧 ' + frame.label + '…', 'thinking');
+          } else if (frame.type === 'message') {
+            bubble('agent', frame.text);
+          } else if (frame.type === 'await_input') {
+            bubble('agent', '🙋 ' + frame.message, 'await');
+          } else if (frame.type === 'visualization') {
+            pendingViz = frame.payload;  // animate after the stream closes
+          } else if (frame.type === 'error') {
+            bubble('agent', frame.message || 'Something went wrong.', 'error');
+          }
+          // 'done' needs no UI action.
+        }
+      }
+      if (first) { thinking.remove(); }
+      if (pendingViz) { await animate(pendingViz); }
+    } catch (err) {
+      thinking.remove();
+      bubble('agent', 'Something went wrong streaming the agent. Please try again.', 'error');
+    }
+  }
+
+  async function send(message) {
+    bubble('user', message);
+    sendBtn.disabled = true;
+    input.disabled = true;
+    try {
+      if (MODE === 'llm') { await sendLlm(message); }
+      else { await sendDeterministic(message); }
     } finally {
       sendBtn.disabled = false;
       input.disabled = false;
@@ -123,7 +187,21 @@
     send(message);
   });
 
-  bubble('agent', 'Hi! I assign delivery slots for new Sysco prospects. Give me an ' +
-    'address and an order size in cases (a preferred day + time is optional), or pick ' +
-    'a sample below.');
+  // Resolve the mode, then greet accordingly.
+  fetch('/api/mode')
+    .then(function (r) { return r.json(); })
+    .then(function (m) { MODE = m.mode || 'deterministic'; return m; })
+    .catch(function () { return {}; })
+    .then(function (m) {
+      if (MODE === 'llm') {
+        bubble('agent', 'Hi! I assign delivery slots for new Sysco prospects. Tell me about ' +
+          'the prospect in your own words — address, order size, any preferred day/time — ' +
+          'and I’ll walk through it. You can also pick a sample below.');
+      } else {
+        bubble('agent', 'Hi! I assign delivery slots for new Sysco prospects. Give me an ' +
+          'address and an order size in cases (a preferred day + time is optional), or pick ' +
+          'a sample below.');
+        if (m && m.reason) { bubble('agent', 'ℹ️ ' + m.reason, 'thinking'); }
+      }
+    });
 })();

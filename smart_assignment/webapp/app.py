@@ -28,11 +28,12 @@ UI can never drift from the published output.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -41,6 +42,7 @@ from smart_assignment.pipeline import run_slot_recommendation
 from smart_assignment.reasoning import DeterministicReasoner
 from smart_assignment.reporting.page import _STYLE, build_workflow_payload
 from smart_assignment.shared.config import DEFAULT_CONFIG
+from smart_assignment.webapp.llm_chat import LlmChatService, resolve_mode
 from smart_assignment.webapp.parse import describe_slot, parse_intake
 
 _STATIC_DIR = Path(__file__).parent / "static"
@@ -49,6 +51,11 @@ app = FastAPI(
     title="Smart Assignment — live agent visualization",
     description="Chat with the delivery-slot agent and watch its workflow run, step by step.",
 )
+
+# One conversational service for the process; sessions are keyed per browser by
+# a client-supplied session_id. Only builds an ADK Runner when llm mode is
+# actually used (lazy), so the deterministic path stays import-light and offline.
+_chat_service = LlmChatService()
 
 
 class RecommendRequest(BaseModel):
@@ -107,6 +114,59 @@ def recommend(req: RecommendRequest) -> RecommendResponse:
         f"{parsed.order_quantity_cases} cases, preferred slot: {slot_phrase}."
     )
     return RecommendResponse(ok=True, payload=payload, reply=reply)
+
+
+class ChatRequest(BaseModel):
+    """A conversational turn. ``session_id`` is a stable per-browser id so the
+    ADK agent keeps context across turns."""
+
+    session_id: str
+    message: str
+
+
+@app.get("/api/mode")
+def mode() -> dict:
+    """Which brain the app will actually serve — 'llm' (Phase 2) or
+    'deterministic' (Phase 1) — plus why, so the client picks the right
+    endpoint and can surface any downgrade notice."""
+    return resolve_mode(DEFAULT_CONFIG)
+
+
+def _fallback_frames(message: str):
+    """Deterministic frames for when the LLM path is unavailable or errors mid
+    turn — parse the message and either ask for missing info or visualize."""
+    parsed = parse_intake(message)
+    if parsed.profile is None:
+        yield {"type": "message", "text": parsed.clarify}
+        yield {"type": "done"}
+        return
+    try:
+        result = run_slot_recommendation(
+            parsed.profile, config=DEFAULT_CONFIG, reasoner=DeterministicReasoner()
+        )
+    except ValueError as exc:
+        yield {"type": "message", "text": str(exc)}
+        yield {"type": "done"}
+        return
+    yield {"type": "visualization", "payload": build_workflow_payload(result, DEFAULT_CONFIG)}
+    yield {"type": "done"}
+
+
+@app.post("/api/chat")
+async def chat(req: ChatRequest) -> StreamingResponse:
+    """Stream one conversational turn of the real ADK agent as Server-Sent
+    Events. On any failure (no credentials, model/network error) it degrades to
+    a deterministic result so the chat never dead-ends."""
+
+    async def event_stream():
+        try:
+            async for frame in _chat_service.stream_turn(req.session_id, req.message):
+                yield f"data: {json.dumps(frame)}\n\n"
+        except Exception:  # noqa: BLE001 - any LLM/runtime failure -> deterministic
+            for frame in _fallback_frames(req.message):
+                yield f"data: {json.dumps(frame)}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 def _render_index() -> str:
