@@ -26,7 +26,7 @@
 
 <main class="wrap app">
   <div class="app-grid">
-    <!-- Left: the chat -->
+    <!-- Top: the chat -->
     <section class="chat" aria-label="Chat with the agent">
       <div id="transcript" class="transcript" role="log" aria-live="polite"></div>
 
@@ -44,7 +44,7 @@
       </form>
     </section>
 
-    <!-- Right: the live workflow visualization (same cards as the Simulator) -->
+    <!-- Bottom: the live workflow visualization (same cards as the Simulator) -->
     <section class="sim viz" aria-label="Agent workflow visualization">
       <div id="sim-steps"></div>
       <div id="sim-output" class="sim-output"></div>
@@ -55,6 +55,7 @@
             <span class="legend-item"><span class="dot dot-customer"></span>Prospect</span>
             <span class="legend-item"><span class="dot dot-feasible"></span>Feasible route</span>
             <span class="legend-item"><span class="dot dot-infeasible"></span>Infeasible route</span>
+            <span class="legend-item"><span class="dash-swatch"></span>Route ↔ stop</span>
           </span>
         </div>
         <div id="map"></div>

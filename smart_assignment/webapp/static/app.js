@@ -112,6 +112,12 @@
       r.stops.forEach(function (s) {
         var latlng = [s.lat, s.lng];
         bounds.push(latlng);
+        // Dashed line back to the route's service center, so it's visually
+        // obvious which stops belong to which route (no real visit order is
+        // implied -- committed_stops isn't a delivery sequence).
+        L.polyline([centerLatLng, latlng], {
+          color: color, weight: 1.5, opacity: 0.5, dashArray: '5 6'
+        }).addTo(mapLayer);
         L.circleMarker(latlng, { radius: 3.5, color: color, fillColor: color, fillOpacity: 0.55, weight: 1 })
           .addTo(mapLayer);
       });
