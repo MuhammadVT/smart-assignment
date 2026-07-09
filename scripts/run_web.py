@@ -16,11 +16,11 @@ from __future__ import annotations
 import argparse
 import os
 
-# Phase 1 is deterministic and offline. Importing the smart_assignment package
-# eagerly builds the ADK agent, which under the default "sage" backend would
-# demand Sage credentials just to import. Default to the credential-free
-# "standard" backend so `python3 scripts/run_web.py` runs with no API key --
-# an explicitly-set SMART_ASSIGNMENT_LLM_BACKEND (e.g. for Phase 2) still wins.
+# Importing the package is credential-free (root_agent is built lazily), so this
+# is not needed just to start the app. It defaults the webapp to the
+# credential-free "standard" backend as a convenience, so conversational (llm)
+# mode activates as soon as you add a GOOGLE_API_KEY -- without also having to
+# set the backend. An explicitly-set SMART_ASSIGNMENT_LLM_BACKEND still wins.
 os.environ.setdefault("SMART_ASSIGNMENT_LLM_BACKEND", "standard")
 
 
