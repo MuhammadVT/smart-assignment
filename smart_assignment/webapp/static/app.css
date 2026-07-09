@@ -8,30 +8,28 @@
 
 .app { padding: 30px 20px 10px; }
 
+/* Stacked layout: chat on top (full width), workflow visualization below. */
 .app-grid {
-  display: grid;
-  grid-template-columns: minmax(320px, 440px) 1fr;
+  display: flex;
+  flex-direction: column;
   gap: 22px;
-  align-items: start;
 }
 
-/* --- Chat column --- */
+/* --- Chat --- */
 .chat {
   background: var(--card);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
-  padding: 18px;
-  position: sticky;
-  top: 18px;
+  padding: 22px;
 }
 
 .transcript {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  min-height: 120px;
-  max-height: 46vh;
+  min-height: 220px;
+  max-height: 58vh;
   overflow-y: auto;
   padding: 4px 2px 8px;
 }
@@ -65,19 +63,23 @@
 
 .composer {
   display: flex;
-  gap: 9px;
+  gap: 10px;
   margin-top: 14px;
 }
 .composer input {
   flex: 1;
-  font-size: 14px;
-  padding: 11px 13px;
+  font-size: 15.5px;
+  padding: 14px 16px;
   border: 1px solid var(--line);
   border-radius: 9px;
   font-family: var(--mono);
   min-width: 0;
 }
 .composer input.flash { animation: flash .8s ease; }
+.composer button {
+  padding: 14px 24px;
+  font-size: 15px;
+}
 .composer button:disabled { opacity: .55; cursor: default; box-shadow: none; }
 
 .chips { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -119,6 +121,13 @@
 .dot-customer { background: var(--violet); }
 .dot-feasible { background: var(--green); }
 .dot-infeasible { background: var(--red); }
+.dash-swatch {
+  width: 16px;
+  height: 0;
+  border-top: 2px dashed var(--muted);
+  display: inline-block;
+  flex: none;
+}
 
 #map {
   height: 360px;
@@ -131,8 +140,6 @@
 .leaflet-popup-content b { color: var(--navy); }
 
 @media (max-width: 860px) {
-  .app-grid { grid-template-columns: 1fr; }
-  .chat { position: static; }
-  .transcript { max-height: 40vh; }
+  .transcript { max-height: 46vh; }
   #map { height: 280px; }
 }
