@@ -60,6 +60,14 @@ def test_recommend_returns_five_step_payload_and_result():
     ]
     # A clean downtown recommend should render a recommend pill in the result card.
     assert "Recommended" in payload["resultHtml"]
+    # Proximity-map data rides along in the same payload -- customer + every
+    # evaluated route's service center and stops, for the frontend map.
+    m = payload["map"]
+    assert m is not None
+    assert isinstance(m["customer"]["lat"], float) and isinstance(m["customer"]["lng"], float)
+    assert len(m["routes"]) == 3  # DEFAULT_CONFIG.top_n_candidate_routes
+    assert any(r["feasible"] for r in m["routes"])
+    assert all("service_center" in r and "stops" in r for r in m["routes"])
 
 
 def test_recommend_escalates_large_catering_order():

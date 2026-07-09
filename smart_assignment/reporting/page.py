@@ -830,9 +830,51 @@ def _config_sources(config: Config, results: list[RecommendationResult]) -> str:
     </div>"""
 
 
+def build_map_data(result: RecommendationResult) -> Optional[dict]:
+    """Lat/lng data for a proximity map: the prospect's geocoded location plus,
+    for every evaluated route, its service center, service radius, and existing
+    committed stops -- everything needed to visually judge why a route was
+    feasible/infeasible and how it scored on geographic clustering.
+
+    Returns ``None`` if the customer was never geocoded (e.g. intake failed
+    before geo-lookup ran).
+    """
+    loc = result.customer.location
+    if loc is None:
+        return None
+    routes = []
+    for cand in result.candidates_considered:
+        r = cand.route
+        center = r.service_center
+        routes.append(
+            {
+                "route_id": _esc(r.route_id),
+                "name": _esc(r.name),
+                "day": r.day.value,
+                "feasible": cand.feasible,
+                "distance_miles": round(cand.distance_miles, 1),
+                "total_score": round(cand.total_score, 2) if cand.feasible else None,
+                "service_center": {"lat": center.latitude, "lng": center.longitude},
+                "service_radius_miles": r.service_radius_miles,
+                "stops": [
+                    {"lat": s.location.latitude, "lng": s.location.longitude}
+                    for s in r.committed_stops
+                ],
+            }
+        )
+    return {
+        "customer": {
+            "name": _esc(result.customer.name),
+            "lat": loc.latitude,
+            "lng": loc.longitude,
+        },
+        "routes": routes,
+    }
+
+
 def build_workflow_payload(result: RecommendationResult, config: Config) -> dict:
-    """The visualization payload for one workflow run: the animated step cards
-    plus the final result card.
+    """The visualization payload for one workflow run: the animated step cards,
+    the final result card, and the proximity-map data.
 
     This is the single source of truth for the Simulator's data, shared by the
     static page generator (``build_page``) and the live web app
@@ -844,6 +886,7 @@ def build_workflow_payload(result: RecommendationResult, config: Config) -> dict
         "address": _esc(result.customer.address),
         "steps": _sim_steps(result, config),
         "resultHtml": _example_card(result),
+        "map": build_map_data(result),
     }
 
 

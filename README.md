@@ -257,6 +257,20 @@ Try it: type an address plus an order size in cases (a preferred day + time is
 optional), e.g. `1200 McKinney St, Houston, TX 77010, 90 cases, TUE 07:00-10:00`,
 or click a sample chip.
 
+### Proximity map
+
+Once a recommendation lands, a map appears below the result card showing the
+prospect's geocoded location alongside every evaluated route's service center,
+service-radius circle, and existing committed stops — color-coded feasible
+(green) vs. infeasible (red) — so you can visually judge why a route passed or
+failed the service-area check and how tightly the customer clusters with a
+route's other stops. Built on [Leaflet](https://leafletjs.com), vendored locally
+under `webapp/static/vendor/leaflet/` (see its `NOTICE.md`) so the app has no
+CDN dependency; only the OpenStreetMap base-map tiles are fetched over the
+network (markers/popups render regardless). The map data
+(`reporting/page.build_map_data`) rides in the same `build_workflow_payload`
+used everywhere else, so it never drifts from the numbers driving the decision.
+
 > The package imports offline with no credentials (`root_agent` is built
 > lazily), so `uvicorn smart_assignment.webapp.app:app` works as-is. `run_web.py`
 > additionally defaults the credential-free `standard` backend, so conversational

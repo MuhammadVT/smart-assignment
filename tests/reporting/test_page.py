@@ -14,7 +14,12 @@ from html import escape as html_escape
 from smart_assignment.mock_customers import SAMPLE_CUSTOMERS
 from smart_assignment.pipeline import run_slot_recommendation
 from smart_assignment.reasoning import DeterministicReasoner
-from smart_assignment.reporting.page import build_page, generate
+from smart_assignment.reporting.page import (
+    build_map_data,
+    build_page,
+    build_workflow_payload,
+    generate,
+)
 from smart_assignment.shared.config import Config
 from smart_assignment.shared.models import Decision
 
@@ -181,6 +186,59 @@ def test_page_has_interactive_simulator_with_payload():
         assert len(entry["steps"]) == 5  # the five workflow steps
         assert all(s["action"] and s["title"] for s in entry["steps"])
         assert entry["resultHtml"].strip().startswith("<article")
+
+
+def test_build_map_data_includes_customer_and_route_geometry():
+    config = Config()
+    results = _results(config)
+    bayou = results[0]  # downtown, clean recommend -- mix of feasible/infeasible routes
+    map_data = build_map_data(bayou)
+
+    assert map_data is not None
+    assert map_data["customer"]["lat"] == bayou.customer.location.latitude
+    assert map_data["customer"]["lng"] == bayou.customer.location.longitude
+    assert len(map_data["routes"]) == len(bayou.candidates_considered)
+
+    feasible = [r for r in map_data["routes"] if r["feasible"]]
+    infeasible = [r for r in map_data["routes"] if not r["feasible"]]
+    assert feasible and infeasible  # this sample exercises both branches
+
+    for r in map_data["routes"]:
+        assert "lat" in r["service_center"] and "lng" in r["service_center"]
+        assert isinstance(r["stops"], list)
+        assert all("lat" in s and "lng" in s for s in r["stops"])
+    for r in feasible:
+        assert r["total_score"] is not None
+    for r in infeasible:
+        assert r["total_score"] is None
+
+
+def test_build_map_data_none_without_a_geocoded_customer():
+    config = Config()
+    result = _results(config)[0]
+    result.customer.location = None
+    assert build_map_data(result) is None
+
+
+def test_workflow_payload_embeds_map_data_for_every_sample():
+    config = Config()
+    for result in _results(config):
+        payload = build_workflow_payload(result, config)
+        assert payload["map"] is not None
+        assert payload["map"]["customer"]["name"]
+        assert len(payload["map"]["routes"]) == len(result.candidates_considered)
+
+
+def test_page_embeds_map_data_in_workflow_json():
+    config = Config()
+    html = build_page(_results(config), config)
+    marker = '<script type="application/json" id="workflow-data">'
+    start = html.index(marker) + len(marker)
+    payload = json.loads(html[start : html.index("</script>", start)])
+    for customer in SAMPLE_CUSTOMERS:
+        entry = payload[customer.lookup_key]
+        assert entry["map"] is not None
+        assert "customer" in entry["map"] and "routes" in entry["map"]
 
 
 def test_generate_writes_file(tmp_path):

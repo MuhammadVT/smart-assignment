@@ -92,8 +92,47 @@
 .viz.running .viz-empty,
 .viz.has-result .viz-empty { display: none; }
 
+/* --- Proximity map --- */
+.map-panel {
+  display: none;
+  margin-top: 18px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 14px 16px 16px;
+}
+.viz.has-result .map-panel { display: block; }
+
+.map-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.map-title { font-weight: 700; font-size: 13px; color: var(--navy); }
+.map-legend { display: flex; gap: 12px; font-size: 11.5px; color: var(--muted); flex-wrap: wrap; }
+.legend-item { display: inline-flex; align-items: center; gap: 5px; }
+.dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: none; }
+.dot-customer { background: var(--violet); }
+.dot-feasible { background: var(--green); }
+.dot-infeasible { background: var(--red); }
+
+#map {
+  height: 360px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+}
+/* Leaflet popup content reuses the app's font instead of its own default. */
+.leaflet-popup-content { font-family: inherit; font-size: 12.5px; line-height: 1.5; }
+.leaflet-popup-content b { color: var(--navy); }
+
 @media (max-width: 860px) {
   .app-grid { grid-template-columns: 1fr; }
   .chat { position: static; }
   .transcript { max-height: 40vh; }
+  #map { height: 280px; }
 }
