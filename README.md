@@ -257,9 +257,10 @@ Try it: type an address plus an order size in cases (a preferred day + time is
 optional), e.g. `1200 McKinney St, Houston, TX 77010, 90 cases, TUE 07:00-10:00`,
 or click a sample chip.
 
-> `run_web.py` defaults the credential-free `standard` backend so the app imports
-> offline; to launch via uvicorn directly, set it yourself:
-> `SMART_ASSIGNMENT_LLM_BACKEND=standard uvicorn smart_assignment.webapp.app:app`.
+> The package imports offline with no credentials (`root_agent` is built
+> lazily), so `uvicorn smart_assignment.webapp.app:app` works as-is. `run_web.py`
+> additionally defaults the credential-free `standard` backend, so conversational
+> mode activates as soon as you add a `GOOGLE_API_KEY`.
 
 ## Testing
 

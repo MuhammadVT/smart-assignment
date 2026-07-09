@@ -7,9 +7,9 @@ Run it (Phase 1 is fully offline, no API key needed):
     pip install -e ".[web]"
     python3 scripts/run_web.py            # http://127.0.0.1:8000 (offline-ready)
 
-or with uvicorn directly (set the credential-free backend, same as run_local.py):
+or with uvicorn directly (the package imports offline with no credentials):
 
-    SMART_ASSIGNMENT_LLM_BACKEND=standard uvicorn smart_assignment.webapp.app:app --reload
+    uvicorn smart_assignment.webapp.app:app --reload
 
 Endpoints
 ---------
