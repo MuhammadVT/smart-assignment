@@ -19,6 +19,7 @@
   var stepsEl = document.getElementById('sim-steps');
   var outEl = document.getElementById('sim-output');
   var viz = document.querySelector('.viz');
+  var mapPanel = document.getElementById('map-panel');
 
   var MODE = 'deterministic';
   var SESSION_ID = (window.crypto && window.crypto.randomUUID)
@@ -58,6 +59,70 @@
     })
     .catch(function () { /* samples are optional; ignore fetch errors */ });
 
+  // --- Proximity map (Leaflet + OpenStreetMap tiles, free, no API key) ---
+  var mapInstance = null;
+  var mapLayer = null;
+  var MILES_TO_METERS = 1609.34;
+
+  function ensureMap() {
+    if (mapInstance) { return mapInstance; }
+    mapInstance = L.map('map', { scrollWheelZoom: false });
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 18,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+    }).addTo(mapInstance);
+    mapLayer = L.layerGroup().addTo(mapInstance);
+    return mapInstance;
+  }
+
+  function renderMap(mapData) {
+    if (!mapData || !window.L) { mapPanel.style.display = 'none'; return; }
+    mapPanel.style.display = '';
+    var map = ensureMap();
+    mapLayer.clearLayers();
+    var bounds = [];
+
+    var custLatLng = [mapData.customer.lat, mapData.customer.lng];
+    bounds.push(custLatLng);
+    L.circleMarker(custLatLng, { radius: 9, color: '#5b3fb0', fillColor: '#5b3fb0', fillOpacity: 0.9, weight: 2 })
+      .bindPopup('<b>' + mapData.customer.name + '</b><br>Prospect location')
+      .addTo(mapLayer);
+
+    mapData.routes.forEach(function (r) {
+      var color = r.feasible ? '#1a7f37' : '#b42318';
+      var centerLatLng = [r.service_center.lat, r.service_center.lng];
+      bounds.push(centerLatLng);
+
+      if (r.service_radius_miles) {
+        L.circle(centerLatLng, {
+          radius: r.service_radius_miles * MILES_TO_METERS,
+          color: color, weight: 1, fillOpacity: 0.03, dashArray: '4 4'
+        }).addTo(mapLayer);
+      }
+
+      var scoreLine = (r.total_score !== null && r.total_score !== undefined)
+        ? ('<br>Score: ' + Math.round(r.total_score * 100) + '%') : '';
+      L.circleMarker(centerLatLng, { radius: 7, color: color, fillColor: color, fillOpacity: 0.85, weight: 2 })
+        .bindPopup(
+          '<b>' + r.route_id + ' · ' + r.name + '</b><br>' + r.day + ' · ' + r.distance_miles + ' mi' +
+          '<br>' + (r.feasible ? 'FEASIBLE' : 'INFEASIBLE') + scoreLine
+        )
+        .addTo(mapLayer);
+
+      r.stops.forEach(function (s) {
+        var latlng = [s.lat, s.lng];
+        bounds.push(latlng);
+        L.circleMarker(latlng, { radius: 3.5, color: color, fillColor: color, fillOpacity: 0.55, weight: 1 })
+          .addTo(mapLayer);
+      });
+    });
+
+    if (bounds.length) { map.fitBounds(bounds, { padding: [30, 30], maxZoom: 14 }); }
+    // The panel was just made visible (display:none -> block), so Leaflet's
+    // last-known container size is stale until we tell it to re-measure.
+    setTimeout(function () { map.invalidateSize(); }, 60);
+  }
+
   async function animate(d) {
     stepsEl.innerHTML = '';
     outEl.innerHTML = '';
@@ -90,6 +155,7 @@
     outEl.innerHTML = d.resultHtml;
     viz.classList.remove('running');
     viz.classList.add('has-result');
+    renderMap(d.map);
   }
 
   // --- Phase 1: deterministic one-shot ---

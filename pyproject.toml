@@ -51,9 +51,10 @@ web = [
 include = ["smart_assignment*"]
 
 [tool.setuptools.package-data]
-# Ship the web app's static assets (chat HTML/CSS/JS) inside the package so a
-# wheel build serves them, not just editable installs.
-"smart_assignment.webapp" = ["static/*"]
+# Ship the web app's static assets (chat HTML/CSS/JS, vendored Leaflet under
+# static/vendor/) inside the package so a wheel build serves them, not just
+# editable installs. Recursive glob to reach the nested vendor/ files.
+"smart_assignment.webapp" = ["static/**/*"]
 
 [tool.black]
 line-length = 100

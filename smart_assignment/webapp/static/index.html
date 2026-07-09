@@ -8,6 +8,10 @@
 <!-- Shared Simulator CSS is injected at serve time from reporting/page.py (_STYLE). -->
 <style>/*__SHARED_STYLE__*/</style>
 <link rel="stylesheet" href="/static/app.css" />
+<!-- Leaflet (proximity map) -- vendored locally, see static/vendor/leaflet/NOTICE.md,
+     so the map works fully offline with no CDN / external script dependency. -->
+<link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css" />
+<script src="/static/vendor/leaflet/leaflet.js"></script>
 </head>
 <body>
 <header class="hero">
@@ -44,6 +48,17 @@
     <section class="sim viz" aria-label="Agent workflow visualization">
       <div id="sim-steps"></div>
       <div id="sim-output" class="sim-output"></div>
+      <div id="map-panel" class="map-panel" aria-label="Proximity map">
+        <div class="map-head">
+          <span class="map-title">Proximity map</span>
+          <span class="map-legend">
+            <span class="legend-item"><span class="dot dot-customer"></span>Prospect</span>
+            <span class="legend-item"><span class="dot dot-feasible"></span>Feasible route</span>
+            <span class="legend-item"><span class="dot dot-infeasible"></span>Infeasible route</span>
+          </span>
+        </div>
+        <div id="map"></div>
+      </div>
       <div id="viz-empty" class="viz-empty">
         The agent's workflow will appear here — Intake → Geo-Lookup → Constraint Check
         → Score &amp; Rank → Recommend / Decide.
