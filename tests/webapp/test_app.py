@@ -9,12 +9,15 @@ and numbers match the deterministic pipeline. Skipped cleanly if the optional
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 pytest.importorskip("fastapi", reason="install the web extra: pip install -e '.[web]'")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
+from smart_assignment.webapp import app as app_module  # noqa: E402
 from smart_assignment.webapp.app import app  # noqa: E402
 
 client = TestClient(app)
@@ -85,3 +88,57 @@ def test_sample_message_round_trips_through_recommend():
         data = resp.json()
         assert data["ok"] is True, f"sample {s['name']!r} failed: {data}"
         assert len(data["payload"]["steps"]) == 5
+
+
+def test_mode_endpoint_reports_a_mode():
+    resp = client.get("/api/mode")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["mode"] in ("llm", "deterministic")
+    assert "configured" in data
+
+
+def _sse_frames(text: str) -> list[dict]:
+    frames = []
+    for block in text.split("\n\n"):
+        block = block.strip()
+        if block.startswith("data:"):
+            frames.append(json.loads(block[len("data:") :].strip()))
+    return frames
+
+
+def test_chat_falls_back_to_deterministic_on_llm_error(monkeypatch):
+    """When the LLM path raises (no creds / model error), /api/chat degrades to a
+    deterministic run so the chat never dead-ends."""
+
+    class _BrokenService:
+        async def stream_turn(self, session_id, message):
+            raise RuntimeError("no credentials")
+            yield  # pragma: no cover - makes this an async generator
+
+    monkeypatch.setattr(app_module, "_chat_service", _BrokenService())
+    resp = client.post(
+        "/api/chat",
+        json={
+            "session_id": "t1",
+            "message": "1200 McKinney St, Houston, TX 77010, 90 cases, TUE 07:00-10:00",
+        },
+    )
+    assert resp.status_code == 200
+    frames = _sse_frames(resp.text)
+    viz = [f for f in frames if f["type"] == "visualization"]
+    assert viz and len(viz[0]["payload"]["steps"]) == 5
+    assert frames[-1] == {"type": "done"}
+
+
+def test_chat_fallback_asks_for_missing_fields(monkeypatch):
+    class _BrokenService:
+        async def stream_turn(self, session_id, message):
+            raise RuntimeError("no credentials")
+            yield  # pragma: no cover
+
+    monkeypatch.setattr(app_module, "_chat_service", _BrokenService())
+    resp = client.post("/api/chat", json={"session_id": "t2", "message": "how does this work?"})
+    frames = _sse_frames(resp.text)
+    assert any(f["type"] == "message" for f in frames)
+    assert frames[-1] == {"type": "done"}
