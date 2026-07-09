@@ -17,6 +17,7 @@ os.environ['DATABASE_CREDENTIALS_LOCATION'] = os.path.realpath(os.path.join(BASE
 QUERY_DIR = os.path.realpath(os.path.join(BASE_DIR, '..', 'queries'))
 DATA_LOCATION = os.path.realpath(os.path.join(BASE_DIR, '..', '..', 'data'))
 ROUTES_CACHE_PATH = os.path.join(DATA_LOCATION, 'dev', 'routes.csv.gz')
+CUST_TIER_CACHE_PATH = os.path.join(DATA_LOCATION, 'dev', 'cust_tier.csv.gz')
 OUTPUT_DIR = os.path.realpath(os.path.join(DATA_LOCATION, 'output'))
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 INPUT_DIR = os.path.realpath(os.path.join(DATA_LOCATION, 'input'))
@@ -29,6 +30,12 @@ QUERIES = {
         'clusternm': 'ODI_PROD',
         'params': {},
         'cache_name': 'routes'
+    },
+    'cust_tier': {
+        'path': os.path.join(QUERY_DIR, 'cust_tier.sql'),
+        'clusternm': 'SEED_PROD',
+        'params': {},
+        'cache_name': 'cust_tier'
     },
     # 'dot_base': {
     #     'path': os.path.join(QUERY_DIR, 'dot_base.sql'),
@@ -62,6 +69,15 @@ def fetch_route_stop_records(sql, qry=QUERIES['routes'], cache_nm='routes'):
     return df
 
 
+def fetch_cust_tier_records(sql, qry=QUERIES['cust_tier'], cache_nm='cust_tier'):
+    df = sql.select_sql(qry)
+
+    assert len(df) > 0
+    df = df.drop_duplicates(subset=['co_cust_nbr'])
+
+    return df
+
+
 def summarize_route_capacity_by_weekday(df):
     route_capacity_daily = df.groupby(['route_id', 'route_start_date', 'dlvry_day_nm']).agg(
         route_weight_capacity=('route_weight_capacity', 'mean'),
@@ -91,6 +107,19 @@ def summarize_route_capacity_by_weekday(df):
     return route_capacity_summary
 
 
+DEFAULT_CUST_TIER = "Other"
+
+
+def attach_cust_tier_to_stop_locations(
+    stop_locations: pd.DataFrame,
+    cust_tier_df: pd.DataFrame,
+) -> pd.DataFrame:
+    tier_lookup = cust_tier_df[["co_cust_nbr", "cust_tier"]].drop_duplicates(subset=["co_cust_nbr"])
+    stop_locations = stop_locations.merge(tier_lookup, on="co_cust_nbr", how="left")
+    stop_locations["cust_tier"] = stop_locations["cust_tier"].fillna(DEFAULT_CUST_TIER)
+    return stop_locations
+
+
 def summarize_stop_geographies(df):
     """Stop coordinates and route service centers keyed by route_id and dlvry_day_nm."""
 
@@ -108,9 +137,16 @@ def summarize_stop_geographies(df):
     return stop_locations, service_centers
 
 
-def build_route_summary_tables(raw_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+def build_route_summary_tables(
+    raw_df: pd.DataFrame,
+    cust_tier_df: pd.DataFrame | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     route_capacity_summary = summarize_route_capacity_by_weekday(raw_df)
     stop_locations, service_centers = summarize_stop_geographies(raw_df)
+    if cust_tier_df is not None:
+        stop_locations = attach_cust_tier_to_stop_locations(stop_locations, cust_tier_df)
+    else:
+        stop_locations["cust_tier"] = DEFAULT_CUST_TIER
     route_summary = route_capacity_summary.merge(
         service_centers,
         on=['route_id', 'dlvry_day_nm'],
@@ -120,8 +156,9 @@ def build_route_summary_tables(raw_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.D
     return route_summary, stop_locations
 
 
-# Backward-compatible aliases for existing callers/tests.
+# Backward-compatible aliases for existing callers/tests. # TODO: remove these later
 pull_routes_data = fetch_route_stop_records
+pull_cust_tier_data = fetch_cust_tier_records
 calculate_route_capacity = summarize_route_capacity_by_weekday
 get_route_stops_locations = summarize_stop_geographies
 
@@ -153,5 +190,6 @@ if __name__ == '__main__':
     sql = ds_utils.SQLAccess(RUN_MODE, data=cachey)
 
     raw_df = fetch_route_stop_records(sql)
-    df_routes, df_stop_locations = build_route_summary_tables(raw_df)
-
+    cust_tier_df = fetch_cust_tier_records(sql)
+    df_routes, df_stop_locations = build_route_summary_tables(raw_df, cust_tier_df)
+

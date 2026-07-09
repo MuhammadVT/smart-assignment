@@ -16,9 +16,11 @@ import pandas as pd
 
 import ds_utils
 from smart_assignment.data_prep.prep_dlvry_tw_data import (
+    CUST_TIER_CACHE_PATH,
     DATA_LOCATION,
     ROUTES_CACHE_PATH,
     build_route_summary_tables,
+    fetch_cust_tier_records,
     fetch_route_stop_records,
 )
 from smart_assignment.shared.models import (
@@ -138,6 +140,42 @@ def _load_cached_route_stop_records() -> pd.DataFrame:
     return pd.read_csv(ROUTES_CACHE_PATH)
 
 
+def _fetch_live_cust_tier_records() -> pd.DataFrame:
+    run_mode = ds_utils.Mode("dev")
+    cachey = ds_utils.Data(
+        rm=run_mode,
+        data_location=DATA_LOCATION,
+        session_date="",
+        ignore_cache=False,
+        default_cache_extension=".csv.gz",
+    )
+    sql = ds_utils.SQLAccess(run_mode, data=cachey)
+    return fetch_cust_tier_records(sql)
+
+
+def _load_cached_cust_tier_records() -> pd.DataFrame:
+    return pd.read_csv(CUST_TIER_CACHE_PATH)
+
+
+def _load_cust_tier_records() -> pd.DataFrame | None:
+    try:
+        cust_tier_df = _fetch_live_cust_tier_records()
+        logger.info("Loaded cust tier records from live SQL.")
+        return cust_tier_df
+    except Exception as exc:
+        logger.warning("Live SQL cust tier pull failed (%s); falling back to cache.", exc)
+        try:
+            cust_tier_df = _load_cached_cust_tier_records()
+            logger.info("Loaded cust tier records from cache: %s", CUST_TIER_CACHE_PATH)
+            return cust_tier_df
+        except Exception as cache_exc:
+            logger.warning(
+                "Cust tier cache unavailable (%s); defaulting stop tiers to Other.",
+                cache_exc,
+            )
+            return None
+
+
 def _load_prepared_route_tables() -> tuple[pd.DataFrame, pd.DataFrame]:
     try:
         raw_df = _fetch_live_route_stop_records()
@@ -147,7 +185,7 @@ def _load_prepared_route_tables() -> tuple[pd.DataFrame, pd.DataFrame]:
         raw_df = _load_cached_route_stop_records()
         logger.info("Loaded route stop records from cache: %s", ROUTES_CACHE_PATH)
 
-    return build_route_summary_tables(raw_df)
+    return build_route_summary_tables(raw_df, _load_cust_tier_records())
 
 
 def _mock_routes() -> list[Route]:
