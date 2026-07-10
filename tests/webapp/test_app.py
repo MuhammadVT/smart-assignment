@@ -33,6 +33,25 @@ def test_index_serves_html_with_shared_style():
     assert ".sim-step" in body
 
 
+def test_index_cache_busts_assets():
+    """The page must revalidate (no-cache) and reference app.css/app.js with a
+    content-hash ?v= query, so a new build isn't hidden by a stale browser cache."""
+    resp = client.get("/")
+    assert resp.headers.get("cache-control") == "no-cache"
+    assert "/static/app.js?v=" in resp.text
+    assert "/static/app.css?v=" in resp.text
+    # No un-versioned references left behind.
+    assert 'src="/static/app.js"' not in resp.text
+    assert 'href="/static/app.css"' not in resp.text
+
+
+def test_asset_version_reflects_content():
+    from smart_assignment.webapp.app import _asset_version
+
+    assert _asset_version("app.js") not in ("", "0")
+    assert _asset_version("does-not-exist.xyz") == "0"
+
+
 def test_samples_endpoint_lists_prospects():
     resp = client.get("/api/samples")
     assert resp.status_code == 200
