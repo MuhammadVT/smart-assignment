@@ -240,7 +240,111 @@
 .routes-panel .routes { margin-top: 0; border-top: none; padding-top: 0; }
 .routes-panel .routes summary { font-size: 14px; }
 
+/* --- Delivery-window timeline (below the map) ---
+   A Gantt of each committed stop's delivery window on a shared time axis, plus
+   an "availability" lane whose blanks (green) are open slots and whose bars grow
+   taller where more deliveries overlap. Same route selection drives it as the map. */
+.windows-panel {
+  display: none;
+  margin-top: 18px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 14px 16px 16px;
+}
+.viz.has-result .windows-panel { display: block; }
+
+.windows-chart { margin-top: 2px; }
+
+/* Rows share one grid: a fixed label gutter + a flexible track. Bars/ticks are
+   absolutely positioned inside the track by percent of the shared time domain. */
+.tw-axis,
+.tw-row {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  align-items: center;
+  column-gap: 10px;
+}
+.tw-track {
+  position: relative;
+  height: 100%;
+}
+
+/* Shared hour axis across the top. */
+.tw-axis { height: 18px; margin-bottom: 4px; }
+.tw-axis .tw-track { border-bottom: 1px solid var(--line); }
+.tw-tick {
+  position: absolute;
+  bottom: 1px;
+  transform: translateX(-50%);
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.tw-tick:first-child { transform: none; }
+
+/* Per-route header. */
+.tw-route {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--ink);
+  margin: 12px 0 5px;
+}
+.tw-route b { color: var(--navy); }
+.tw-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: none; }
+.tw-day { color: var(--muted); }
+.tw-count { color: var(--muted); margin-left: auto; font-size: 11.5px; }
+
+/* One stop's delivery window. */
+.tw-row { height: 20px; }
+.tw-label {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: right;
+}
+.tw-row .tw-track { height: 12px; background: var(--bg); border-radius: 4px; }
+.tw-bar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 4px;
+  opacity: 0.85;
+  min-width: 2px;
+}
+
+/* Availability lane: bottom-anchored demand bars; blank/green = open slot. */
+.tw-lane-row { height: 34px; margin-top: 4px; }
+.tw-lane {
+  height: 30px;
+  background: var(--green-soft);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.tw-bkt { position: absolute; bottom: 0; }
+.tw-free { top: 0; background: var(--green-soft); }
+.tw-busy { border-radius: 2px 2px 0 0; opacity: 0.85; }
+
+/* Legend swatches (index.html reuses .tw-busy / .tw-free for colour). */
+.tw-swatch {
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+  display: inline-block;
+  flex: none;
+}
+.tw-swatch.tw-busy { background: var(--blue); }
+.tw-swatch.tw-free { background: var(--green-soft); border: 1px solid #bcd9c4; }
+
 @media (max-width: 860px) {
   .transcript { max-height: 46vh; }
   #map { height: 280px; }
+  .tw-axis,
+  .tw-row { grid-template-columns: 68px minmax(0, 1fr); }
 }
