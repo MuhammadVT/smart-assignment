@@ -70,13 +70,35 @@
   var selectedRoutes = {};  // route_id -> bool (which routes to draw)
   var routeColors = {};     // route_id -> hex colour (distinguishes routes)
   var routeFeasible = {};   // route_id -> bool
-  // Distinct, non-clashing hues so two routes are never the same colour.
-  // Feasibility is shown by FILL (solid = feasible, hollow ring = infeasible),
-  // not by hue -- so several feasible routes stay distinguishable.
+  // Distinct, saturated hues so two routes are never the same colour. Feasibility
+  // is shown by FILL (solid = feasible, hollow ring = infeasible), not by hue --
+  // so several feasible routes stay distinguishable. None is near-black, so the
+  // prospect's dark star can't be mistaken for a route.
   var ROUTE_PALETTE = [
     '#1257a6', '#1a7f37', '#c2410c', '#7b2fb0',
-    '#0e7c7b', '#b8860b', '#9d174d', '#4b5563'
+    '#0e7c7b', '#b8860b', '#9d174d'
   ];
+  var PROSPECT_COLOR = '#111827';  // near-black -- distinct from every route hue
+
+  // The prospect is a STAR (its own shape + its own colour) so it never reads as
+  // a route point; service centers are DIAMONDS; stops stay small circles.
+  function prospectIcon() {
+    var svg =
+      '<svg width="28" height="28" viewBox="0 0 24 24" aria-label="prospect">' +
+      '<path d="M12 1.6l3 6.1 6.7 1-4.85 4.73 1.15 6.67L12 17.9l-6 3.15 ' +
+      '1.15-6.67L2.3 8.7l6.7-1z" fill="' + PROSPECT_COLOR + '" ' +
+      'stroke="#ffffff" stroke-width="1.3" stroke-linejoin="round"/></svg>';
+    return L.divIcon({ className: 'map-glyph', html: svg, iconSize: [28, 28], iconAnchor: [14, 14] });
+  }
+
+  function centerIcon(color, feasible) {
+    var fill = feasible ? color : '#ffffff';
+    var svg =
+      '<svg width="20" height="20" viewBox="0 0 20 20" aria-label="route center">' +
+      '<polygon points="10,1.5 18.5,10 10,18.5 1.5,10" fill="' + fill + '" ' +
+      'stroke="' + color + '" stroke-width="2.5" stroke-linejoin="round"/></svg>';
+    return L.divIcon({ className: 'map-glyph', html: svg, iconSize: [20, 20], iconAnchor: [10, 10] });
+  }
 
   function ensureMap() {
     if (mapInstance) { return mapInstance; }
@@ -131,7 +153,7 @@
 
     var custLatLng = [currentMapData.customer.lat, currentMapData.customer.lng];
     bounds.push(custLatLng);
-    L.circleMarker(custLatLng, { radius: 9, color: '#5b3fb0', fillColor: '#5b3fb0', fillOpacity: 0.9, weight: 2 })
+    L.marker(custLatLng, { icon: prospectIcon(), zIndexOffset: 1000 })
       .bindPopup('<b>' + currentMapData.customer.name + '</b><br>Prospect location')
       .addTo(mapLayer);
 
@@ -150,7 +172,7 @@
 
       var scoreLine = (r.total_score !== null && r.total_score !== undefined)
         ? ('<br>Score: ' + Math.round(r.total_score * 100) + '%') : '';
-      L.circleMarker(centerLatLng, markerStyle(color, r.feasible, 7))
+      L.marker(centerLatLng, { icon: centerIcon(color, r.feasible), zIndexOffset: 500 })
         .bindPopup(
           '<b>' + r.route_id + ' · ' + r.name + '</b><br>' + r.day + ' · ' + r.distance_miles + ' mi' +
           '<br>' + (r.feasible ? 'FEASIBLE' : 'INFEASIBLE') + scoreLine
