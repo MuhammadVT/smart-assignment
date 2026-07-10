@@ -3,5 +3,8 @@ max-line-length = 100
 extend-ignore = E203, W503
 exclude = .git,__pycache__,build,dist,.venv,venv
 # page.py embeds an HTML/CSS template where long lines are unavoidable.
+# app.py calls load_dotenv() before its smart_assignment imports on purpose, so
+# a .env value is in os.environ before Config.from_env() resolves DEFAULT_CONFIG.
 per-file-ignores =
     smart_assignment/reporting/page.py:E501
+    smart_assignment/webapp/app.py:E402

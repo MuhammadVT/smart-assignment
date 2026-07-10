@@ -16,6 +16,7 @@ dependencies = [
     "truststore>=0.9.1",
     "pandas>=2.0",
     "ds-utils-lite",
+    "python-dotenv>=1.0",
     # Transitive deps for the vendored Sage SDK (loaded via sys.path in shared/llm.py)
     "json-repair>=0.52.3",
     "litellm==1.83.7",
@@ -38,9 +39,27 @@ dev = [
 litellm = [
     "google-adk[extensions]>=2.3.0",
 ]
+# The live chat web app (smart_assignment/webapp). Runs the deterministic
+# pipeline offline -- no LLM key needed. Serve with:
+#   uvicorn smart_assignment.webapp.app:app --reload
+web = [
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+]
+# Exploratory dashboards under analysis/ (Streamlit + Plotly).
+analysis = [
+    "streamlit>=1.32",
+    "plotly>=5.18",
+]
 
 [tool.setuptools.packages.find]
 include = ["smart_assignment*"]
+
+[tool.setuptools.package-data]
+# Ship the web app's static assets (chat HTML/CSS/JS, vendored Leaflet under
+# static/vendor/) inside the package so a wheel build serves them, not just
+# editable installs. Recursive glob to reach the nested vendor/ files.
+"smart_assignment.webapp" = ["static/**/*"]
 
 [tool.black]
 line-length = 100

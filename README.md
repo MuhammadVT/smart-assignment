@@ -221,6 +221,61 @@ For a fully offline look at the same pipeline with zero ADK/LLM runtime, see
 `scripts/run_local.py` above. `adk deploy` uses whichever `root_agent` you
 point it at (see `deployment/deploy.py`).
 
+## Live chat web app (`smart_assignment/webapp`)
+
+A small FastAPI app that puts a **chat interface** in front of the workflow and
+**visualizes each step live** — the same animated Intake → Geo-Lookup →
+Constraint Check → Score & Rank → Recommend/Decide cards the GitHub Pages
+**Simulator** shows, but driven by the real pipeline on *any* address you type,
+not just the four bundled samples.
+
+```bash
+pip install -e ".[web]"
+python3 scripts/run_web.py            # http://127.0.0.1:8000
+```
+
+Whichever mode is active, the browser renders the identical payload built by
+`reporting/page.build_workflow_payload`, so the live UI can't drift from the
+published Simulator.
+
+### Two modes (`SMART_ASSIGNMENT_WEBAPP_MODE`)
+
+| Mode | What it is | Needs |
+|---|---|---|
+| **`llm`** (default) | **Phase 2** — the real ADK `root_agent` drives a genuine multi-turn natural-language conversation, decides which pipeline tool to call, and escalates to a human (ADK `request_input`) when the score is low or no slot fits. Each turn streams over Server-Sent Events; once a recommendation lands, the profile is rebuilt from session state and the same step cards animate. | an LLM backend + credentials (see below) |
+| **`deterministic`** | **Phase 1** — a no-LLM parser (`webapp/parse.py`) fills in address/cases/slot and runs the pipeline directly. Asks a clarifying question when something's missing. | nothing — fully offline |
+
+**`llm` is the default, and it degrades gracefully:** when no credentials are
+detected for the active backend, the app transparently serves deterministic mode
+(and the chat says so), so `python3 scripts/run_web.py` always works offline.
+Add a key (`GOOGLE_API_KEY`, or set `SMART_ASSIGNMENT_LLM_BACKEND=sage` with the
+`SAGE_*` vars) and conversational mode activates automatically. The client reads
+`GET /api/mode` to pick the right path; endpoints are `POST /api/chat` (SSE,
+Phase 2) and `POST /api/recommend` (Phase 1).
+
+Try it: type an address plus an order size in cases (a preferred day + time is
+optional), e.g. `1200 McKinney St, Houston, TX 77010, 90 cases, TUE 07:00-10:00`,
+or click a sample chip.
+
+### Proximity map
+
+Once a recommendation lands, a map appears below the result card showing the
+prospect's geocoded location alongside every evaluated route's service center,
+service-radius circle, and existing committed stops — color-coded feasible
+(green) vs. infeasible (red) — so you can visually judge why a route passed or
+failed the service-area check and how tightly the customer clusters with a
+route's other stops. Built on [Leaflet](https://leafletjs.com), vendored locally
+under `webapp/static/vendor/leaflet/` (see its `NOTICE.md`) so the app has no
+CDN dependency; only the OpenStreetMap base-map tiles are fetched over the
+network (markers/popups render regardless). The map data
+(`reporting/page.build_map_data`) rides in the same `build_workflow_payload`
+used everywhere else, so it never drifts from the numbers driving the decision.
+
+> The package imports offline with no credentials (`root_agent` is built
+> lazily), so `uvicorn smart_assignment.webapp.app:app` works as-is. `run_web.py`
+> additionally defaults the credential-free `standard` backend, so conversational
+> mode activates as soon as you add a `GOOGLE_API_KEY`.
+
 ## Testing
 
 ```bash
