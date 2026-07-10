@@ -46,6 +46,11 @@ web = [
     "fastapi>=0.110",
     "uvicorn>=0.27",
 ]
+# Exploratory dashboards under analysis/ (Streamlit + Plotly).
+analysis = [
+    "streamlit>=1.32",
+    "plotly>=5.18",
+]
 
 [tool.setuptools.packages.find]
 include = ["smart_assignment*"]
