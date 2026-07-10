@@ -213,6 +213,23 @@ def test_build_map_data_includes_customer_and_route_geometry():
         assert r["total_score"] is None
 
 
+def test_build_map_data_stops_carry_id_and_delivery_window():
+    """Each committed stop rides along with its customer number and its committed
+    delivery window (open/close), which the frontend delivery-window timeline reads.
+    Windows are optional, so the shape is {open, close} or None."""
+    config = Config()
+    map_data = build_map_data(_results(config)[0])
+
+    stops = [s for r in map_data["routes"] for s in r["stops"]]
+    assert stops  # the sample has committed stops to plot
+    for s in stops:
+        assert isinstance(s["id"], str) and s["id"]
+        w = s["window"]
+        assert w is None or (isinstance(w["open"], str) and isinstance(w["close"], str))
+    # The mock route data populates windows, so at least one is present.
+    assert any(s["window"] is not None for s in stops)
+
+
 def test_build_map_data_none_without_a_geocoded_customer():
     config = Config()
     result = _results(config)[0]
