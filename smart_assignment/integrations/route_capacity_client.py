@@ -35,6 +35,7 @@ from smart_assignment.shared.models import (
     GeoPoint,
     Route,
     RouteStop,
+    Window,
 )
 
 logger = logging.getLogger(__name__)
@@ -96,6 +97,43 @@ def _safe_float(value) -> float:
     return float(value)
 
 
+def _parse_time_window(open_tm, close_tm) -> "Window | None":
+    """Return a Window tuple from tw1opentime/tw1closetime values, or None if either is missing."""
+    if open_tm is None or close_tm is None:
+        return None
+    try:
+        if pd.isna(open_tm) or pd.isna(close_tm):
+            return None
+    except (TypeError, ValueError):
+        pass
+
+    def _to_time(val) -> time:
+        if isinstance(val, time):
+            return val
+        return time.fromisoformat(str(val))
+
+    return (_to_time(open_tm), _to_time(close_tm))
+
+
+def _derive_available_windows(committed_stops: list[RouteStop]) -> list[Window]:
+    """
+    Derive the set of distinct delivery windows offered on a route from the
+    TW1 windows already committed to its existing stops.
+
+    Uniqueness is determined by the (open, close) pair; the result is sorted
+    ascending by window open time so callers always see earliest-first order.
+    """
+    seen: set[Window] = set()
+    windows: list[Window] = []
+    for stop in committed_stops:
+        w = stop.delivery_time_window
+        if w is not None and w not in seen:
+            seen.add(w)
+            windows.append(w)
+    windows.sort(key=lambda w: w[0])
+    return windows
+
+
 def _build_committed_stops(
     route_id: str,
     stop_locations: pd.DataFrame,
@@ -105,10 +143,13 @@ def _build_committed_stops(
     for stop in route_stops.itertuples(index=False):
         if pd.isna(stop.latitude) or pd.isna(stop.longitude):
             continue
+        open_tm = getattr(stop, "tw1opentime", None)
+        close_tm = getattr(stop, "tw1closetime", None)
         committed_stops.append(
             RouteStop(
                 customer_number=str(stop.co_cust_nbr),
                 location=GeoPoint(float(stop.latitude), float(stop.longitude)),
+                delivery_time_window=_parse_time_window(open_tm, close_tm),
             )
         )
     return committed_stops
@@ -144,10 +185,11 @@ def routes_from_summary_tables(
                 avg_load_cases=_safe_int(route_row.cases_sum),
                 avg_load_weight=_safe_float(route_row.weight_sum),
                 avg_load_cubes=_safe_float(route_row.cubes_sum),
-                available_windows=[],
                 committed_stops=_build_committed_stops(route_id, stop_locations),
             )
         )
+        route = routes[-1]
+        route.available_windows = _derive_available_windows(route.committed_stops)
     return routes
 
 
@@ -270,10 +312,10 @@ def _mock_routes() -> list[Route]:
             avg_load_cubes=693.0,
             available_windows=[(time(7, 0), time(10, 0)), (time(10, 30), time(12, 30))],
             committed_stops=[
-                RouteStop("067-011011", GeoPoint(29.7550, -95.3650)),
-                RouteStop("067-011012", GeoPoint(29.7620, -95.3720)),
-                RouteStop("067-011013", GeoPoint(29.7480, -95.3810)),
-                RouteStop("067-011014", GeoPoint(29.7700, -95.3900)),
+                RouteStop("067-011011", GeoPoint(29.7550, -95.3650), delivery_time_window=(time(7, 0), time(10, 0))),
+                RouteStop("067-011012", GeoPoint(29.7620, -95.3720), delivery_time_window=(time(7, 0), time(10, 0))),
+                RouteStop("067-011013", GeoPoint(29.7480, -95.3810), delivery_time_window=(time(10, 30), time(12, 30))),
+                RouteStop("067-011014", GeoPoint(29.7700, -95.3900), delivery_time_window=(time(10, 30), time(12, 30))),
             ],
         ),
         Route(
@@ -290,9 +332,9 @@ def _mock_routes() -> list[Route]:
             avg_load_cubes=547.0,
             available_windows=[(time(7, 30), time(11, 0)), (time(12, 0), time(14, 0))],
             committed_stops=[
-                RouteStop("067-022021", GeoPoint(29.7450, -95.4700)),
-                RouteStop("067-022022", GeoPoint(29.7600, -95.5200)),
-                RouteStop("067-022023", GeoPoint(29.7830, -95.6350)),
+                RouteStop("067-022021", GeoPoint(29.7450, -95.4700), delivery_time_window=(time(7, 30), time(11, 0))),
+                RouteStop("067-022022", GeoPoint(29.7600, -95.5200), delivery_time_window=(time(7, 30), time(11, 0))),
+                RouteStop("067-022023", GeoPoint(29.7830, -95.6350), delivery_time_window=(time(12, 0), time(14, 0))),
             ],
         ),
         Route(
@@ -309,8 +351,8 @@ def _mock_routes() -> list[Route]:
             avg_load_cubes=688.0,
             available_windows=[(time(8, 0), time(12, 0)), (time(13, 0), time(15, 0))],
             committed_stops=[
-                RouteStop("067-033031", GeoPoint(30.1600, -95.4550)),
-                RouteStop("067-033032", GeoPoint(30.1720, -95.4700)),
+                RouteStop("067-033031", GeoPoint(30.1600, -95.4550), delivery_time_window=(time(8, 0), time(12, 0))),
+                RouteStop("067-033032", GeoPoint(30.1720, -95.4700), delivery_time_window=(time(13, 0), time(15, 0))),
             ],
         ),
         Route(
@@ -327,8 +369,8 @@ def _mock_routes() -> list[Route]:
             avg_load_cubes=886.0,
             available_windows=[(time(6, 0), time(9, 0)), (time(9, 30), time(12, 0))],
             committed_stops=[
-                RouteStop("067-044041", GeoPoint(29.6200, -95.6300)),
-                RouteStop("067-044042", GeoPoint(29.6100, -95.6500)),
+                RouteStop("067-044041", GeoPoint(29.6200, -95.6300), delivery_time_window=(time(6, 0), time(9, 0))),
+                RouteStop("067-044042", GeoPoint(29.6100, -95.6500), delivery_time_window=(time(9, 30), time(12, 0))),
             ],
         ),
     ]

@@ -100,6 +100,7 @@ class RouteStop:
 
     customer_number: str  # Sysco customer number (NNN-NNNNNN)
     location: GeoPoint
+    delivery_time_window: Optional[Window] = None  # TW1 open/close times from historical data
 
 
 @dataclass
