@@ -18,10 +18,17 @@ import ds_utils
 from smart_assignment.data_prep.prep_dlvry_tw_data import (
     CUST_TIER_CACHE_PATH,
     DATA_LOCATION,
+    DEFAULT_CACHE_EXTENSION,
+    DEFAULT_CUST_TIER,
+    DLVR_WINDOW_CACHE_PATH,
     ROUTES_CACHE_PATH,
+    attach_cust_tier_to_stop_locations,
     build_route_summary_tables,
     fetch_cust_tier_records,
+    fetch_dlvr_window_records,
     fetch_route_stop_records,
+    read_cached_dataframe,
+    summarize_committed_tw1_slots,
 )
 from smart_assignment.shared.models import (
     DayOfWeek,
@@ -42,6 +49,27 @@ _DELIVERY_DAY_NAME_TO_ENUM = {
     "friday": DayOfWeek.FRI,
     "saturday": DayOfWeek.SAT,
 }
+
+_ROUTE_ID_DAY_DIGIT_TO_ENUM = {
+    1: DayOfWeek.MON,
+    2: DayOfWeek.TUE,
+    3: DayOfWeek.WED,
+    4: DayOfWeek.THU,
+    5: DayOfWeek.FRI,
+    6: DayOfWeek.SAT,
+}
+
+
+def _delivery_day_from_route_id(route_id: str) -> DayOfWeek | None:
+    """Map the first digit of a 4-digit route_id to weekday (7 = not applicable)."""
+    route_text = str(route_id).strip()
+    if len(route_text) != 4 or not route_text.isdigit():
+        return None
+
+    day_digit = int(route_text[0])
+    if day_digit == 7:
+        return None
+    return _ROUTE_ID_DAY_DIGIT_TO_ENUM.get(day_digit)
 
 
 def _use_mock_routes() -> bool:
@@ -70,13 +98,9 @@ def _safe_float(value) -> float:
 
 def _build_committed_stops(
     route_id: str,
-    delivery_day_name: str,
     stop_locations: pd.DataFrame,
 ) -> list[RouteStop]:
-    route_stops = stop_locations[
-        (stop_locations["route_id"] == route_id)
-        & (stop_locations["dlvry_day_nm"] == delivery_day_name)
-    ]
+    route_stops = stop_locations[stop_locations["route_id"].astype(str) == str(route_id)]
     committed_stops: list[RouteStop] = []
     for stop in route_stops.itertuples(index=False):
         if pd.isna(stop.latitude) or pd.isna(stop.longitude):
@@ -96,11 +120,19 @@ def routes_from_summary_tables(
 ) -> list[Route]:
     routes: list[Route] = []
     for route_row in route_summary.itertuples(index=False):
+        route_id = str(route_row.route_id)
+        day = _delivery_day_from_route_id(route_id)
+        if day is None:
+            logger.debug(
+                "Skipping route %s: weekday not encoded in route_id (expected first digit 1-6).",
+                route_id,
+            )
+            continue
         routes.append(
             Route(
-                route_id=str(route_row.route_id),
+                route_id=route_id,
                 name=str(route_row.route_nm),
-                day=_parse_delivery_day_name(route_row.dlvry_day_nm),
+                day=day,
                 service_center=GeoPoint(
                     float(route_row.service_center_latitude),
                     float(route_row.service_center_longitude),
@@ -113,48 +145,58 @@ def routes_from_summary_tables(
                 avg_load_weight=_safe_float(route_row.weight_sum),
                 avg_load_cubes=_safe_float(route_row.cubes_sum),
                 available_windows=[],
-                committed_stops=_build_committed_stops(
-                    str(route_row.route_id),
-                    str(route_row.dlvry_day_nm),
-                    stop_locations,
-                ),
+                committed_stops=_build_committed_stops(route_id, stop_locations),
             )
         )
     return routes
 
 
-def _fetch_live_route_stop_records() -> pd.DataFrame:
+def _sql_access() -> ds_utils.SQLAccess:
     run_mode = ds_utils.Mode("dev")
     cachey = ds_utils.Data(
         rm=run_mode,
         data_location=DATA_LOCATION,
         session_date="",
         ignore_cache=False,
-        default_cache_extension=".csv.gz",
+        default_cache_extension=DEFAULT_CACHE_EXTENSION,
     )
-    sql = ds_utils.SQLAccess(run_mode, data=cachey)
-    return fetch_route_stop_records(sql)
+    return ds_utils.SQLAccess(run_mode, data=cachey)
+
+
+def _fetch_live_route_stop_records() -> pd.DataFrame:
+    return fetch_route_stop_records(_sql_access())
 
 
 def _load_cached_route_stop_records() -> pd.DataFrame:
-    return pd.read_csv(ROUTES_CACHE_PATH)
+    return read_cached_dataframe(ROUTES_CACHE_PATH)
 
 
 def _fetch_live_cust_tier_records() -> pd.DataFrame:
-    run_mode = ds_utils.Mode("dev")
-    cachey = ds_utils.Data(
-        rm=run_mode,
-        data_location=DATA_LOCATION,
-        session_date="",
-        ignore_cache=False,
-        default_cache_extension=".csv.gz",
-    )
-    sql = ds_utils.SQLAccess(run_mode, data=cachey)
-    return fetch_cust_tier_records(sql)
+    return fetch_cust_tier_records(_sql_access())
 
 
 def _load_cached_cust_tier_records() -> pd.DataFrame:
-    return pd.read_csv(CUST_TIER_CACHE_PATH)
+    return read_cached_dataframe(CUST_TIER_CACHE_PATH)
+
+
+def _fetch_live_dlvr_window_records() -> pd.DataFrame:
+    return fetch_dlvr_window_records(_sql_access())
+
+
+def _load_cached_dlvr_window_records() -> pd.DataFrame:
+    return read_cached_dataframe(DLVR_WINDOW_CACHE_PATH)
+
+
+def _load_route_capacity_raw_df() -> pd.DataFrame:
+    try:
+        route_capacity_raw_df = _fetch_live_route_stop_records()
+        logger.info("Loaded route stop records from live SQL.")
+        return route_capacity_raw_df
+    except Exception as exc:
+        logger.warning("Live SQL route pull failed (%s); falling back to cache.", exc)
+        route_capacity_raw_df = _load_cached_route_stop_records()
+        logger.info("Loaded route stop records from cache: %s", ROUTES_CACHE_PATH)
+        return route_capacity_raw_df
 
 
 def _load_cust_tier_records() -> pd.DataFrame | None:
@@ -176,16 +218,40 @@ def _load_cust_tier_records() -> pd.DataFrame | None:
             return None
 
 
-def _load_prepared_route_tables() -> tuple[pd.DataFrame, pd.DataFrame]:
+def _load_dlvr_window_records() -> pd.DataFrame:
     try:
-        raw_df = _fetch_live_route_stop_records()
-        logger.info("Loaded route stop records from live SQL.")
+        dlvr_window_df = _fetch_live_dlvr_window_records()
+        logger.info("Loaded delivery-window records from live SQL.")
+        return dlvr_window_df
     except Exception as exc:
-        logger.warning("Live SQL route pull failed (%s); falling back to cache.", exc)
-        raw_df = _load_cached_route_stop_records()
-        logger.info("Loaded route stop records from cache: %s", ROUTES_CACHE_PATH)
+        logger.warning("Live SQL delivery-window pull failed (%s); falling back to cache.", exc)
+        dlvr_window_df = _load_cached_dlvr_window_records()
+        logger.info("Loaded delivery-window records from cache: %s", DLVR_WINDOW_CACHE_PATH)
+        return dlvr_window_df
 
-    return build_route_summary_tables(raw_df, _load_cust_tier_records())
+
+def _load_committed_tw1_slots_df() -> pd.DataFrame:
+    committed_tw1_slots_df = summarize_committed_tw1_slots(_load_dlvr_window_records())
+    cust_tier_df = _load_cust_tier_records()
+    if cust_tier_df is not None:
+        committed_tw1_slots_df = attach_cust_tier_to_stop_locations(
+            committed_tw1_slots_df,
+            cust_tier_df,
+        )
+    else:
+        committed_tw1_slots_df = committed_tw1_slots_df.copy()
+        committed_tw1_slots_df["cust_tier"] = DEFAULT_CUST_TIER
+    return committed_tw1_slots_df
+
+
+def _load_prepared_route_tables() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    route_capacity_raw_df = _load_route_capacity_raw_df()
+    committed_tw1_slots_df = _load_committed_tw1_slots_df()
+    route_summary, stop_locations = build_route_summary_tables(
+        route_capacity_raw_df,
+        committed_tw1_slots_df,
+    )
+    return route_summary, stop_locations, committed_tw1_slots_df
 
 
 def _mock_routes() -> list[Route]:
@@ -273,5 +339,5 @@ def fetch_candidate_routes() -> list[Route]:
     if _use_mock_routes():
         return _mock_routes()
 
-    route_summary, stop_locations = _load_prepared_route_tables()
+    route_summary, stop_locations, _committed_tw1_slots_df = _load_prepared_route_tables()
     return routes_from_summary_tables(route_summary, stop_locations)

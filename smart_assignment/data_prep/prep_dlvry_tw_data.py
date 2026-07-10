@@ -16,9 +16,29 @@ os.environ['DATABASE_CREDENTIALS_LOCATION'] = os.path.realpath(os.path.join(BASE
 # Directory setup
 QUERY_DIR = os.path.realpath(os.path.join(BASE_DIR, '..', 'queries'))
 DATA_LOCATION = os.path.realpath(os.path.join(BASE_DIR, '..', '..', 'data'))
-ROUTES_CACHE_PATH = os.path.join(DATA_LOCATION, 'dev', 'routes.csv.gz')
-CUST_TIER_CACHE_PATH = os.path.join(DATA_LOCATION, 'dev', 'cust_tier.csv.gz')
-DLVR_WINDOW_CACHE_PATH = os.path.join(DATA_LOCATION, 'dev', 'dlvr_window.csv.gz')
+DEFAULT_CACHE_EXTENSION = '.parquet' # '.csv.gz'
+
+DEV_CACHE_DIR = os.path.join(DATA_LOCATION, 'dev')
+os.makedirs(DEV_CACHE_DIR, exist_ok=True)
+
+
+def cache_path(cache_name: str) -> str:
+    """Build a dev-cache file path using DEFAULT_CACHE_EXTENSION."""
+    extension = DEFAULT_CACHE_EXTENSION.lstrip('.')
+    return os.path.join(DEV_CACHE_DIR, f'{cache_name}.{extension}')
+
+
+def read_cached_dataframe(cache_path: str) -> pd.DataFrame:
+    """Read a cached dataframe using the configured DEFAULT_CACHE_EXTENSION."""
+    extension = DEFAULT_CACHE_EXTENSION.lstrip('.').lower()
+    if extension == 'parquet':
+        return pd.read_parquet(cache_path)
+    return pd.read_csv(cache_path)
+
+
+ROUTES_CACHE_PATH = cache_path('routes')
+CUST_TIER_CACHE_PATH = cache_path('cust_tier')
+DLVR_WINDOW_CACHE_PATH = cache_path('dlvr_window')
 OUTPUT_DIR = os.path.realpath(os.path.join(DATA_LOCATION, 'output'))
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 INPUT_DIR = os.path.realpath(os.path.join(DATA_LOCATION, 'input'))
@@ -39,7 +59,7 @@ QUERIES = {
         'cache_name': 'cust_tier'
     },
     'dlvr_window': {
-        'path': os.path.join(QUERY_DIR, 'dlvr_window.sql'),
+        'path': os.path.join(QUERY_DIR, 'dlvr_window_fact.sql'),
         'clusternm': 'ODI_PROD',
         'params': {},
         'cache_name': 'dlvr_window'
@@ -94,8 +114,68 @@ def fetch_dlvr_window_records(sql, qry=QUERIES['dlvr_window'], cache_nm='dlvr_wi
     return df
 
 
-def summarize_route_capacity_by_weekday(df):
-    route_capacity_daily = df.groupby(['route_id', 'route_start_date', 'dlvry_day_nm']).agg(
+def summarize_committed_tw1_slots(dlvr_window_df: pd.DataFrame) -> pd.DataFrame:
+    """Derive committed TW1 slot per route/customer from historical delivery-window facts."""
+    
+    df = dlvr_window_df.copy()
+    df['tw1opendatetime'] = pd.to_datetime(df['tw1opendatetime'])
+    df['tw1closedatetime'] = pd.to_datetime(df['tw1closedatetime'])
+    df['tw1opendate'] = df['tw1opendatetime'].dt.date
+    df['tw1opentime'] = df['tw1opendatetime'].dt.time
+    df['tw1closedate'] = df['tw1closedatetime'].dt.date
+    df['tw1closetime'] = df['tw1closedatetime'].dt.time
+
+    df = df.sort_values(by=['route_id', 'co_cust_nbr', 'rte_strt_dt'], ascending=[True, True, False]) 
+
+    # cols_to_keep = ['route_id', 'rte_strt_dt', 'co_cust_nbr', 'latitude', 'longitude', 
+    # 'tw1opendate', 'tw1opentime', 'tw1closedate', 'tw1closetime']
+    # committed = df.drop_duplicates(subset=['route_id', 'co_cust_nbr'])
+    committed = df.groupby(['route_id', 'co_cust_nbr']).agg(
+        tw1opendate=('tw1opendate', 'first'),
+        tw1closedate=('tw1closedate', 'first'),
+        tw1opentime=('tw1opentime', 'first'),
+        tw1closetime=('tw1closetime', 'first'),
+        latitude=('latitude', 'mean'),
+        longitude=('longitude', 'mean'),
+    ).reset_index()
+
+    # committed = committed[committed['tw1opendatetime'] < committed['tw1closedatetime']].copy()
+    
+    return committed
+
+
+def normalize_dlvry_day_nm(series: pd.Series) -> pd.Series:
+    """Canonical weekday name for joins (routes SQL uses padded TO_CHAR 'Day' labels)."""
+    return series.astype(str).str.strip().str.title()
+
+
+def merge_stop_locations_with_dlvr_window(
+    stop_locations: pd.DataFrame,
+    dlvr_window_df: pd.DataFrame,
+) -> pd.DataFrame:
+    """Attach delivery-window attributes to route stops by customer and weekday."""
+    stops = stop_locations.copy()
+    window_df = dlvr_window_df.drop(columns=["cust_tier"], errors="ignore").copy()
+    stops["dlvry_day_nm"] = normalize_dlvry_day_nm(stops["dlvry_day_nm"])
+    window_df["tw_dlvry_day_nm"] = normalize_dlvry_day_nm(window_df["tw_dlvry_day_nm"])
+    merged = stops.merge(
+        window_df,
+        left_on=["co_cust_nbr", "dlvry_day_nm"],
+        right_on=["co_cust_nbr", "tw_dlvry_day_nm"],
+        how="left",
+    )
+    return merged
+
+
+def prepare_route_capacity_raw_data(route_capacity_raw_df: pd.DataFrame) -> pd.DataFrame:
+    """Filter and normalize route stop facts used for route-capacity calculation."""
+    df = route_capacity_raw_df.copy()
+    route_ids = df["route_id"].astype(str)
+    return df[route_ids.str.len() == 4].copy()
+
+
+def summarize_route_capacity(df):
+    route_capacity_daily = df.groupby(['route_id', 'route_nm', 'route_start_date']).agg(
         route_weight_capacity=('route_weight_capacity', 'mean'),
         route_cube_capacity=('route_cube_capacity', 'mean'),
         weight_sum=('weight', 'sum'),
@@ -103,7 +183,7 @@ def summarize_route_capacity_by_weekday(df):
         cases_sum=('cases', 'sum'),
     ).reset_index()
 
-    route_capacity_summary = route_capacity_daily.groupby(['route_id', 'dlvry_day_nm']).agg(
+    route_capacity_summary = route_capacity_daily.groupby(['route_id', 'route_nm']).agg(
         route_weight_capacity=('route_weight_capacity', 'mean'),
         route_cube_capacity=('route_cube_capacity', 'mean'),
         weight_sum=('weight_sum', 'mean'),
@@ -136,16 +216,16 @@ def attach_cust_tier_to_stop_locations(
     return stop_locations
 
 
-def summarize_stop_geographies(df):
+def summarize_stop_geographies(committed_tw1_slots_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Stop coordinates and route service centers keyed by route_id and dlvry_day_nm."""
 
-    stop_locations = df.groupby(['route_id', 'route_nm', 'dlvry_day_nm', 'co_cust_nbr']).agg(
+    stop_locations = committed_tw1_slots_df.groupby(['route_id', 'co_cust_nbr']).agg(
         latitude=('latitude', 'mean'),
         longitude=('longitude', 'mean'),
     ).reset_index()
 
     # TODO: find the center point in a more accurate way
-    service_centers = stop_locations.groupby(['route_id', 'route_nm', 'dlvry_day_nm']).agg(
+    service_centers = stop_locations.groupby(['route_id']).agg(
         service_center_latitude=('latitude', 'mean'),
         service_center_longitude=('longitude', 'mean'),
     ).reset_index()
@@ -154,18 +234,15 @@ def summarize_stop_geographies(df):
 
 
 def build_route_summary_tables(
-    raw_df: pd.DataFrame,
-    cust_tier_df: pd.DataFrame | None = None,
+    route_capacity_raw_df: pd.DataFrame,
+    committed_tw1_slots_df: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    route_capacity_summary = summarize_route_capacity_by_weekday(raw_df)
-    stop_locations, service_centers = summarize_stop_geographies(raw_df)
-    if cust_tier_df is not None:
-        stop_locations = attach_cust_tier_to_stop_locations(stop_locations, cust_tier_df)
-    else:
-        stop_locations["cust_tier"] = DEFAULT_CUST_TIER
+    prepared_df = prepare_route_capacity_raw_data(route_capacity_raw_df)
+    route_capacity_summary = summarize_route_capacity(prepared_df)
+    stop_locations, service_centers = summarize_stop_geographies(committed_tw1_slots_df)
     route_summary = route_capacity_summary.merge(
         service_centers,
-        on=['route_id', 'dlvry_day_nm'],
+        on=['route_id'],
         how='inner',
         validate='1:1',
     )
@@ -176,7 +253,7 @@ def build_route_summary_tables(
 pull_routes_data = fetch_route_stop_records
 pull_cust_tier_data = fetch_cust_tier_records
 pull_dlvr_window_data = fetch_dlvr_window_records
-calculate_route_capacity = summarize_route_capacity_by_weekday
+calculate_route_capacity = summarize_route_capacity
 get_route_stops_locations = summarize_stop_geographies
 
 # def pull_dot_base_data(sql, strt_wk, end_wk, markets, qry=QUERIES['dot_base'], cache_nm=None):
@@ -199,16 +276,22 @@ if __name__ == '__main__':
     # ds_utils related params
     RUN_MODE = ds_utils.Mode('dev')
     IGNORE_CACHE = False
-    DEFAULT_CACHE_EXTENSION = '.csv.gz' # 'parquet'
 
     # Set ds_utils cachey and sql
     cachey = ds_utils.Data(rm=RUN_MODE, data_location=DATA_LOCATION, session_date='',
                            ignore_cache=IGNORE_CACHE, default_cache_extension=DEFAULT_CACHE_EXTENSION)
     sql = ds_utils.SQLAccess(RUN_MODE, data=cachey)
 
-    raw_df = fetch_route_stop_records(sql)
+    route_capacity_raw_df = fetch_route_stop_records(sql)
     cust_tier_df = fetch_cust_tier_records(sql)
-    dlvr_window_df = fetch_dlvr_window_records(sql)
+    raw_dlvr_window_df = fetch_dlvr_window_records(sql)
 
-    df_routes, df_stop_locations = build_route_summary_tables(raw_df, cust_tier_df)
+    # Find committed time slot from historical data.
+    committed_tw1_slots_df = summarize_committed_tw1_slots(raw_dlvr_window_df)
+    committed_tw1_slots_df = attach_cust_tier_to_stop_locations(committed_tw1_slots_df, cust_tier_df)
+
+    df_routes, df_stop_locations = build_route_summary_tables(route_capacity_raw_df, committed_tw1_slots_df)
+
+
+
 

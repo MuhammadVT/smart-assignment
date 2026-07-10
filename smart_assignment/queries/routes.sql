@@ -41,7 +41,7 @@ SELECT
     , routes.weightcapacity as route_weight_capacity
     , routes.cubecapacity as route_cube_capacity
     , plnd_dlvry_stp.routestartdateid AS route_start_date
-    , TO_CHAR(TO_DATE(plnd_dlvry_stp.deliverydaysdateid, 'YYYYMMDD', FALSE),'Day') AS dlvry_day_nm
+    -- , TO_CHAR(TO_DATE(plnd_dlvry_stp.deliverydaysdateid, 'YYYYMMDD', FALSE),'Day') AS dlvry_day_nm
 --     , fiscal_cal.daynameshort as route_start_day
     -- planned info:
     , plnd_dlvry_stp.weight AS weight
@@ -59,6 +59,11 @@ SELECT
     , LOWER(ploc.region1) as city
     , ploc.longitude  -- customer long
     , ploc.latitude -- customer lat
+
+    , dpt.latitude as dpt_lat
+    , dpt.longitude as dpt_long
+    , dpt.description as dpt_description
+
 FROM dm.fact_dailyplanneddeliverystops AS plnd_dlvry_stp
     JOIN fiscal_cal
         ON plnd_dlvry_stp.routestartdateid = fiscal_cal.dateid
@@ -96,10 +101,16 @@ FROM dm.fact_dailyplanneddeliverystops AS plnd_dlvry_stp
             AND dd1.srcstopid = ploc.srclocationid
             AND dd1.type = ploc.type
             AND ploc.iscurrentversion = 1
+
+    LEFT JOIN dw.dim_planneddeliverylocation AS dpt
+        ON plnd_dlvry_stp.operatingcompanyid = dpt.operatingcompanyid
+        AND routes.srclocationidorigin = dpt.srclocationid
+        AND dpt.iscurrentversion = 1
+        AND dpt.type = 'DPT'
+
 WHERE 1 = 1
     AND plnd_dlvry_stp.stoptype IN ('STP')
     AND plnd_dlvry_stp.cases is not null
     AND dd1.type = 'SIT'
+    -- AND plnd_dlvry_stp.offdaydelivery = 0  -- TODO: confirm whether we need this for calculating truck avg load
 ORDER BY route_id, plnd_dlvry_stp.routestartdateid, planned_stop_seq
-
-
