@@ -74,6 +74,27 @@ def _minutes(t: time) -> int:
     return t.hour * 60 + t.minute
 
 
+def _time_from_minutes(m: int) -> time:
+    """Clamp minutes-since-midnight into a valid clock time (max 23:59)."""
+    m = max(0, min(m, 24 * 60 - 1))
+    return time(m // 60, m % 60)
+
+
+def normalize_window(window: Window, minutes: int) -> Window:
+    """
+    Return a fixed-length window of ``minutes`` anchored at ``window``'s start
+    -- the standard delivery window we recommend (see Config.slot_window_minutes),
+    independent of how long the route's historical window happened to be. Clamped
+    so it never runs past end of day.
+    """
+    start = _minutes(window[0])
+    end = start + minutes
+    if end > 24 * 60 - 1:
+        end = 24 * 60 - 1
+        start = max(0, end - minutes)
+    return (_time_from_minutes(start), _time_from_minutes(end))
+
+
 def stop_reference_time(stop: RouteStop) -> Optional[time]:
     """
     Coarse proxy for "when the truck is at this stop" -- THE phase A/B seam.
@@ -213,25 +234,32 @@ def recommend_slot(
     - Otherwise (no preference, or none of the options overlaps it): take the
       top of the already-ranked menu -- the between-stops pick when location
       fit exists, the least-contended window when it doesn't. The route still
-      gets a slot; `overlap_minutes` is the (possibly 0) overlap with the
-      preference.
+      gets a slot.
 
-    `overlap_minutes` is always the route's *best achievable* overlap with the
-    preferred window, so the `window_match` scorer keeps its original meaning.
+    The winning window is then normalized to the standard recommended length
+    (`config.slot_window_minutes`, default 3 hours) anchored at its start, and
+    `overlap_minutes` is the overlap between that recommended window and the
+    customer's preference (0 when there is none) -- so the `window_match` scorer
+    sees the slot we actually propose.
     """
     if not options:
         return SlotSelection(None, SLOT_BASIS_NONE, 0)
 
+    chosen_window: Optional[Window] = None
+    basis = SLOT_BASIS_NONE
     if preferred_window is not None:
         overlapping = [(o, overlap_minutes(preferred_window, o.window)) for o in options]
         overlapping = [(o, ov) for (o, ov) in overlapping if ov > 0]
         if overlapping:
-            best, best_overlap = max(
+            best, _best_overlap = max(
                 overlapping,
                 key=lambda pair: (pair[1], pair[0].fit_score, -_minutes(pair[0].window[0])),
             )
-            return SlotSelection(best.window, SLOT_BASIS_PREFERENCE, best_overlap)
+            chosen_window, basis = best.window, SLOT_BASIS_PREFERENCE
+    if chosen_window is None:
+        chosen = options[0]
+        chosen_window, basis = chosen.window, chosen.basis
 
-    chosen = options[0]
-    overlap = overlap_minutes(preferred_window, chosen.window) if preferred_window else 0
-    return SlotSelection(chosen.window, chosen.basis, overlap)
+    recommended = normalize_window(chosen_window, config.slot_window_minutes)
+    overlap = overlap_minutes(preferred_window, recommended) if preferred_window else 0
+    return SlotSelection(recommended, basis, overlap)
