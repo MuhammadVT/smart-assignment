@@ -161,12 +161,31 @@ class FactorScore:
         return self.weight * self.value
 
 
+@dataclass(frozen=True)
+class SlotOption:
+    """
+    One window a route offers, annotated for slot selection: how well it fits
+    the prospect's location relative to the route's committed stops, and how
+    contended it already is. Produced by `identify_available_slots`
+    (shared/slot_selection.py); the recommendation step picks among these.
+    """
+
+    window: Window
+    fit_score: float  # 0.0-1.0 inverse-distance-weighted support from nearby committed stops
+    committed_overlap: int  # how many committed stops' windows overlap this one (contention)
+    basis: str  # why this option exists: "between_adjacent_stops" | "least_contended"
+
+
 @dataclass
 class CandidateEvaluation:
     """
     Full evaluation trace for a single candidate route: the geo/capacity
     facts, every hard-constraint outcome, and (if feasible) the scoring
     breakdown. This is what makes the recommendation auditable.
+
+    `chosen_window` is the single recommended slot; `available_slots` is the
+    full menu that was considered (with fit + contention), and `window_basis`
+    records why `chosen_window` won.
     """
 
     route: Route
@@ -177,6 +196,8 @@ class CandidateEvaluation:
     constraint_outcomes: list[ConstraintOutcome] = field(default_factory=list)
     factor_scores: list[FactorScore] = field(default_factory=list)
     total_score: float = 0.0
+    window_basis: str = ""
+    available_slots: list[SlotOption] = field(default_factory=list)
 
     @property
     def feasible(self) -> bool:
@@ -224,6 +245,7 @@ class SlotRecommendation:
     recommended_route_name: Optional[str] = None
     recommended_day: Optional[str] = None
     recommended_window: Optional[str] = None
+    recommended_window_basis: Optional[str] = None  # why this slot was chosen (audit trail)
     factor_breakdown: list[FactorScore] = field(default_factory=list)
     rejected_alternatives: list[str] = field(default_factory=list)
     review_reason: Optional[str] = None

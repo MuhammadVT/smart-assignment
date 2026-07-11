@@ -662,7 +662,7 @@ def _sim_steps(result: RecommendationResult, config: Config) -> list[dict]:
     if result.ranked_feasible:
         score = ["Each dimension is normalized to 0–1, then combined by weight:"]
         for e in result.ranked_feasible:
-            ctx = build_context(c, e.route)
+            ctx = build_context(c, e.route, config)
             g = _factor_value(e, FACTOR_GEO_CLUSTERING)
             b = _factor_value(e, FACTOR_CAPACITY_BUFFER)
             w = _factor_value(e, FACTOR_WINDOW_MATCH)

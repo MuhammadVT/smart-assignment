@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from typing import Optional
 
 # Canonical names of the three weighted scoring factors (spec step 4).
 FACTOR_GEO_CLUSTERING = "geographic_clustering"
@@ -37,6 +38,17 @@ def _int_env(name: str, default: int) -> int:
         return int(raw)
     except ValueError:
         return default
+
+
+def _opt_float_env(name: str) -> Optional[float]:
+    """A float env var that is genuinely optional: unset or blank -> None."""
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
 
 
 def _default_weights() -> dict[str, float]:
@@ -77,6 +89,14 @@ class Config:
     # where the real risk of a future add overflowing the truck actually is.
     capacity_buffer_safety_margin: float = 0.15
 
+    # --- Slot selection (location-aware delivery-window pick) ---
+    # How many of a route's nearest committed stops get to "vote" on which
+    # offered window a prospect belongs in ("a slot between adjacent stops").
+    slot_neighbor_count: int = 3
+    # Optional cap (miles): committed stops farther than this don't vote. None
+    # means no cap -- every committed stop is eligible, ranked by distance.
+    slot_neighbor_max_miles: Optional[float] = None
+
     # --- Decision / escalation ---
     # The winning route's own total_score (see shared/scoring.score_candidate)
     # must meet this bar to auto-assign; below it, the agent escalates to a
@@ -111,6 +131,8 @@ class Config:
             capacity_buffer_safety_margin=_float_env(
                 "SMART_ASSIGNMENT_CAPACITY_SAFETY_MARGIN", 0.15
             ),
+            slot_neighbor_count=_int_env("SMART_ASSIGNMENT_SLOT_NEIGHBORS", 3),
+            slot_neighbor_max_miles=_opt_float_env("SMART_ASSIGNMENT_SLOT_NEIGHBOR_MAX_MILES"),
             total_score_threshold=_float_env("SMART_ASSIGNMENT_TOTAL_SCORE_THRESHOLD", 0.60),
             llm_backend=os.environ.get("SMART_ASSIGNMENT_LLM_BACKEND", "sage"),
             model=os.environ.get("SMART_ASSIGNMENT_MODEL", "gemini-2.5-flash"),

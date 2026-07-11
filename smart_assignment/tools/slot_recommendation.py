@@ -48,7 +48,7 @@ from smart_assignment.shared.models import (
     PreferredSlot,
     Route,
 )
-from smart_assignment.shared.timeutils import fmt_time, parse_time
+from smart_assignment.shared.timeutils import fmt_time, fmt_window, parse_time
 from smart_assignment.pipeline import decide, evaluate_candidates, geo_lookup, intake
 from smart_assignment.reasoning import LLMReasoner
 
@@ -116,6 +116,17 @@ def _serialize_evaluation(e: CandidateEvaluation) -> dict:
             for c in e.constraint_outcomes
         ],
     }
+    out["chosen_window"] = fmt_window(e.chosen_window)
+    out["window_basis"] = e.window_basis
+    out["available_slots"] = [
+        {
+            "window": fmt_window(s.window),
+            "fit_score": round(s.fit_score, 4),
+            "committed_overlap": s.committed_overlap,
+            "basis": s.basis,
+        }
+        for s in e.available_slots
+    ]
     if e.feasible:
         out["factor_scores"] = [
             {"name": f.name, "weight": f.weight, "value": round(f.value, 4), "detail": f.detail}
@@ -311,8 +322,10 @@ def evaluate_and_score_routes(tool_context: ToolContext) -> dict:
       {"ok": true, "routes": [
         {"route_id", "name", "day", "distance_miles", "feasible",
          "utilization_after", "constraints": [{"name", "passed", "detail"}],
-         "factor_scores" (only if feasible): [{"name", "weight", "value",
-         "detail"}], "total_score" (only if feasible)},
+         "chosen_window", "window_basis" (why that slot was chosen),
+         "available_slots": [{"window", "fit_score", "committed_overlap",
+         "basis"}], "factor_scores" (only if feasible): [{"name", "weight",
+         "value", "detail"}], "total_score" (only if feasible)},
         ...]}
       or {"ok": false, "error": "..."}.
     """
@@ -345,8 +358,8 @@ def recommend_or_escalate(tool_context: ToolContext) -> dict:
     Returns:
       {"ok": true, "decision", "requires_human_review", "total_score",
        "recommended_route_id", "recommended_route_name", "recommended_day",
-       "recommended_window", "reasoning", "rejected_alternatives",
-       "review_reason"}
+       "recommended_window", "recommended_window_basis" (why that slot was
+       chosen), "reasoning", "rejected_alternatives", "review_reason"}
       or {"ok": false, "error": "..."}.
     """
     profile = tool_context.state.get(_STATE_PROFILE_KEY)
@@ -373,6 +386,7 @@ def recommend_or_escalate(tool_context: ToolContext) -> dict:
         "recommended_route_name": rec.recommended_route_name,
         "recommended_day": rec.recommended_day,
         "recommended_window": rec.recommended_window,
+        "recommended_window_basis": rec.recommended_window_basis,
         "reasoning": rec.reasoning,
         "rejected_alternatives": rec.rejected_alternatives,
         "review_reason": rec.review_reason,

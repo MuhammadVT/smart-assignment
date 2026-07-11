@@ -42,6 +42,16 @@ def overlap_minutes(a: Window, b: Window) -> int:
     return max(0, end - start)
 
 
+def window_midpoint(window: Window) -> time:
+    """
+    The clock time halfway through a window. Used as a coarse "when is the
+    truck near here" proxy for slot selection (see shared/slot_selection.py)
+    until a real planned-arrival time is available per stop.
+    """
+    mid = (_minutes(window[0]) + _minutes(window[1])) // 2
+    return time(mid // 60, mid % 60)
+
+
 def best_overlapping_window(
     preferred: Optional[Window], available: list[Window]
 ) -> tuple[Optional[Window], int]:
