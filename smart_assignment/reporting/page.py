@@ -926,6 +926,18 @@ def build_map_data(result: RecommendationResult) -> Optional[dict]:
                 "total_score": round(cand.total_score, 2) if cand.feasible else None,
                 "service_center": {"lat": center.latitude, "lng": center.longitude},
                 "service_radius_miles": r.service_radius_miles,
+                # The slot we'd recommend on THIS route (location-aware, normalized
+                # to the standard length) + why -- the timeline marks it with two
+                # dashed guide lines. None when the route offers no windows.
+                "chosen_window": (
+                    {
+                        "open": fmt_time(cand.chosen_window[0]),
+                        "close": fmt_time(cand.chosen_window[1]),
+                    }
+                    if cand.chosen_window
+                    else None
+                ),
+                "window_basis": cand.window_basis or None,
                 "stops": [
                     {
                         "lat": s.location.latitude,

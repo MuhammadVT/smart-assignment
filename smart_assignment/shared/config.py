@@ -96,6 +96,12 @@ class Config:
     # Optional cap (miles): committed stops farther than this don't vote. None
     # means no cap -- every committed stop is eligible, ranked by distance.
     slot_neighbor_max_miles: Optional[float] = None
+    # Length of the delivery window we actually RECOMMEND to the prospect, in
+    # minutes. The route's historical windows can be any length; the pick is
+    # normalized to this standard duration (default 180 = 3 hours), anchored at
+    # the chosen window's start. Change this one value to widen/narrow every
+    # recommended slot.
+    slot_window_minutes: int = 180
 
     # --- Decision / escalation ---
     # The winning route's own total_score (see shared/scoring.score_candidate)
@@ -133,6 +139,7 @@ class Config:
             ),
             slot_neighbor_count=_int_env("SMART_ASSIGNMENT_SLOT_NEIGHBORS", 3),
             slot_neighbor_max_miles=_opt_float_env("SMART_ASSIGNMENT_SLOT_NEIGHBOR_MAX_MILES"),
+            slot_window_minutes=_int_env("SMART_ASSIGNMENT_SLOT_WINDOW_MINUTES", 180),
             total_score_threshold=_float_env("SMART_ASSIGNMENT_TOTAL_SCORE_THRESHOLD", 0.60),
             llm_backend=os.environ.get("SMART_ASSIGNMENT_LLM_BACKEND", "sage"),
             model=os.environ.get("SMART_ASSIGNMENT_MODEL", "gemini-2.5-flash"),

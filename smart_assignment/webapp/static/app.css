@@ -377,6 +377,52 @@
 .tw-swatch.tw-open { background: var(--green-soft); border: 1px solid #bcd9c4; }
 .tw-swatch.tw-busy-swatch { background: #64748b; }
 
+/* Recommended-slot reason chip in the route header (A). */
+.tw-rec {
+  font-size: 11px;
+  font-weight: 600;
+  margin-left: 8px;
+  white-space: nowrap;
+}
+
+/* A route's rows (stops + availability), wrapped so the recommended-window
+   guide lines can span them, aligned to the shared time axis. */
+.tw-route-block { position: relative; }
+/* Overlay starts where the track does: past the 96px label gutter + 10px gap. */
+.tw-guides {
+  position: absolute;
+  left: 106px;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  pointer-events: none;
+  z-index: 4;
+}
+/* Two dashed verticals marking the recommended window's start and end -- colour
+   set inline to the route's colour. */
+.tw-guide {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-left: 1.5px dashed currentColor;
+  opacity: 0.9;
+}
+
+/* Map hover label tying a stop point to its timeline bar (customer number). */
+.stop-tip.leaflet-tooltip {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 6px;
+  color: var(--ink);
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  box-shadow: var(--shadow);
+}
+.stop-tip.leaflet-tooltip-top::before { border-top-color: var(--line); }
+
 @media (max-width: 860px) {
   .transcript { max-height: 46vh; }
   #map { height: 280px; }

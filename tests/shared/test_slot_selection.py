@@ -25,6 +25,7 @@ from smart_assignment.shared.slot_selection import (
     _window_for_reference_time,
     identify_available_slots,
     nearest_neighbors,
+    normalize_window,
     recommend_slot,
     stop_reference_time,
 )
@@ -189,7 +190,7 @@ def test_recommend_accommodates_preference_even_over_better_location_fit():
     route = _route([MORNING, AFTERNOON], [near_pm])
     options = identify_available_slots(PROSPECT, route, Config())
     sel = recommend_slot(options, preferred_window=MORNING, config=Config())
-    assert sel.window == MORNING
+    assert sel.window == MORNING  # already a 3h window, so normalization is a no-op
     assert sel.basis == SLOT_BASIS_PREFERENCE
     assert sel.overlap_minutes == 180
 
@@ -209,11 +210,12 @@ def test_recommend_picks_greatest_overlap_among_preference_matches():
 def test_recommend_still_returns_a_slot_when_preference_cannot_be_met():
     # Route only offers an afternoon window; the morning preference can't be
     # honored, but the route is NOT dropped -- it still gets a slot, overlap 0.
+    # AFTERNOON is 2h, so the recommended slot is normalized to 3h from its start.
     near_pm = _stop(29.7501, -95.3601, AFTERNOON)
     route = _route([AFTERNOON], [near_pm])
     options = identify_available_slots(PROSPECT, route, Config())
     sel = recommend_slot(options, preferred_window=MORNING, config=Config())
-    assert sel.window == AFTERNOON
+    assert sel.window == (time(13, 0), time(16, 0))
     assert sel.overlap_minutes == 0
     assert sel.basis == SLOT_BASIS_BETWEEN_STOPS  # location fit still explains the pick
 
@@ -224,7 +226,7 @@ def test_recommend_no_preference_takes_top_of_menu():
     route = _route([MORNING, AFTERNOON], [near_pm, far_am])
     options = identify_available_slots(PROSPECT, route, Config())
     sel = recommend_slot(options, preferred_window=None, config=Config())
-    assert sel.window == AFTERNOON  # best location fit
+    assert sel.window == (time(13, 0), time(16, 0))  # best-fit AFTERNOON, normalized to 3h
     assert sel.overlap_minutes == 0
     assert sel.basis == SLOT_BASIS_BETWEEN_STOPS
 
@@ -239,7 +241,7 @@ def test_recommend_falls_back_to_least_contended_when_no_fit_no_preference():
     cfg = Config(slot_neighbor_max_miles=0.25)
     options = identify_available_slots(PROSPECT, route, cfg)
     sel = recommend_slot(options, preferred_window=None, config=cfg)
-    assert sel.window == AFTERNOON  # the emptier window
+    assert sel.window == (time(13, 0), time(16, 0))  # the emptier window, normalized to 3h
     assert sel.basis == SLOT_BASIS_LEAST_CONTENDED
 
 
@@ -264,3 +266,39 @@ def test_neighbor_count_does_not_crash_on_small_routes(neighbor_count):
     cfg = Config(slot_neighbor_count=neighbor_count)
     options = identify_available_slots(PROSPECT, route, cfg)
     assert options[0].window == AFTERNOON
+
+
+# --- Recommended-window length (configurable, default 3h) -------------------
+
+
+def test_normalize_window_anchors_at_start_for_default_3h():
+    assert normalize_window((time(13, 0), time(15, 0)), 180) == (time(13, 0), time(16, 0))
+    assert normalize_window((time(7, 0), time(10, 0)), 180) == (time(7, 0), time(10, 0))
+
+
+def test_normalize_window_shrinks_a_longer_window():
+    assert normalize_window((time(8, 0), time(14, 0)), 180) == (time(8, 0), time(11, 0))
+
+
+def test_normalize_window_clamps_at_end_of_day():
+    start, end = normalize_window((time(23, 0), time(23, 30)), 180)
+    assert end == time(23, 59)
+    assert start == time(20, 59)  # pulled back so the window stays its full length
+
+
+def test_recommended_window_uses_default_three_hours():
+    # A 2h historical window is presented as a standard 3h recommendation.
+    near = _stop(29.7501, -95.3601, AFTERNOON)
+    route = _route([AFTERNOON], [near])
+    options = identify_available_slots(PROSPECT, route, Config())
+    sel = recommend_slot(options, preferred_window=None, config=Config())
+    assert sel.window == (time(13, 0), time(16, 0))
+
+
+def test_slot_window_minutes_is_configurable():
+    near = _stop(29.7501, -95.3601, AFTERNOON)
+    route = _route([AFTERNOON], [near])
+    cfg = Config(slot_window_minutes=240)  # one config change -> 4h windows
+    options = identify_available_slots(PROSPECT, route, cfg)
+    sel = recommend_slot(options, preferred_window=None, config=cfg)
+    assert sel.window == (time(13, 0), time(17, 0))
