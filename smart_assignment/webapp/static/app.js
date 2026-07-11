@@ -275,10 +275,21 @@
   }
 
   // --- Delivery-window timeline (below the map, same route selection) ---
-  // For each selected route, a Gantt of its committed stops' delivery windows on
-  // a shared time axis, plus an "availability" lane (a demand histogram whose
-  // valleys/blanks are the open slots).
-  var TW_BUCKET_MIN = 15;  // availability-lane resolution
+  // Routes are shown in the agent's scored order (recommended first, then the
+  // rest, then infeasible) -- matching the "Routes the agent evaluated" section.
+  // For each route: a Gantt of its committed stops' delivery windows on a shared
+  // time axis, each bar coloured by the customer's tier; then an "availability"
+  // ribbon that coalesces overlap into a few busy/open segments (open gaps
+  // labelled with how long they are) so the free slots read at a glance.
+  var TW_BUCKET_MIN = 15;  // availability sampling resolution
+
+  // Customer-tier palette (bar colour). Ordered high-to-low for the legend;
+  // unknown/other tiers fall back to slate.
+  var TIER_ORDER = ['Perks', '5', '4', 'Other'];
+  var TIER_COLORS = { 'Perks': '#b45309', '5': '#7c3aed', '4': '#2563eb', 'Other': '#64748b' };
+  var TIER_FALLBACK = '#64748b';
+  function tierColor(t) { return (t && TIER_COLORS[t]) || TIER_FALLBACK; }
+  function tierLabel(t) { return t ? ('Tier ' + t).replace('Tier Perks', 'Perks') : 'Unknown'; }
 
   function toMin(hhmm) {
     var p = hhmm.split(':');
@@ -288,15 +299,22 @@
     var h = Math.floor(m / 60), mm = m % 60;
     return (h < 10 ? '0' : '') + h + ':' + (mm < 10 ? '0' : '') + mm;
   }
+  function fmtDur(m) {
+    var h = Math.floor(m / 60), mm = m % 60;
+    return (h ? h + 'h' : '') + (h && mm ? ' ' : '') + (mm ? mm + 'm' : (h ? '' : '0m'));
+  }
 
   function renderWindows() {
     if (!windowsChart) { return; }
     var panel = document.getElementById('windows-panel');
     if (!currentMapData) { if (panel) { panel.style.display = 'none'; } return; }
 
-    // Selected routes that actually have at least one stop with a window.
+    // Selected routes that actually have at least one stop with a window, in the
+    // agent's ranked order (payload `rank`; falls back to input order).
     var routes = currentMapData.routes.filter(function (r) {
       return selectedRoutes[r.route_id] && r.stops.some(function (s) { return s.window; });
+    }).slice().sort(function (a, b) {
+      return (a.rank == null ? 1e9 : a.rank) - (b.rank == null ? 1e9 : b.rank);
     });
     if (!routes.length) {
       if (panel) { panel.style.display = 'none'; }
@@ -321,6 +339,23 @@
 
     var html = '';
 
+    // Tier legend -- only the tiers actually present among the shown stops.
+    var present = {};
+    routes.forEach(function (r) {
+      r.stops.forEach(function (s) { if (s.window) { present[s.tier || 'Unknown'] = true; } });
+    });
+    var tiers = Object.keys(present).sort(function (a, b) {
+      var ia = TIER_ORDER.indexOf(a), ib = TIER_ORDER.indexOf(b);
+      return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+    });
+    var tierItems = tiers.map(function (t) {
+      var c = t === 'Unknown' ? TIER_FALLBACK : tierColor(t);
+      return '<span class="tw-tier-item"><span class="tw-tier-dot" style="background:' + c
+        + '"></span>' + tierLabel(t === 'Unknown' ? null : t) + '</span>';
+    }).join('');
+    html += '<div class="tw-tier-legend"><span class="tw-tier-lead">Window colour · tier:</span>'
+      + tierItems + '</div>';
+
     // Shared hour axis.
     var ticks = '';
     for (var t = lo; t <= hi; t += 60) {
@@ -342,39 +377,54 @@
 
       stops.forEach(function (s) {
         var o = toMin(s.window.open), c = toMin(s.window.close);
-        var title = s.id + ' · ' + s.window.open + '–' + s.window.close;
+        var bar = tierColor(s.tier);
+        var title = s.id + ' · ' + s.window.open + '–' + s.window.close
+          + ' · ' + tierLabel(s.tier);
         html += '<div class="tw-row"><span class="tw-label" title="' + s.id + '">' + s.id + '</span>'
           + '<span class="tw-track">'
           + '<span class="tw-bar" title="' + title + '" style="left:' + pct(o) + '%;width:'
-          + (pct(c) - pct(o)) + '%;background:' + color + '"></span></span></div>';
+          + (pct(c) - pct(o)) + '%;background:' + bar + '"></span></span></div>';
       });
 
-      // Availability lane: demand per bucket (how many windows overlap).
-      var buckets = '';
-      var maxD = 0, demand = [];
+      // Availability ribbon: sample overlap per bucket, then COALESCE adjacent
+      // equal-demand buckets into a handful of segments -- one busy block per
+      // demand level and one green block per open gap -- instead of a jagged
+      // per-bucket histogram. Open gaps carry a duration label.
+      var maxD = 0, samples = [];
       for (var b = lo; b < hi; b += TW_BUCKET_MIN) {
         var mid = b + TW_BUCKET_MIN / 2;
         var d = 0;
         stops.forEach(function (s) {
           if (toMin(s.window.open) <= mid && mid < toMin(s.window.close)) { d++; }
         });
-        demand.push({ start: b, d: d });
+        samples.push(d);
         maxD = Math.max(maxD, d);
       }
-      demand.forEach(function (bk) {
-        var w = (TW_BUCKET_MIN / span) * 100;
-        if (bk.d === 0) {
-          buckets += '<span class="tw-bkt tw-free" style="left:' + pct(bk.start) + '%;width:' + w
-            + '%" title="open ' + fmtMin(bk.start) + '–' + fmtMin(bk.start + TW_BUCKET_MIN) + '"></span>';
+      var segs = [];
+      for (var i = 0; i < samples.length; i++) {
+        var start = lo + i * TW_BUCKET_MIN;
+        if (segs.length && segs[segs.length - 1].d === samples[i]) {
+          segs[segs.length - 1].end = start + TW_BUCKET_MIN;
         } else {
-          var h = 30 + (bk.d / Math.max(maxD, 1)) * 70;  // 30–100% height by demand
-          buckets += '<span class="tw-bkt tw-busy" style="left:' + pct(bk.start) + '%;width:' + w
-            + '%;height:' + h + '%;background:' + color + '" title="' + bk.d
-            + ' deliveries ' + fmtMin(bk.start) + '–' + fmtMin(bk.start + TW_BUCKET_MIN) + '"></span>';
+          segs.push({ start: start, end: start + TW_BUCKET_MIN, d: samples[i] });
         }
-      });
+      }
+      var ribbon = segs.map(function (sg) {
+        var left = pct(sg.start), w = pct(sg.end) - pct(sg.start), dur = sg.end - sg.start;
+        if (sg.d === 0) {
+          var lbl = w > 7 ? '<span class="tw-open-txt">' + fmtDur(dur) + ' open</span>' : '';
+          return '<span class="tw-seg tw-open" style="left:' + left + '%;width:' + w
+            + '%" title="Open ' + fmtMin(sg.start) + '–' + fmtMin(sg.end) + ' · ' + fmtDur(dur)
+            + '">' + lbl + '</span>';
+        }
+        // Busy: single-height block, shaded by how many windows overlap.
+        var op = (0.32 + 0.68 * (sg.d / Math.max(maxD, 1))).toFixed(2);
+        return '<span class="tw-seg tw-busy" style="left:' + left + '%;width:' + w
+          + '%;opacity:' + op + '" title="' + sg.d + ' overlapping · ' + fmtMin(sg.start) + '–'
+          + fmtMin(sg.end) + '"></span>';
+      }).join('');
       html += '<div class="tw-row tw-lane-row"><span class="tw-label">availability</span>'
-        + '<span class="tw-track tw-lane">' + buckets + '</span></div>';
+        + '<span class="tw-track tw-lane">' + ribbon + '</span></div>';
     });
 
     windowsChart.innerHTML = html;

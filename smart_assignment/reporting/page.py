@@ -904,6 +904,13 @@ def build_map_data(result: RecommendationResult) -> Optional[dict]:
     loc = result.customer.location
     if loc is None:
         return None
+    # Scored order the UI ranks by: recommended-first feasible routes, then the
+    # infeasible ones -- identical to the "Routes the agent evaluated" section
+    # (_routes_section), so the delivery-window panels line up with those cards.
+    ranked_order = [c.route.route_id for c in result.ranked_feasible] + [
+        c.route.route_id for c in result.candidates_considered if not c.feasible
+    ]
+    rank_by_id = {rid: i for i, rid in enumerate(ranked_order)}
     routes = []
     for cand in result.candidates_considered:
         r = cand.route
@@ -914,6 +921,7 @@ def build_map_data(result: RecommendationResult) -> Optional[dict]:
                 "name": _esc(r.name),
                 "day": r.day.value,
                 "feasible": cand.feasible,
+                "rank": rank_by_id.get(r.route_id, len(rank_by_id)),
                 "distance_miles": round(cand.distance_miles, 1),
                 "total_score": round(cand.total_score, 2) if cand.feasible else None,
                 "service_center": {"lat": center.latitude, "lng": center.longitude},
@@ -923,6 +931,9 @@ def build_map_data(result: RecommendationResult) -> Optional[dict]:
                         "lat": s.location.latitude,
                         "lng": s.location.longitude,
                         "id": _esc(s.customer_number),
+                        # Customer tier ("4"/"5"/"Perks"/"Other"); the timeline
+                        # colours each stop's window bar by it. None when unknown.
+                        "tier": _esc(s.customer_tier) if s.customer_tier else None,
                         # Committed delivery window (TW1 open/close), for the
                         # delivery-window timeline; None when unknown.
                         "window": (

@@ -145,11 +145,13 @@ def _build_committed_stops(
             continue
         open_tm = getattr(stop, "tw1opentime", None)
         close_tm = getattr(stop, "tw1closetime", None)
+        tier = getattr(stop, "cust_tier", None)
         committed_stops.append(
             RouteStop(
                 customer_number=str(stop.co_cust_nbr),
                 location=GeoPoint(float(stop.latitude), float(stop.longitude)),
                 delivery_time_window=_parse_time_window(open_tm, close_tm),
+                customer_tier=(str(tier) if tier is not None and not pd.isna(tier) else None),
             )
         )
     return committed_stops
@@ -312,10 +314,10 @@ def _mock_routes() -> list[Route]:
             avg_load_cubes=693.0,
             available_windows=[(time(7, 0), time(10, 0)), (time(10, 30), time(12, 30))],
             committed_stops=[
-                RouteStop("067-011011", GeoPoint(29.7550, -95.3650), delivery_time_window=(time(7, 0), time(10, 0))),
-                RouteStop("067-011012", GeoPoint(29.7620, -95.3720), delivery_time_window=(time(7, 0), time(10, 0))),
-                RouteStop("067-011013", GeoPoint(29.7480, -95.3810), delivery_time_window=(time(10, 30), time(12, 30))),
-                RouteStop("067-011014", GeoPoint(29.7700, -95.3900), delivery_time_window=(time(10, 30), time(12, 30))),
+                RouteStop("067-011011", GeoPoint(29.7550, -95.3650), delivery_time_window=(time(7, 0), time(10, 0)), customer_tier="5"),
+                RouteStop("067-011012", GeoPoint(29.7620, -95.3720), delivery_time_window=(time(7, 0), time(10, 0)), customer_tier="Perks"),
+                RouteStop("067-011013", GeoPoint(29.7480, -95.3810), delivery_time_window=(time(10, 30), time(12, 30)), customer_tier="4"),
+                RouteStop("067-011014", GeoPoint(29.7700, -95.3900), delivery_time_window=(time(10, 30), time(12, 30)), customer_tier="5"),
             ],
         ),
         Route(
@@ -332,9 +334,9 @@ def _mock_routes() -> list[Route]:
             avg_load_cubes=547.0,
             available_windows=[(time(7, 30), time(11, 0)), (time(12, 0), time(14, 0))],
             committed_stops=[
-                RouteStop("067-022021", GeoPoint(29.7450, -95.4700), delivery_time_window=(time(7, 30), time(11, 0))),
-                RouteStop("067-022022", GeoPoint(29.7600, -95.5200), delivery_time_window=(time(7, 30), time(11, 0))),
-                RouteStop("067-022023", GeoPoint(29.7830, -95.6350), delivery_time_window=(time(12, 0), time(14, 0))),
+                RouteStop("067-022021", GeoPoint(29.7450, -95.4700), delivery_time_window=(time(7, 30), time(11, 0)), customer_tier="Perks"),
+                RouteStop("067-022022", GeoPoint(29.7600, -95.5200), delivery_time_window=(time(7, 30), time(11, 0)), customer_tier="4"),
+                RouteStop("067-022023", GeoPoint(29.7830, -95.6350), delivery_time_window=(time(12, 0), time(14, 0)), customer_tier="5"),
             ],
         ),
         Route(
@@ -351,8 +353,8 @@ def _mock_routes() -> list[Route]:
             avg_load_cubes=688.0,
             available_windows=[(time(8, 0), time(12, 0)), (time(13, 0), time(15, 0))],
             committed_stops=[
-                RouteStop("067-033031", GeoPoint(30.1600, -95.4550), delivery_time_window=(time(8, 0), time(12, 0))),
-                RouteStop("067-033032", GeoPoint(30.1720, -95.4700), delivery_time_window=(time(13, 0), time(15, 0))),
+                RouteStop("067-033031", GeoPoint(30.1600, -95.4550), delivery_time_window=(time(8, 0), time(12, 0)), customer_tier="4"),
+                RouteStop("067-033032", GeoPoint(30.1720, -95.4700), delivery_time_window=(time(13, 0), time(15, 0)), customer_tier="Other"),
             ],
         ),
         Route(
@@ -369,8 +371,8 @@ def _mock_routes() -> list[Route]:
             avg_load_cubes=886.0,
             available_windows=[(time(6, 0), time(9, 0)), (time(9, 30), time(12, 0))],
             committed_stops=[
-                RouteStop("067-044041", GeoPoint(29.6200, -95.6300), delivery_time_window=(time(6, 0), time(9, 0))),
-                RouteStop("067-044042", GeoPoint(29.6100, -95.6500), delivery_time_window=(time(9, 30), time(12, 0))),
+                RouteStop("067-044041", GeoPoint(29.6200, -95.6300), delivery_time_window=(time(6, 0), time(9, 0)), customer_tier="5"),
+                RouteStop("067-044042", GeoPoint(29.6100, -95.6500), delivery_time_window=(time(9, 30), time(12, 0)), customer_tier="Perks"),
             ],
         ),
     ]

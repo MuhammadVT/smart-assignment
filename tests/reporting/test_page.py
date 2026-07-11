@@ -213,10 +213,11 @@ def test_build_map_data_includes_customer_and_route_geometry():
         assert r["total_score"] is None
 
 
-def test_build_map_data_stops_carry_id_and_delivery_window():
-    """Each committed stop rides along with its customer number and its committed
-    delivery window (open/close), which the frontend delivery-window timeline reads.
-    Windows are optional, so the shape is {open, close} or None."""
+def test_build_map_data_stops_carry_id_window_and_tier():
+    """Each committed stop rides along with its customer number, its committed
+    delivery window (open/close), and its customer tier -- which the frontend
+    delivery-window timeline reads (windows/tier are optional: {open, close}/str
+    or None)."""
     config = Config()
     map_data = build_map_data(_results(config)[0])
 
@@ -226,8 +227,28 @@ def test_build_map_data_stops_carry_id_and_delivery_window():
         assert isinstance(s["id"], str) and s["id"]
         w = s["window"]
         assert w is None or (isinstance(w["open"], str) and isinstance(w["close"], str))
-    # The mock route data populates windows, so at least one is present.
+        assert s["tier"] is None or isinstance(s["tier"], str)
+    # The mock route data populates windows and tiers, so at least one is present.
     assert any(s["window"] is not None for s in stops)
+    assert any(s["tier"] for s in stops)
+
+
+def test_build_map_data_routes_carry_ranked_order():
+    """Every route carries a `rank` giving the agent's scored order (feasible
+    recommended-first, then infeasible) -- the ranks are a 0..n-1 permutation and
+    every feasible route ranks ahead of every infeasible one, so the frontend can
+    show the delivery-window panels in the same order as the evaluated-routes list."""
+    config = Config()
+    map_data = build_map_data(_results(config)[0])
+    routes = map_data["routes"]
+
+    ranks = sorted(r["rank"] for r in routes)
+    assert ranks == list(range(len(routes)))  # a clean permutation, no gaps/dupes
+
+    feasible_ranks = [r["rank"] for r in routes if r["feasible"]]
+    infeasible_ranks = [r["rank"] for r in routes if not r["feasible"]]
+    if feasible_ranks and infeasible_ranks:
+        assert max(feasible_ranks) < min(infeasible_ranks)
 
 
 def test_build_map_data_none_without_a_geocoded_customer():
