@@ -241,9 +241,10 @@
 .routes-panel .routes summary { font-size: 14px; }
 
 /* --- Delivery-window timeline (below the map) ---
-   A Gantt of each committed stop's delivery window on a shared time axis, plus
-   an "availability" lane whose blanks (green) are open slots and whose bars grow
-   taller where more deliveries overlap. Same route selection drives it as the map. */
+   Routes in the agent's scored order. Per route: a Gantt of each committed
+   stop's delivery window on a shared time axis, coloured by customer tier, plus
+   an "availability" ribbon that coalesces overlap into a few busy/open segments
+   (open gaps carry a duration label). Same route selection drives it as the map. */
 .windows-panel {
   display: none;
   margin-top: 18px;
@@ -256,6 +257,22 @@
 .viz.has-result .windows-panel { display: block; }
 
 .windows-chart { margin-top: 2px; }
+
+/* Tier legend (dynamic -- only the tiers present among the shown stops). */
+.tw-tier-legend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-size: 11.5px;
+  color: var(--muted);
+  margin: 0 0 10px;
+  padding-bottom: 9px;
+  border-bottom: 1px solid var(--line);
+}
+.tw-tier-lead { font-weight: 600; color: var(--ink); }
+.tw-tier-item { display: inline-flex; align-items: center; gap: 5px; }
+.tw-tier-dot { width: 10px; height: 10px; border-radius: 3px; display: inline-block; flex: none; }
 
 /* Rows share one grid: a fixed label gutter + a flexible track. Bars/ticks are
    absolutely positioned inside the track by percent of the shared time domain. */
@@ -315,23 +332,41 @@
   top: 0;
   bottom: 0;
   border-radius: 4px;
-  opacity: 0.85;
+  opacity: 0.9;
   min-width: 2px;
 }
 
-/* Availability lane: bottom-anchored demand bars; blank/green = open slot. */
-.tw-lane-row { height: 34px; margin-top: 4px; }
+/* Availability ribbon: one full-height track split into a few coalesced
+   segments -- green (open, with a duration label) or slate (booked, darker
+   where more windows overlap). No jagged per-bucket bars. */
+.tw-lane-row { height: 26px; margin-top: 5px; }
 .tw-lane {
-  height: 30px;
+  height: 22px;
   background: var(--green-soft);
-  border-radius: 4px;
+  border-radius: 5px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+}
+.tw-seg {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   overflow: hidden;
 }
-.tw-bkt { position: absolute; bottom: 0; }
-.tw-free { top: 0; background: var(--green-soft); }
-.tw-busy { border-radius: 2px 2px 0 0; opacity: 0.85; }
+.tw-open { background: var(--green-soft); }
+.tw-busy { background: #64748b; }
+.tw-open-txt {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--green);
+  white-space: nowrap;
+  padding: 0 4px;
+}
 
-/* Legend swatches (index.html reuses .tw-busy / .tw-free for colour). */
+/* Legend swatches. */
 .tw-swatch {
   width: 11px;
   height: 11px;
@@ -339,8 +374,8 @@
   display: inline-block;
   flex: none;
 }
-.tw-swatch.tw-busy { background: var(--blue); }
-.tw-swatch.tw-free { background: var(--green-soft); border: 1px solid #bcd9c4; }
+.tw-swatch.tw-open { background: var(--green-soft); border: 1px solid #bcd9c4; }
+.tw-swatch.tw-busy-swatch { background: #64748b; }
 
 @media (max-width: 860px) {
   .transcript { max-height: 46vh; }
