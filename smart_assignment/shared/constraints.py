@@ -15,18 +15,23 @@ Design intent — *modularity*:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Optional
 
-from smart_assignment.shared.config import Config
+from smart_assignment.shared.config import DEFAULT_CONFIG, Config
 from smart_assignment.shared.geo import haversine_miles
 from smart_assignment.shared.models import (
     ConstraintOutcome,
     CustomerProfile,
     Route,
+    SlotOption,
     Window,
 )
-from smart_assignment.shared.timeutils import best_overlapping_window
+from smart_assignment.shared.slot_selection import (
+    SLOT_BASIS_NONE,
+    identify_available_slots,
+    recommend_slot,
+)
 
 # Canonical names of the two hard constraints, and a natural-language label
 # for each -- used anywhere a constraint failure is explained to a person
@@ -50,12 +55,17 @@ class EvalContext:
     committed_volume: int
     remaining_capacity_after: int
     utilization_after: float
-    best_window: Optional[Window]
-    window_overlap_minutes: int
+    best_window: Optional[Window]  # the recommended slot (location-aware, preference-honoring)
+    window_overlap_minutes: int  # best achievable overlap with the preferred window
+    window_basis: str = SLOT_BASIS_NONE  # why best_window won (audit trail)
+    available_slots: list[SlotOption] = field(default_factory=list)  # the full menu considered
 
 
-def build_context(customer: CustomerProfile, route: Route) -> EvalContext:
+def build_context(
+    customer: CustomerProfile, route: Route, config: Optional[Config] = None
+) -> EvalContext:
     assert customer.location is not None, "customer must be geocoded before evaluation"
+    config = config or DEFAULT_CONFIG
 
     distance = haversine_miles(customer.location, route.service_center)
 
@@ -69,8 +79,11 @@ def build_context(customer: CustomerProfile, route: Route) -> EvalContext:
     remaining_after = route.vehicle_capacity_cases - committed - customer.order_quantity_cases
     utilization_after = (committed + customer.order_quantity_cases) / route.vehicle_capacity_cases
 
+    # Step 1: identify the route's available slots (location-aware, no preference).
+    # Step 2: recommend one, now considering the customer's preferred window.
     preferred_window = customer.preferred_slot.window if customer.preferred_slot else None
-    best_window, overlap = best_overlapping_window(preferred_window, route.available_windows)
+    slots = identify_available_slots(customer.location, route, config)
+    selection = recommend_slot(slots, preferred_window, config)
 
     return EvalContext(
         distance_miles=distance,
@@ -78,8 +91,10 @@ def build_context(customer: CustomerProfile, route: Route) -> EvalContext:
         committed_volume=committed,
         remaining_capacity_after=remaining_after,
         utilization_after=utilization_after,
-        best_window=best_window,
-        window_overlap_minutes=overlap,
+        best_window=selection.window,
+        window_overlap_minutes=selection.overlap_minutes,
+        window_basis=selection.basis,
+        available_slots=slots,
     )
 
 

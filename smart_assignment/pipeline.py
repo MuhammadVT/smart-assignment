@@ -87,7 +87,7 @@ def evaluate_candidates(
 ) -> list[CandidateEvaluation]:
     evaluations: list[CandidateEvaluation] = []
     for route in candidates:
-        ctx = build_context(customer, route)
+        ctx = build_context(customer, route, config)
         outcomes = evaluate_constraints(customer, route, ctx, config)
         evaluation = CandidateEvaluation(
             route=route,
@@ -96,6 +96,8 @@ def evaluate_candidates(
             remaining_capacity_after=ctx.remaining_capacity_after,
             utilization_after=ctx.utilization_after,
             constraint_outcomes=outcomes,
+            window_basis=ctx.window_basis,
+            available_slots=ctx.available_slots,
         )
         if evaluation.feasible:
             breakdown, total = score_candidate(customer, route, ctx, config)
@@ -160,6 +162,7 @@ def decide(
         recommended_route_name=winner.route.name,
         recommended_day=winner.route.day.value,
         recommended_window=fmt_window(winner.chosen_window),
+        recommended_window_basis=winner.window_basis or None,
         factor_breakdown=winner.factor_scores,
         rejected_alternatives=rejected,
         review_reason=(
