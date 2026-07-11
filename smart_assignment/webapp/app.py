@@ -28,6 +28,7 @@ UI can never drift from the published output.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Optional
@@ -177,16 +178,33 @@ async def chat(req: ChatRequest) -> StreamingResponse:
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
+def _asset_version(name: str) -> str:
+    """Short content hash of a static asset, for cache-busting its URL. When the
+    file changes the hash changes, so the browser is forced to refetch instead of
+    serving a stale cached copy (the CSS/JS have no Cache-Control, so browsers
+    otherwise heuristic-cache them and updates don't show up until a hard refresh)."""
+    try:
+        return hashlib.md5((_STATIC_DIR / name).read_bytes()).hexdigest()[:10]
+    except OSError:
+        return "0"
+
+
 def _render_index() -> str:
     """Build the chat page, injecting the Simulator's own CSS (``_STYLE``) so the
-    live step/result cards look exactly like the published page and can't drift."""
+    live step/result cards look exactly like the published page and can't drift.
+    App CSS/JS get a ?v=<hash> query so a new build always busts the browser cache."""
     template = (_STATIC_DIR / "index.html").read_text(encoding="utf-8")
-    return template.replace("/*__SHARED_STYLE__*/", _STYLE)
+    html = template.replace("/*__SHARED_STYLE__*/", _STYLE)
+    for asset in ("app.css", "app.js"):
+        html = html.replace(f"/static/{asset}", f"/static/{asset}?v={_asset_version(asset)}")
+    return html
 
 
 @app.get("/", response_class=HTMLResponse)
 def index() -> HTMLResponse:
-    return HTMLResponse(_render_index())
+    # no-cache so the browser revalidates the HTML each load and always sees the
+    # current ?v=<hash> asset URLs (otherwise a cached page keeps the old URLs).
+    return HTMLResponse(_render_index(), headers={"Cache-Control": "no-cache"})
 
 
 # Serve the static assets (app.css, app.js) under /static.

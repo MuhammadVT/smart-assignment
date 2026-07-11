@@ -39,7 +39,7 @@ from smart_assignment.shared.models import (
     Decision,
     RecommendationResult,
 )
-from smart_assignment.shared.timeutils import duration_minutes, fmt_window
+from smart_assignment.shared.timeutils import duration_minutes, fmt_time, fmt_window
 
 DEFAULT_OUTPUT = Path(__file__).resolve().parents[2] / "docs" / "index.html"
 
@@ -919,7 +919,21 @@ def build_map_data(result: RecommendationResult) -> Optional[dict]:
                 "service_center": {"lat": center.latitude, "lng": center.longitude},
                 "service_radius_miles": r.service_radius_miles,
                 "stops": [
-                    {"lat": s.location.latitude, "lng": s.location.longitude}
+                    {
+                        "lat": s.location.latitude,
+                        "lng": s.location.longitude,
+                        "id": _esc(s.customer_number),
+                        # Committed delivery window (TW1 open/close), for the
+                        # delivery-window timeline; None when unknown.
+                        "window": (
+                            {
+                                "open": fmt_time(s.delivery_time_window[0]),
+                                "close": fmt_time(s.delivery_time_window[1]),
+                            }
+                            if s.delivery_time_window
+                            else None
+                        ),
+                    }
                     for s in r.committed_stops
                 ],
             }

@@ -23,6 +23,7 @@
   var routesPanel = document.getElementById('routes-panel');
   var filterBtn = document.getElementById('route-filter-btn');
   var filterMenu = document.getElementById('route-filter-menu');
+  var windowsChart = document.getElementById('windows-chart');
 
   var MODE = 'deterministic';
   var SESSION_ID = (window.crypto && window.crypto.randomUUID)
@@ -223,6 +224,7 @@
       cb.addEventListener('change', function () {
         selectedRoutes[r.route_id] = cb.checked;
         drawMapLayers();
+        renderWindows();  // same selection drives the delivery-window timeline
       });
       var swatch = document.createElement('span');
       paintSwatch(swatch, routeColors[r.route_id], r.feasible);
@@ -269,6 +271,113 @@
     ensureMap();
     buildFilterMenu();
     drawMapLayers();
+    renderWindows();
+  }
+
+  // --- Delivery-window timeline (below the map, same route selection) ---
+  // For each selected route, a Gantt of its committed stops' delivery windows on
+  // a shared time axis, plus an "availability" lane (a demand histogram whose
+  // valleys/blanks are the open slots).
+  var TW_BUCKET_MIN = 15;  // availability-lane resolution
+
+  function toMin(hhmm) {
+    var p = hhmm.split(':');
+    return parseInt(p[0], 10) * 60 + parseInt(p[1], 10);
+  }
+  function fmtMin(m) {
+    var h = Math.floor(m / 60), mm = m % 60;
+    return (h < 10 ? '0' : '') + h + ':' + (mm < 10 ? '0' : '') + mm;
+  }
+
+  function renderWindows() {
+    if (!windowsChart) { return; }
+    var panel = document.getElementById('windows-panel');
+    if (!currentMapData) { if (panel) { panel.style.display = 'none'; } return; }
+
+    // Selected routes that actually have at least one stop with a window.
+    var routes = currentMapData.routes.filter(function (r) {
+      return selectedRoutes[r.route_id] && r.stops.some(function (s) { return s.window; });
+    });
+    if (!routes.length) {
+      if (panel) { panel.style.display = 'none'; }
+      windowsChart.innerHTML = '';
+      return;
+    }
+    if (panel) { panel.style.display = ''; }
+
+    // Shared time domain across all selected routes, snapped to the hour.
+    var lo = Infinity, hi = -Infinity;
+    routes.forEach(function (r) {
+      r.stops.forEach(function (s) {
+        if (!s.window) { return; }
+        lo = Math.min(lo, toMin(s.window.open));
+        hi = Math.max(hi, toMin(s.window.close));
+      });
+    });
+    lo = Math.floor(lo / 60) * 60;
+    hi = Math.ceil(hi / 60) * 60;
+    var span = Math.max(hi - lo, 60);
+    function pct(m) { return ((m - lo) / span) * 100; }
+
+    var html = '';
+
+    // Shared hour axis.
+    var ticks = '';
+    for (var t = lo; t <= hi; t += 60) {
+      ticks += '<span class="tw-tick" style="left:' + pct(t) + '%">' + fmtMin(t) + '</span>';
+    }
+    html += '<div class="tw-axis"><span class="tw-label"></span>'
+      + '<span class="tw-track">' + ticks + '</span></div>';
+
+    routes.forEach(function (r) {
+      var color = routeColors[r.route_id];
+      var stops = r.stops.filter(function (s) { return s.window; }).slice().sort(function (a, b) {
+        return toMin(a.window.open) - toMin(b.window.open);
+      });
+
+      html += '<div class="tw-route">'
+        + '<span class="tw-dot" style="background:' + color + '"></span>'
+        + '<b>' + r.route_id + '</b> · ' + r.name + ' <span class="tw-day">(' + r.day + ')</span>'
+        + ' <span class="tw-count">' + stops.length + ' stops</span></div>';
+
+      stops.forEach(function (s) {
+        var o = toMin(s.window.open), c = toMin(s.window.close);
+        var title = s.id + ' · ' + s.window.open + '–' + s.window.close;
+        html += '<div class="tw-row"><span class="tw-label" title="' + s.id + '">' + s.id + '</span>'
+          + '<span class="tw-track">'
+          + '<span class="tw-bar" title="' + title + '" style="left:' + pct(o) + '%;width:'
+          + (pct(c) - pct(o)) + '%;background:' + color + '"></span></span></div>';
+      });
+
+      // Availability lane: demand per bucket (how many windows overlap).
+      var buckets = '';
+      var maxD = 0, demand = [];
+      for (var b = lo; b < hi; b += TW_BUCKET_MIN) {
+        var mid = b + TW_BUCKET_MIN / 2;
+        var d = 0;
+        stops.forEach(function (s) {
+          if (toMin(s.window.open) <= mid && mid < toMin(s.window.close)) { d++; }
+        });
+        demand.push({ start: b, d: d });
+        maxD = Math.max(maxD, d);
+      }
+      demand.forEach(function (bk) {
+        var w = (TW_BUCKET_MIN / span) * 100;
+        if (bk.d === 0) {
+          buckets += '<span class="tw-bkt tw-free" style="left:' + pct(bk.start) + '%;width:' + w
+            + '%" title="open ' + fmtMin(bk.start) + '–' + fmtMin(bk.start + TW_BUCKET_MIN) + '"></span>';
+        } else {
+          var h = 30 + (bk.d / Math.max(maxD, 1)) * 70;  // 30–100% height by demand
+          buckets += '<span class="tw-bkt tw-busy" style="left:' + pct(bk.start) + '%;width:' + w
+            + '%;height:' + h + '%;background:' + color + '" title="' + bk.d
+            + ' deliveries ' + fmtMin(bk.start) + '–' + fmtMin(bk.start + TW_BUCKET_MIN) + '"></span>';
+        }
+      });
+      html += '<div class="tw-row tw-lane-row"><span class="tw-label">availability</span>'
+        + '<span class="tw-track tw-lane">' + buckets + '</span></div>';
+    });
+
+    windowsChart.innerHTML = html;
   }
 
   // Route-filter dropdown open/close.
