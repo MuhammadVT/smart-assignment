@@ -101,6 +101,7 @@ class RouteStop:
     customer_number: str  # Sysco customer number (NNN-NNNNNN)
     location: GeoPoint
     delivery_time_window: Optional[Window] = None  # TW1 open/close times from historical data
+    customer_tier: Optional[str] = None  # Sysco cust tier ("4"/"5"/"Perks"/"Other"), if known
 
 
 @dataclass
