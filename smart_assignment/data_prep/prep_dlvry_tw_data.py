@@ -232,6 +232,7 @@ def summarize_stop_geographies(committed_tw1_slots_df: pd.DataFrame) -> tuple[pd
         longitude=('longitude', 'mean'),
         tw1opentime=('tw1opentime', 'first'),
         tw1closetime=('tw1closetime', 'first'),
+        cust_tier=('cust_tier', 'first'),
     ).reset_index()
 
     # TODO: find the center point in a more accurate way
