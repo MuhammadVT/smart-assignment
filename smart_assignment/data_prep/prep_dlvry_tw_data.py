@@ -114,7 +114,10 @@ def fetch_dlvr_window_records(sql, qry=QUERIES['dlvr_window'], cache_nm='dlvr_wi
     return df
 
 
-def summarize_committed_tw1_slots(dlvr_window_df: pd.DataFrame) -> pd.DataFrame:
+def summarize_committed_tw1_slots(
+    dlvr_window_df: pd.DataFrame,
+    cust_tier_df: pd.DataFrame | None = None,
+) -> pd.DataFrame:
     """Derive committed TW1 slot per route/customer from historical delivery-window facts."""
     
     df = dlvr_window_df.copy()
@@ -141,6 +144,11 @@ def summarize_committed_tw1_slots(dlvr_window_df: pd.DataFrame) -> pd.DataFrame:
 
     # committed = committed[committed['tw1opendatetime'] < committed['tw1closedatetime']].copy()
     
+    if cust_tier_df is not None:
+        # Add customer tier when available and keep higher-priority tiers.
+        committed = attach_cust_tier_to_stop_locations(committed, cust_tier_df)
+        committed = committed[committed['cust_tier'].isin(['4', '5', 'Perks'])].copy()
+
     return committed
 
 
@@ -289,8 +297,7 @@ if __name__ == '__main__':
     raw_dlvr_window_df = fetch_dlvr_window_records(sql)
 
     # Find committed time slot from historical data.
-    committed_tw1_slots_df = summarize_committed_tw1_slots(raw_dlvr_window_df)
-    committed_tw1_slots_df = attach_cust_tier_to_stop_locations(committed_tw1_slots_df, cust_tier_df)
+    committed_tw1_slots_df = summarize_committed_tw1_slots(raw_dlvr_window_df, cust_tier_df)
 
     df_routes, df_stop_locations = build_route_summary_tables(route_capacity_raw_df, committed_tw1_slots_df)
 

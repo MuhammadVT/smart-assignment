@@ -273,14 +273,14 @@ def _load_dlvr_window_records() -> pd.DataFrame:
 
 
 def _load_committed_tw1_slots_df() -> pd.DataFrame:
-    committed_tw1_slots_df = summarize_committed_tw1_slots(_load_dlvr_window_records())
     cust_tier_df = _load_cust_tier_records()
     if cust_tier_df is not None:
-        committed_tw1_slots_df = attach_cust_tier_to_stop_locations(
-            committed_tw1_slots_df,
+        committed_tw1_slots_df = summarize_committed_tw1_slots(
+            _load_dlvr_window_records(),
             cust_tier_df,
         )
     else:
+        committed_tw1_slots_df = summarize_committed_tw1_slots(_load_dlvr_window_records())
         committed_tw1_slots_df = committed_tw1_slots_df.copy()
         committed_tw1_slots_df["cust_tier"] = DEFAULT_CUST_TIER
     return committed_tw1_slots_df
