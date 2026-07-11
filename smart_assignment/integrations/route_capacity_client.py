@@ -17,9 +17,8 @@ import pandas as pd
 import ds_utils
 from smart_assignment.data_prep.prep_dlvry_tw_data import (
     CUST_TIER_CACHE_PATH,
-    DATA_LOCATION,
-    DEFAULT_CACHE_EXTENSION,
     DEFAULT_CUST_TIER,
+    create_sql_access,
     DLVR_WINDOW_CACHE_PATH,
     ROUTES_CACHE_PATH,
     attach_cust_tier_to_stop_locations,
@@ -196,15 +195,7 @@ def routes_from_summary_tables(
 
 
 def _sql_access() -> ds_utils.SQLAccess:
-    run_mode = ds_utils.Mode("dev")
-    cachey = ds_utils.Data(
-        rm=run_mode,
-        data_location=DATA_LOCATION,
-        session_date="",
-        ignore_cache=False,
-        default_cache_extension=DEFAULT_CACHE_EXTENSION,
-    )
-    return ds_utils.SQLAccess(run_mode, data=cachey)
+    return create_sql_access()
 
 
 def _fetch_live_route_stop_records() -> pd.DataFrame:

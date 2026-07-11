@@ -17,6 +17,26 @@ os.environ['DATABASE_CREDENTIALS_LOCATION'] = os.path.realpath(os.path.join(BASE
 QUERY_DIR = os.path.realpath(os.path.join(BASE_DIR, '..', 'queries'))
 DATA_LOCATION = os.path.realpath(os.path.join(BASE_DIR, '..', '..', 'data'))
 DEFAULT_CACHE_EXTENSION = '.parquet' # '.csv.gz'
+DS_UTILS_RUN_MODE_ENV = 'DS_UTILS_RUN_MODE'
+DEFAULT_DS_UTILS_RUN_MODE = 'dev'
+
+
+def get_ds_utils_run_mode() -> ds_utils.Mode:
+    name = os.environ.get(DS_UTILS_RUN_MODE_ENV, DEFAULT_DS_UTILS_RUN_MODE).strip().lower()
+    return ds_utils.Mode(name)
+
+
+def create_sql_access(*, ignore_cache: bool = False) -> ds_utils.SQLAccess:
+    run_mode = get_ds_utils_run_mode()
+    cachey = ds_utils.Data(
+        rm=run_mode,
+        data_location=DATA_LOCATION,
+        session_date='',
+        ignore_cache=ignore_cache,
+        default_cache_extension=DEFAULT_CACHE_EXTENSION,
+    )
+    return ds_utils.SQLAccess(run_mode, data=cachey)
+
 
 DEV_CACHE_DIR = os.path.join(DATA_LOCATION, 'dev')
 os.makedirs(DEV_CACHE_DIR, exist_ok=True)
@@ -284,14 +304,8 @@ get_route_stops_locations = summarize_stop_geographies
 
 if __name__ == '__main__':
 
-    # ds_utils related params
-    RUN_MODE = ds_utils.Mode('dev')
     IGNORE_CACHE = False
-
-    # Set ds_utils cachey and sql
-    cachey = ds_utils.Data(rm=RUN_MODE, data_location=DATA_LOCATION, session_date='',
-                           ignore_cache=IGNORE_CACHE, default_cache_extension=DEFAULT_CACHE_EXTENSION)
-    sql = ds_utils.SQLAccess(RUN_MODE, data=cachey)
+    sql = create_sql_access(ignore_cache=IGNORE_CACHE)
 
     route_capacity_raw_df = fetch_route_stop_records(sql)
     cust_tier_df = fetch_cust_tier_records(sql)

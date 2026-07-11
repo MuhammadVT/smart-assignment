@@ -14,19 +14,9 @@ LoadSource = Literal["auto", "cache", "sql", "sample"]
 
 
 def _prep_sql_access():
-    import ds_utils
-    from smart_assignment.data_prep.prep_dlvry_tw_data import DATA_LOCATION, DEFAULT_CACHE_EXTENSION
+    from smart_assignment.data_prep.prep_dlvry_tw_data import create_sql_access
 
-    run_mode = ds_utils.Mode("dev")
-    cachey = ds_utils.Data(
-        rm=run_mode,
-        data_location=DATA_LOCATION,
-        session_date="",
-        ignore_cache=False,
-        default_cache_extension=DEFAULT_CACHE_EXTENSION,
-    )
-    sql = ds_utils.SQLAccess(run_mode, data=cachey)
-    return sql
+    return create_sql_access()
 
 
 def _to_time(value) -> time | None:
