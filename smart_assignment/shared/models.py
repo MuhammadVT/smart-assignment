@@ -170,10 +170,11 @@ class SlotOption:
     (shared/slot_selection.py); the recommendation step picks among these.
     """
 
-    window: Window
-    fit_score: float  # 0.0-1.0 inverse-distance-weighted support from nearby committed stops
+    window: Window  # the recommended (fixed-length, centered) window
+    fit_score: float  # 0.0-1.0 proximity-weight share of this candidate's stop cluster
     committed_overlap: int  # how many committed stops' windows overlap this one (contention)
     basis: str  # why this option exists: "between_adjacent_stops" | "least_contended"
+    anchor_time: Optional[time] = None  # the interpolated time the window is centered on
 
 
 @dataclass

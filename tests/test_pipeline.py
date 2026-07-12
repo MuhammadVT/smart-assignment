@@ -32,10 +32,11 @@ def test_clear_case_is_recommended():
     assert rec.decision == Decision.RECOMMENDED
     assert rec.recommended_route_id == "RTE-4100"
     assert rec.requires_human_review is False
-    # RTE-4100's nearest committed stops to this downtown prospect are its two
-    # 07:00-10:00 accounts, and the customer also prefers that window -- the
-    # location-aware selector lands on it, tagged with an auditable basis.
-    assert rec.recommended_window == "07:00-10:00"
+    # The slot is centred on the proximity-weighted midpoint of RTE-4100's
+    # nearest committed stops (a 3h window around ~08:50 for this downtown
+    # prospect), not snapped to a historical window's start -- and it's tagged
+    # with an auditable basis.
+    assert rec.recommended_window == "07:20-10:20"
     assert rec.recommended_window_basis in {"between_adjacent_stops", "preference_accommodated"}
 
 

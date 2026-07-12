@@ -123,18 +123,31 @@ class Config:
     capacity_buffer_safety_margin: float = 0.15
 
     # --- Slot selection (location-aware delivery-window pick) ---
-    # How many of a route's nearest committed stops get to "vote" on which
-    # offered window a prospect belongs in ("a slot between adjacent stops").
+    # How many of a route's nearest committed stops are considered as the
+    # prospect's "adjacent stops" when placing a slot.
     slot_neighbor_count: int = 3
-    # Optional cap (miles): committed stops farther than this don't vote. None
+    # Optional cap (miles): committed stops farther than this are ignored. None
     # means no cap -- every committed stop is eligible, ranked by distance.
     slot_neighbor_max_miles: Optional[float] = None
-    # Length of the delivery window we actually RECOMMEND to the prospect, in
-    # minutes. The route's historical windows can be any length; the pick is
-    # normalized to this standard duration (default 180 = 3 hours), anchored at
-    # the chosen window's start. Change this one value to widen/narrow every
-    # recommended slot.
+    # Length of the delivery window we RECOMMEND to the prospect, in minutes.
+    # Every candidate window is this long, CENTERED on its interpolated time.
     slot_window_minutes: int = 180
+    # The nearest stops are grouped into temporal clusters (e.g. a morning
+    # neighborhood vs. an afternoon one): consecutive reference times more than
+    # this many minutes apart start a new cluster, and each cluster yields one
+    # candidate slot centered on its proximity-weighted midpoint.
+    slot_cluster_gap_minutes: int = 180
+    # Top-N candidate slots kept per route (the menu handed to the recommender /
+    # a future LLM). Any candidate that overlaps a stated customer preference is
+    # always kept, even if it falls outside the top-N by quality.
+    slot_candidate_count: int = 3
+    # Blend weights for scoring/ranking candidate slots. Quality (used for the
+    # top-N cut and the no-preference pick) blends fit + low-contention; when a
+    # preference is stated, its overlap adds a third term. Need not sum to 1 --
+    # they are normalized over whichever terms are active.
+    slot_weight_fit: float = 0.5  # proximity-weight share of the slot's cluster
+    slot_weight_contention: float = 0.2  # emptier (less committed overlap) is better
+    slot_weight_preference: float = 0.3  # overlap with the customer's stated slot
 
     # --- Decision / escalation ---
     # The winning route's own total_score (see shared/scoring.score_candidate)
@@ -238,6 +251,11 @@ class Config:
             slot_neighbor_count=_int_env("SMART_ASSIGNMENT_SLOT_NEIGHBORS", 3),
             slot_neighbor_max_miles=_opt_float_env("SMART_ASSIGNMENT_SLOT_NEIGHBOR_MAX_MILES"),
             slot_window_minutes=_int_env("SMART_ASSIGNMENT_SLOT_WINDOW_MINUTES", 180),
+            slot_cluster_gap_minutes=_int_env("SMART_ASSIGNMENT_SLOT_CLUSTER_GAP", 180),
+            slot_candidate_count=_int_env("SMART_ASSIGNMENT_SLOT_CANDIDATES", 3),
+            slot_weight_fit=_float_env("SMART_ASSIGNMENT_SLOT_WEIGHT_FIT", 0.5),
+            slot_weight_contention=_float_env("SMART_ASSIGNMENT_SLOT_WEIGHT_CONTENTION", 0.2),
+            slot_weight_preference=_float_env("SMART_ASSIGNMENT_SLOT_WEIGHT_PREFERENCE", 0.3),
             total_score_threshold=_float_env("SMART_ASSIGNMENT_TOTAL_SCORE_THRESHOLD", 0.60),
             use_grounded_judgment=_bool_env("SMART_ASSIGNMENT_USE_GROUNDED_JUDGMENT", False),
             judgment_sample_count=_int_env("SMART_ASSIGNMENT_JUDGMENT_SAMPLE_COUNT", 3),

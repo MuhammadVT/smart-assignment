@@ -1,19 +1,18 @@
 """
-Unit tests for the location-aware delivery-slot selector
+Unit tests for the location- and time-aware delivery-slot selector
 (shared/slot_selection.py). Deterministic, fast, no LLM or network.
 
-Two steps are exercised separately and together:
-  * identify_available_slots() — the ranked menu of a route's windows
-    (location fit + contention), with no customer preference in the mix.
-  * recommend_slot() — the final pick that THEN considers the preference,
-    with a least-contended fallback.
+Three steps are exercised:
+  * identify_available_slots() — cluster the nearest committed stops by time and
+    emit one candidate per cluster, centered on the proximity-weighted midpoint.
+  * select_candidate_slots() — the top-N menu, always keeping any candidate that
+    overlaps a stated preference.
+  * recommend_slot() — the single pick, blending preference with fit/contention.
 """
 
 from __future__ import annotations
 
 from datetime import time
-
-import pytest
 
 from smart_assignment.shared.config import Config
 from smart_assignment.shared.models import DayOfWeek, GeoPoint, Route, RouteStop
@@ -22,11 +21,11 @@ from smart_assignment.shared.slot_selection import (
     SLOT_BASIS_LEAST_CONTENDED,
     SLOT_BASIS_NONE,
     SLOT_BASIS_PREFERENCE,
-    _window_for_reference_time,
+    centered_window,
     identify_available_slots,
     nearest_neighbors,
-    normalize_window,
     recommend_slot,
+    select_candidate_slots,
     stop_reference_time,
 )
 
@@ -56,6 +55,10 @@ def _stop(lat, lng, window) -> RouteStop:
     return RouteStop("067-000000", GeoPoint(lat, lng), delivery_time_window=window)
 
 
+def _mins(t: time) -> int:
+    return t.hour * 60 + t.minute
+
+
 # --- stop_reference_time: the phase A/B seam --------------------------------
 
 
@@ -76,173 +79,184 @@ def test_nearest_neighbors_sorted_and_capped():
     mid = _stop(29.7600, -95.3700, MORNING)
     far = _stop(29.9000, -95.5000, MORNING)
     got = nearest_neighbors(PROSPECT, [far, near, mid], k=2)
-    assert [n.stop for n in got] == [near, mid]  # nearest first, capped at k
+    assert [n.stop for n in got] == [near, mid]
     assert got[0].distance_miles < got[1].distance_miles
 
 
 def test_nearest_neighbors_respects_max_miles_and_nonpositive_k():
     near = _stop(29.7501, -95.3601, MORNING)
     far = _stop(29.9000, -95.5000, MORNING)
-    # A tight cap drops the far stop entirely.
     capped = nearest_neighbors(PROSPECT, [near, far], k=5, max_miles=1.0)
     assert [n.stop for n in capped] == [near]
-    # A non-positive k means "no neighbors vote".
     assert nearest_neighbors(PROSPECT, [near, far], k=0) == []
 
 
-# --- _window_for_reference_time ---------------------------------------------
+# --- centered_window --------------------------------------------------------
 
 
-def test_window_for_reference_time_prefers_tightest_containing_window():
-    wide = (time(7, 0), time(12, 0))
-    tight = (time(8, 0), time(10, 0))
-    # 09:00 sits inside both; the tighter window wins.
-    assert _window_for_reference_time(time(9, 0), [wide, tight]) == tight
+def test_centered_window_centres_on_the_anchor():
+    assert centered_window(9 * 60, 180) == (time(7, 30), time(10, 30))
+    assert centered_window(12 * 60, 120) == (time(11, 0), time(13, 0))
 
 
-def test_window_for_reference_time_falls_back_to_nearest_by_gap():
-    # 16:30 is inside neither; the afternoon window is far closer in time.
-    assert _window_for_reference_time(time(16, 30), [MORNING, AFTERNOON]) == AFTERNOON
+def test_centered_window_clamps_at_start_of_day():
+    # Anchor 01:00 with a 3h window would start before midnight -> shifted.
+    assert centered_window(60, 180) == (time(0, 0), time(3, 0))
 
 
-def test_window_for_reference_time_none_when_no_windows():
-    assert _window_for_reference_time(time(9, 0), []) is None
+def test_centered_window_clamps_at_end_of_day():
+    start, end = centered_window(23 * 60 + 30, 180)
+    assert end == time(23, 59)
+    assert start == time(20, 59)  # kept its full length
 
 
-# --- identify_available_slots: the menu -------------------------------------
+# --- identify_available_slots: clustered, centered candidates ---------------
 
 
-def test_menu_lists_every_offered_window():
-    route = _route([MORNING, AFTERNOON], [_stop(29.7501, -95.3601, MORNING)])
-    windows = {o.window for o in identify_available_slots(PROSPECT, route, Config())}
-    assert windows == {MORNING, AFTERNOON}
+def test_between_two_adjacent_stops_centres_the_slot():
+    # Two equidistant stops (symmetric around the prospect) with windows close
+    # in time -> ONE cluster, centred on the midpoint between their refs.
+    early = _stop(29.7505, -95.3600, (time(8, 0), time(9, 30)))   # ref 08:45
+    late = _stop(29.7495, -95.3600, (time(9, 30), time(11, 0)))   # ref 10:15
+    options = identify_available_slots(PROSPECT, _route([], [early, late]), Config())
+    assert len(options) == 1
+    o = options[0]
+    assert o.basis == SLOT_BASIS_BETWEEN_STOPS
+    assert o.anchor_time == time(9, 30)         # midpoint of 08:45 and 10:15
+    assert o.window == (time(8, 0), time(11, 0))  # 3h centred on 09:30
+    assert o.fit_score == 1.0                   # single cluster
 
 
-def test_location_fit_puts_the_neighbors_window_first_over_earlier_window():
-    # The only nearby stop is served in the AFTERNOON; a far stop holds the
-    # MORNING. Location fit must rank the afternoon window first even though the
-    # morning window starts earlier.
-    near_pm = _stop(29.7501, -95.3601, AFTERNOON)
-    far_am = _stop(29.9000, -95.5000, MORNING)
-    route = _route([MORNING, AFTERNOON], [near_pm, far_am])
-    options = identify_available_slots(PROSPECT, route, Config())
-    assert options[0].window == AFTERNOON
-    assert options[0].basis == SLOT_BASIS_BETWEEN_STOPS
-    assert options[0].fit_score > 0
-    # The far morning stop still contributes a vote (default neighbor_count=3
-    # sees both stops), but the very close afternoon stop dominates by
-    # inverse-distance weight, so the afternoon window ranks first.
-    morning = next(o for o in options if o.window == MORNING)
-    assert morning.fit_score < options[0].fit_score
-    assert options[0].fit_score > 0.9
+def test_anchor_is_pulled_toward_the_closer_stop():
+    # Same times, but the earlier stop is much closer -> the weighted midpoint
+    # pulls earlier than the naive midpoint (09:30).
+    near_early = _stop(29.75005, -95.36000, (time(7, 30), time(8, 30)))  # ref 08:00, ~0.003 mi
+    far_late = _stop(29.7700, -95.3600, (time(10, 30), time(11, 30)))    # ref 11:00, ~1.4 mi
+    options = identify_available_slots(PROSPECT, _route([], [near_early, far_late]), Config())
+    assert len(options) == 1
+    assert _mins(options[0].anchor_time) < _mins(time(9, 30))  # pulled toward 08:00
 
 
-def test_inverse_distance_weight_lets_one_close_stop_outvote_two_far_ones():
-    close_pm = _stop(29.75005, -95.36005, AFTERNOON)  # essentially on top of the prospect
-    far_am1 = _stop(29.8000, -95.4200, MORNING)
-    far_am2 = _stop(29.8100, -95.4300, MORNING)
-    route = _route([MORNING, AFTERNOON], [far_am1, far_am2, close_pm])
-    options = identify_available_slots(PROSPECT, route, Config())  # neighbor_count=3
-    assert options[0].window == AFTERNOON  # the single close stop wins on weight
-
-
-def test_zero_fit_orders_by_least_contended_then_earliest_start():
-    # Stops carry no windows -> no votes -> every fit is 0. Ordering then falls
-    # to contention (both 0 here) and finally earliest start.
-    route = _route([AFTERNOON, MORNING], [_stop(29.7501, -95.3601, None)])
-    options = identify_available_slots(PROSPECT, route, Config())
-    assert [o.window for o in options] == [MORNING, AFTERNOON]
-    assert all(o.fit_score == 0.0 for o in options)
-    assert all(o.basis == SLOT_BASIS_LEAST_CONTENDED for o in options)
-
-
-def test_committed_overlap_counts_contention_and_orders_least_contended_first():
-    # Force the fallback path (no neighbor votes) via a tight distance cap, so
-    # ordering is driven purely by contention: MORNING has 3 stops, AFTERNOON 1.
+def test_neighbors_split_into_morning_and_afternoon_candidates():
     stops = [
-        _stop(29.80, -95.42, MORNING),
-        _stop(29.81, -95.43, MORNING),
-        _stop(29.82, -95.44, MORNING),
-        _stop(29.83, -95.45, AFTERNOON),
+        _stop(29.7505, -95.3600, (time(8, 0), time(9, 0))),    # morning
+        _stop(29.7503, -95.3600, (time(8, 30), time(9, 30))),  # morning
+        _stop(29.7498, -95.3600, (time(13, 30), time(14, 30))),  # afternoon
     ]
-    route = _route([MORNING, AFTERNOON], stops)
-    cfg = Config(slot_neighbor_max_miles=0.25)  # every stop is farther than this
-    options = identify_available_slots(PROSPECT, route, cfg)
-    by_window = {o.window: o for o in options}
-    assert by_window[MORNING].committed_overlap == 3
-    assert by_window[AFTERNOON].committed_overlap == 1
-    assert options[0].window == AFTERNOON  # least contended first
-    assert options[0].basis == SLOT_BASIS_LEAST_CONTENDED
+    options = identify_available_slots(PROSPECT, _route([], stops), Config())
+    assert len(options) == 2
+    anchors = sorted(_mins(o.anchor_time) for o in options)
+    assert anchors[0] < 12 * 60 < anchors[1]  # one morning, one afternoon
+    assert all(o.basis == SLOT_BASIS_BETWEEN_STOPS for o in options)
 
 
-def test_empty_route_windows_yield_empty_menu():
-    route = _route([], [_stop(29.7501, -95.3601, MORNING)])
-    assert identify_available_slots(PROSPECT, route, Config()) == []
-
-
-# --- recommend_slot: the final pick, now considering preference -------------
-
-
-def test_recommend_accommodates_preference_even_over_better_location_fit():
-    # The nearby stop clusters the prospect into the AFTERNOON, but the customer
-    # prefers the MORNING, which an offered window covers -> honor the preference.
-    near_pm = _stop(29.7501, -95.3601, AFTERNOON)
-    route = _route([MORNING, AFTERNOON], [near_pm])
+def test_fallback_to_route_windows_when_no_stop_carries_a_time():
+    # No committed stop has a window -> fall back to the route's own windows,
+    # centred on their midpoints, basis least_contended, fit 0.
+    route = _route([MORNING, AFTERNOON], [_stop(29.7501, -95.3601, None)])
     options = identify_available_slots(PROSPECT, route, Config())
-    sel = recommend_slot(options, preferred_window=MORNING, config=Config())
-    assert sel.window == MORNING  # already a 3h window, so normalization is a no-op
-    assert sel.basis == SLOT_BASIS_PREFERENCE
-    assert sel.overlap_minutes == 180
+    assert {o.basis for o in options} == {SLOT_BASIS_LEAST_CONTENDED}
+    assert all(o.fit_score == 0.0 for o in options)
+    # centred on each window's midpoint (08:30 and 14:00), 3h long
+    windows = {o.window for o in options}
+    assert (time(7, 0), time(10, 0)) in windows     # 08:30 ± 90
+    assert (time(12, 30), time(15, 30)) in windows  # 14:00 ± 90
 
 
-def test_recommend_picks_greatest_overlap_among_preference_matches():
-    early = (time(7, 0), time(9, 0))
-    late = (time(9, 0), time(12, 0))
-    route = _route([early, late], [_stop(29.7501, -95.3601, None)])
-    options = identify_available_slots(PROSPECT, route, Config())
-    # Preference 08:00-11:00 overlaps early by 60 min, late by 120 min -> late.
-    sel = recommend_slot(options, preferred_window=(time(8, 0), time(11, 0)), config=Config())
-    assert sel.window == late
-    assert sel.overlap_minutes == 120
-    assert sel.basis == SLOT_BASIS_PREFERENCE
+def test_empty_route_and_no_timed_stops_yields_empty_menu():
+    assert identify_available_slots(PROSPECT, _route([], []), Config()) == []
 
 
-def test_recommend_still_returns_a_slot_when_preference_cannot_be_met():
-    # Route only offers an afternoon window; the morning preference can't be
-    # honored, but the route is NOT dropped -- it still gets a slot, overlap 0.
-    # AFTERNOON is 2h, so the recommended slot is normalized to 3h from its start.
-    near_pm = _stop(29.7501, -95.3601, AFTERNOON)
-    route = _route([AFTERNOON], [near_pm])
-    options = identify_available_slots(PROSPECT, route, Config())
-    sel = recommend_slot(options, preferred_window=MORNING, config=Config())
-    assert sel.window == (time(13, 0), time(16, 0))
-    assert sel.overlap_minutes == 0
-    assert sel.basis == SLOT_BASIS_BETWEEN_STOPS  # location fit still explains the pick
+def test_contention_counts_overlapping_committed_stops():
+    # A morning cluster's candidate window overlaps the two morning stops.
+    stops = [
+        _stop(29.7505, -95.3600, (time(8, 0), time(9, 0))),
+        _stop(29.7503, -95.3600, (time(8, 30), time(9, 30))),
+    ]
+    options = identify_available_slots(PROSPECT, _route([], stops), Config())
+    assert options[0].committed_overlap == 2
 
 
-def test_recommend_no_preference_takes_top_of_menu():
-    near_pm = _stop(29.7501, -95.3601, AFTERNOON)
-    far_am = _stop(29.9000, -95.5000, MORNING)
-    route = _route([MORNING, AFTERNOON], [near_pm, far_am])
-    options = identify_available_slots(PROSPECT, route, Config())
-    sel = recommend_slot(options, preferred_window=None, config=Config())
-    assert sel.window == (time(13, 0), time(16, 0))  # best-fit AFTERNOON, normalized to 3h
+# --- select_candidate_slots: top-N + preference guarantee -------------------
+
+
+def _four_cluster_route():
+    # Four temporally-separated single-stop clusters, increasingly far away, so
+    # the latest (17:30) is also the lowest-fit / lowest-ranked candidate.
+    return _route([], [
+        _stop(29.7505, -95.3600, (time(7, 0), time(8, 0))),      # near,   ref 07:30
+        _stop(29.7520, -95.3600, (time(10, 30), time(11, 30))),  # mid,    ref 11:00
+        _stop(29.7560, -95.3600, (time(14, 0), time(15, 0))),    # far,    ref 14:30
+        _stop(29.7700, -95.3600, (time(17, 30), time(18, 30))),  # farthest, ref 18:00
+    ])
+
+
+def test_top_n_caps_the_menu_without_a_preference():
+    cfg = Config(slot_neighbor_count=4)  # consider all four stops
+    options = identify_available_slots(PROSPECT, _four_cluster_route(), cfg)
+    assert len(options) == 4
+    menu = select_candidate_slots(options, preferred_window=None, config=cfg)
+    assert len(menu) == 3  # default slot_candidate_count
+    # the farthest/lowest-fit (18:00) candidate is dropped
+    assert all(o.anchor_time != time(18, 0) for o in menu)
+
+
+def test_preference_overlapping_candidate_is_always_kept():
+    cfg = Config(slot_neighbor_count=4)
+    options = identify_available_slots(PROSPECT, _four_cluster_route(), cfg)
+    # A late preference overlaps only the 4th (dropped-by-quality) candidate.
+    pref = (time(17, 0), time(19, 0))
+    menu = select_candidate_slots(options, preferred_window=pref, config=cfg)
+    assert any(o.anchor_time == time(18, 0) for o in menu)  # kept despite the cap
+
+
+def test_candidate_count_is_configurable():
+    cfg = Config(slot_neighbor_count=4, slot_candidate_count=2)
+    options = identify_available_slots(PROSPECT, _four_cluster_route(), cfg)
+    menu = select_candidate_slots(options, None, cfg)
+    assert len(menu) == 2
+
+
+# --- recommend_slot: the final pick -----------------------------------------
+
+
+def test_recommend_no_preference_takes_the_best_quality_candidate():
+    stops = [
+        _stop(29.75005, -95.36000, AFTERNOON),  # very close -> afternoon dominates
+        _stop(29.9000, -95.5000, MORNING),      # far
+    ]
+    options = identify_available_slots(PROSPECT, _route([], stops), Config())
+    menu = select_candidate_slots(options, None, Config())
+    sel = recommend_slot(menu, preferred_window=None, config=Config())
+    assert _mins(time(12, 0)) < _mins(sel.window[0]) or sel.window[0] >= time(12, 0)
     assert sel.overlap_minutes == 0
     assert sel.basis == SLOT_BASIS_BETWEEN_STOPS
 
 
-def test_recommend_falls_back_to_least_contended_when_no_fit_no_preference():
+def test_recommend_blends_toward_a_preference_overlapping_candidate():
     stops = [
-        _stop(29.80, -95.42, MORNING),
-        _stop(29.81, -95.43, MORNING),
-        _stop(29.82, -95.44, AFTERNOON),
+        _stop(29.7505, -95.3600, (time(8, 0), time(9, 0))),      # morning cluster
+        _stop(29.7503, -95.3600, (time(8, 30), time(9, 30))),
+        _stop(29.7498, -95.3600, (time(13, 30), time(14, 30))),  # afternoon
     ]
-    route = _route([MORNING, AFTERNOON], stops)
-    cfg = Config(slot_neighbor_max_miles=0.25)
-    options = identify_available_slots(PROSPECT, route, cfg)
-    sel = recommend_slot(options, preferred_window=None, config=cfg)
-    assert sel.window == (time(13, 0), time(16, 0))  # the emptier window, normalized to 3h
-    assert sel.basis == SLOT_BASIS_LEAST_CONTENDED
+    options = identify_available_slots(PROSPECT, _route([], stops), Config())
+    menu = select_candidate_slots(options, (time(13, 0), time(15, 30)), Config())
+    sel = recommend_slot(menu, preferred_window=(time(13, 0), time(15, 30)), config=Config())
+    assert sel.basis == SLOT_BASIS_PREFERENCE
+    assert sel.overlap_minutes > 0
+    assert sel.window[0] >= time(12, 0)  # the afternoon candidate
+
+
+def test_recommend_still_returns_a_slot_when_preference_cannot_be_met():
+    # Afternoon-only neighbourhood; a morning preference can't be honored, but
+    # the route is NOT dropped -- it still gets its afternoon slot, overlap 0.
+    stops = [_stop(29.7501, -95.3601, AFTERNOON)]
+    options = identify_available_slots(PROSPECT, _route([], stops), Config())
+    menu = select_candidate_slots(options, MORNING, Config())
+    sel = recommend_slot(menu, preferred_window=MORNING, config=Config())
+    assert sel.window is not None
+    assert sel.overlap_minutes == 0
+    assert sel.basis == SLOT_BASIS_BETWEEN_STOPS
 
 
 def test_recommend_on_empty_menu_returns_no_window():
@@ -252,53 +266,7 @@ def test_recommend_on_empty_menu_returns_no_window():
     assert sel.overlap_minutes == 0
 
 
-def test_no_committed_stops_recommends_earliest_window():
-    route = _route([AFTERNOON, MORNING], [])
-    options = identify_available_slots(PROSPECT, route, Config())
-    sel = recommend_slot(options, preferred_window=None, config=Config())
-    assert sel.window == MORNING  # earliest, since nothing to cluster against
-
-
-@pytest.mark.parametrize("neighbor_count", [1, 3, 5])
-def test_neighbor_count_does_not_crash_on_small_routes(neighbor_count):
-    # Fewer stops than the neighbor count must not raise.
-    route = _route([MORNING, AFTERNOON], [_stop(29.7501, -95.3601, AFTERNOON)])
-    cfg = Config(slot_neighbor_count=neighbor_count)
-    options = identify_available_slots(PROSPECT, route, cfg)
-    assert options[0].window == AFTERNOON
-
-
-# --- Recommended-window length (configurable, default 3h) -------------------
-
-
-def test_normalize_window_anchors_at_start_for_default_3h():
-    assert normalize_window((time(13, 0), time(15, 0)), 180) == (time(13, 0), time(16, 0))
-    assert normalize_window((time(7, 0), time(10, 0)), 180) == (time(7, 0), time(10, 0))
-
-
-def test_normalize_window_shrinks_a_longer_window():
-    assert normalize_window((time(8, 0), time(14, 0)), 180) == (time(8, 0), time(11, 0))
-
-
-def test_normalize_window_clamps_at_end_of_day():
-    start, end = normalize_window((time(23, 0), time(23, 30)), 180)
-    assert end == time(23, 59)
-    assert start == time(20, 59)  # pulled back so the window stays its full length
-
-
-def test_recommended_window_uses_default_three_hours():
-    # A 2h historical window is presented as a standard 3h recommendation.
-    near = _stop(29.7501, -95.3601, AFTERNOON)
-    route = _route([AFTERNOON], [near])
-    options = identify_available_slots(PROSPECT, route, Config())
-    sel = recommend_slot(options, preferred_window=None, config=Config())
-    assert sel.window == (time(13, 0), time(16, 0))
-
-
 def test_slot_window_minutes_is_configurable():
-    near = _stop(29.7501, -95.3601, AFTERNOON)
-    route = _route([AFTERNOON], [near])
-    cfg = Config(slot_window_minutes=240)  # one config change -> 4h windows
-    options = identify_available_slots(PROSPECT, route, cfg)
-    sel = recommend_slot(options, preferred_window=None, config=cfg)
-    assert sel.window == (time(13, 0), time(17, 0))
+    stops = [_stop(29.7501, -95.3601, AFTERNOON)]  # ref 14:00
+    options = identify_available_slots(PROSPECT, _route([], stops), Config(slot_window_minutes=240))
+    assert options[0].window == (time(12, 0), time(16, 0))  # 4h centred on 14:00
