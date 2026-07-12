@@ -19,6 +19,39 @@ a score itself -- every number comes back from the tool call. See
 `smart_assignment/tools/slot_recommendation.py` for the tool implementations
 and `smart_assignment/prompts.py` for the instruction that enforces this.
 
+## Delivery-slot selection (`shared/slot_selection.py`)
+
+The prospect should be delivered *when the truck is already in their
+neighborhood*, inferred from the route's nearest committed stops. Three
+deterministic steps:
+
+```
+identify_available_slots   nearest committed stops -> group by time (a morning
+                           vs. an afternoon neighborhood) -> one candidate per
+                           cluster, a fixed-length window CENTERED on the
+                           cluster's inverse-distance-weighted midpoint time
+                           (the slot "between the adjacent stops", pulled toward
+                           the closer ones). No customer preference here.
+select_candidate_slots     keep the top-N per route by quality (fit + low
+                           contention), but ALWAYS keep any candidate that
+                           overlaps a stated preference -> this is the menu.
+recommend_slot             pick one from the menu with a soft blend of
+                           preference overlap + fit + low contention.
+```
+
+This replaced an earlier version that snapped the prospect to a route's nearest
+*existing* window and anchored the slot at that window's start. The candidate
+menu (`EvalContext.available_slots`, each `SlotOption` carrying its
+`anchor_time`, `fit_score`, `committed_overlap`, `basis`) is exactly the set a
+future recommendation LLM would reason over to pick the best slot.
+
+**Phase A/B seam:** `stop_reference_time` is the single function that turns a
+committed stop into a "when is the truck near here" clock value — today the TW1
+window midpoint, later a real planned-arrival ETA (and, with a stop *sequence*,
+the interpolation becomes true bracketing between the two sequential stops the
+prospect is inserted between) — with no caller change. Knobs:
+`SMART_ASSIGNMENT_SLOT_{NEIGHBORS,CLUSTER_GAP,WINDOW_MINUTES,CANDIDATES,WEIGHT_*}`.
+
 ## Escalation-triage sub-agent (`triage/` package)
 
 The first real multi-agent split. When `recommend_or_escalate` returns

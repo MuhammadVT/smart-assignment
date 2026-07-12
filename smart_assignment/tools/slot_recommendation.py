@@ -122,6 +122,7 @@ def _serialize_evaluation(e: CandidateEvaluation) -> dict:
     out["available_slots"] = [
         {
             "window": fmt_window(s.window),
+            "anchor_time": fmt_time(s.anchor_time) if s.anchor_time else None,
             "fit_score": round(s.fit_score, 4),
             "committed_overlap": s.committed_overlap,
             "basis": s.basis,
