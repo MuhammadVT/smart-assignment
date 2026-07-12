@@ -25,11 +25,16 @@ from smart_assignment.triage.agent import (
     build_triage_agent,
     build_triage_tool,
 )
-from smart_assignment.triage.context import get_escalation_context
+from smart_assignment.triage.context import check_brief_grounding, get_escalation_context
+from smart_assignment.triage.verifier import BriefVerification, collect_grounding, verify_brief
 
 __all__ = [
     "TRIAGE_AGENT_NAME",
     "build_triage_agent",
     "build_triage_tool",
     "get_escalation_context",
+    "check_brief_grounding",
+    "BriefVerification",
+    "collect_grounding",
+    "verify_brief",
 ]

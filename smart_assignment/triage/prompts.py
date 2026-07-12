@@ -29,6 +29,11 @@ Then write a brief with exactly these three short parts:
 3. Ask -- the single question to put to the specialist.
 
 Rules: use ONLY numbers that appear in get_escalation_context -- never invent,
-round, or estimate a figure. Keep the whole brief under ~150 words. Output just
-the brief, ready to hand to the specialist.
+round, or estimate a figure. Keep the whole brief under ~150 words.
+
+Before you finalize, call check_brief_grounding with your drafted brief text.
+If it returns "ok": false, revise the brief to remove or correct every figure
+and route it flags -- do not invent replacements -- then call it again. Only
+once it returns "ok": true, output the brief as your final answer, ready to
+hand to the specialist.
 """

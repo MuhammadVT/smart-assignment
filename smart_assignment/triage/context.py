@@ -29,6 +29,11 @@ from smart_assignment.tools.slot_recommendation import (
     _geocoding_error_result,
     _profile_from_state_dict,
 )
+from smart_assignment.triage.verifier import collect_grounding, verify_brief
+
+# Grounding facts stashed by get_escalation_context so the self-check tool and
+# the after-model backstop can verify a brief without re-deriving the trace.
+_STATE_TRIAGE_GROUNDING_KEY = "sa_triage_grounding"
 
 
 def get_escalation_context(tool_context: ToolContext) -> dict:
@@ -71,7 +76,7 @@ def get_escalation_context(tool_context: ToolContext) -> dict:
     evaluations = evaluate_candidates(customer, candidates, DEFAULT_CONFIG)
     packet = build_evidence_packet(customer, evaluations, DEFAULT_CONFIG)
 
-    return {
+    context = {
         "ok": True,
         "customer": {
             "name": customer.name,
@@ -86,4 +91,36 @@ def get_escalation_context(tool_context: ToolContext) -> dict:
         "feasible_candidates": packet.feasible_candidates,
         "infeasible_candidates": packet.infeasible_candidates,
         "alternative_takes": last.get("alternative_takes", []),
+    }
+    # Stash the groundable facts so check_brief_grounding (and the after-model
+    # backstop) can verify the brief without re-deriving the whole trace.
+    tool_context.state[_STATE_TRIAGE_GROUNDING_KEY] = collect_grounding(context)
+    return context
+
+
+def check_brief_grounding(tool_context: ToolContext, brief: str) -> dict:
+    """Verify that every number and route-id in a drafted triage ``brief`` is
+    grounded in the escalation context.
+
+    Call this after drafting the brief and before finalizing it. If it returns
+    "ok": false, revise the brief to remove or correct the flagged figures --
+    do not invent replacements -- then call this again.
+
+    Returns:
+      {"ok": true, "message": "..."} when everything is grounded, or
+      {"ok": false, "ungrounded_numbers": [...], "ungrounded_routes": [...],
+       "message": "<what to fix>"}. Returns {"ok": false, "error": ...} if
+      get_escalation_context hasn't run yet.
+    """
+    grounding = tool_context.state.get(_STATE_TRIAGE_GROUNDING_KEY)
+    if not grounding:
+        return {"ok": False, "error": "Call get_escalation_context first."}
+    result = verify_brief(brief or "", grounding)
+    if result.ok:
+        return {"ok": True, "message": "All figures and routes in the brief are grounded."}
+    return {
+        "ok": False,
+        "ungrounded_numbers": result.ungrounded_numbers,
+        "ungrounded_routes": result.ungrounded_routes,
+        "message": result.caveat(),
     }

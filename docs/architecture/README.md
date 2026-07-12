@@ -56,6 +56,36 @@ Built lazily inside `root_agent`'s construction (`agent.py`), so importing the
 package stays credential-free; the sub-agent resolves the LLM backend only when
 `root_agent` itself is built.
 
+### Brief groundedness verification
+
+The triage brief is free text, so — unlike the grounded-judgment layer, which
+verifies structured citations — its numbers are checked by a prose scan
+(`triage/verifier.py`, deterministic, no LLM). `verify_brief` confirms every
+figure and route-id in the brief is grounded in the escalation context;
+`collect_grounding` stashes the groundable facts in session state when
+`get_escalation_context` runs. It's tolerant by design — route-ids, route
+names, and the customer name (any of which may carry digits, e.g. a numeric
+route-id `3170` or a name `BT149361-[…]`) and clock times are scrubbed first,
+percent-vs-fraction is normalized, small bare counts are ignored — so faithful
+prose passes and only genuinely invented figures are flagged.
+
+Two enforcement points:
+
+```
+triage agent drafts brief
+   ├─ (cooperative) calls check_brief_grounding(brief) -> revise until ok
+   └─ (deterministic) after_model_callback runs verify_brief on the FINAL brief;
+      if any figure/route is still ungrounded, appends a caveat naming them
+      ("⚠ Unverified — figures not found in the evaluation trace: …")
+```
+
+The callback always runs, so ungrounded figures are flagged for the specialist
+even if the agent skipped the self-check. It only *annotates* (never silently
+drops the brief), and is defensively wrapped so it can never break the agent —
+triage is advisory and human-reviewed, so a visible caveat is the right
+guarantee (vs. the judgment layer, which hard-rejects + falls back because it
+gates an auto-assign decision).
+
 Reasoning (the natural-language trace on the final recommendation) is
 produced deterministically inside `recommend_or_escalate` and then narrated
 by the agent; the pipeline's own optional LLM-narrated reasoner
