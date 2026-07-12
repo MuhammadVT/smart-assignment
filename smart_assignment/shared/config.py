@@ -11,13 +11,39 @@ total-score threshold, factor weights/priorities) with operations.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Optional
 
 # Canonical names of the three weighted scoring factors (spec step 4).
 FACTOR_GEO_CLUSTERING = "geographic_clustering"
 FACTOR_CAPACITY_BUFFER = "capacity_buffer"
 FACTOR_WINDOW_MATCH = "window_match"
+
+# Canonical role names for per-task model selection (see Config.for_role). Each
+# LLM-using surface passes its role so the right model can be assigned to the
+# right task while the LLM backend stays global.
+ROLE_ROOT_AGENT = "root_agent"  # the conversational LlmAgent
+ROLE_TRIAGE = "triage"  # the escalation-triage sub-agent (AgentTool)
+ROLE_JUDGMENT = "judgment"  # the grounded-judgment decision call
+ROLE_REASONING = "reasoning"  # the LLM-narrated reasoning trace (LLMReasoner)
+
+# role -> env var that overrides that role's model. A role whose env var is
+# unset uses the global `model` / `sage_model`, so behavior is unchanged.
+_ROLE_MODEL_ENV = {
+    ROLE_ROOT_AGENT: "SMART_ASSIGNMENT_MODEL_ROOT_AGENT",
+    ROLE_TRIAGE: "SMART_ASSIGNMENT_MODEL_TRIAGE",
+    ROLE_JUDGMENT: "SMART_ASSIGNMENT_MODEL_JUDGMENT",
+    ROLE_REASONING: "SMART_ASSIGNMENT_MODEL_REASONING",
+}
+
+
+def _role_models_from_env() -> dict[str, str]:
+    models: dict[str, str] = {}
+    for role, env in _ROLE_MODEL_ENV.items():
+        raw = os.environ.get(env)
+        if raw and raw.strip():
+            models[role] = raw.strip()
+    return models
 
 
 def _float_env(name: str, default: float) -> float:
@@ -168,6 +194,34 @@ class Config:
     model: str = "gemini-2.5-flash"
     # Model name used when llm_backend == "sage" (Sage-prefixed identifier).
     sage_model: str = "sage-gemini-2.5-flash"
+    # Optional per-role model overrides (role -> model name; see the ROLE_*
+    # constants and for_role). A role absent here uses the global model above,
+    # so the default behavior is unchanged. Lets you assign a cheaper/faster
+    # model to a lightweight task (e.g. triage or reasoning narration) and a
+    # stronger one to the decision. The override value must match the ACTIVE
+    # backend's naming (a Sage-prefixed id under sage; a bare/litellm name under
+    # standard); the backend itself stays global.
+    role_models: dict[str, str] = field(default_factory=dict)
+
+    def for_role(self, role: str) -> "Config":
+        """A copy of this config with the active model field overridden by the
+        per-role model, if one is configured for ``role``; otherwise ``self``.
+
+        Overrides ``sage_model`` under the sage backend and ``model`` otherwise,
+        so the same override string is applied to whichever field
+        ``shared.llm.get_llm`` / ``generate_text`` actually read."""
+        override = self.role_models.get(role)
+        if not override:
+            return self
+        if self.llm_backend == "sage":
+            return replace(self, sage_model=override)
+        return replace(self, model=override)
+
+    def resolved_model(self, role: str) -> str:
+        """The effective model name a given role will actually use (handy for
+        logging and tests)."""
+        scoped = self.for_role(role)
+        return scoped.sage_model if scoped.llm_backend == "sage" else scoped.model
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -197,6 +251,7 @@ class Config:
             llm_backend=os.environ.get("SMART_ASSIGNMENT_LLM_BACKEND", "sage"),
             model=os.environ.get("SMART_ASSIGNMENT_MODEL", "gemini-2.5-flash"),
             sage_model=os.environ.get("SMART_ASSIGNMENT_SAGE_MODEL", "sage-gemini-2.5-flash"),
+            role_models=_role_models_from_env(),
         )
 
 

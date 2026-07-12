@@ -56,6 +56,31 @@ Built lazily inside `root_agent`'s construction (`agent.py`), so importing the
 package stays credential-free; the sub-agent resolves the LLM backend only when
 `root_agent` itself is built.
 
+## Per-role model selection
+
+Every LLM-using surface resolves its model through one place — `Config.for_role(role)`
+(`shared/config.py`) — so you can assign the right model to the right task
+without changing any call site's logic. Roles and their env overrides:
+
+| Role | Surface | Env override |
+|---|---|---|
+| `root_agent` | the conversational `LlmAgent` | `SMART_ASSIGNMENT_MODEL_ROOT_AGENT` |
+| `triage` | the escalation-triage sub-agent | `SMART_ASSIGNMENT_MODEL_TRIAGE` |
+| `judgment` | the grounded recommend/escalate decision | `SMART_ASSIGNMENT_MODEL_JUDGMENT` |
+| `reasoning` | the LLM-narrated reasoning trace (`LLMReasoner`) | `SMART_ASSIGNMENT_MODEL_REASONING` |
+
+`for_role` returns a copy of the config with the *active* model field overridden
+(`sage_model` under the sage backend, `model` otherwise); a role with no override
+returns the config unchanged (same object), so leaving the vars unset keeps a
+single model everywhere and behavior is identical to before. The LLM **backend**
+(`sage` vs `standard`) stays global — only the model *tier* varies per role, so
+each override value must match the active backend's naming. `resolved_model(role)`
+returns the effective model name for a role (handy for logging/tests).
+
+The two functions that actually talk to a backend (`shared/llm.get_llm` and
+`generate_text`) are unchanged — each caller simply hands them
+`config.for_role(<its role>)`.
+
 ### Brief groundedness verification
 
 The triage brief is free text, so — unlike the grounded-judgment layer, which

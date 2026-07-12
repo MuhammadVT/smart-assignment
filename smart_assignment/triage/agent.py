@@ -22,7 +22,7 @@ from google.adk.agents.callback_context import CallbackContext
 from google.adk.models import LlmResponse
 from google.adk.tools import AgentTool, FunctionTool
 
-from smart_assignment.shared.config import Config
+from smart_assignment.shared.config import ROLE_TRIAGE, Config
 from smart_assignment.shared.llm import get_llm
 from smart_assignment.triage.context import (
     _STATE_TRIAGE_GROUNDING_KEY,
@@ -97,7 +97,7 @@ def build_triage_agent(config: Config) -> LlmAgent:
     """Construct the escalation-triage ``LlmAgent`` (resolves the LLM backend)."""
     return LlmAgent(
         name=TRIAGE_AGENT_NAME,
-        model=get_llm(config),
+        model=get_llm(config.for_role(ROLE_TRIAGE)),
         description=(
             "Turns an escalated slot recommendation into a concise specialist "
             "brief -- root cause, concrete remediation options, and the question "

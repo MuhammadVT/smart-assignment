@@ -44,9 +44,12 @@ def _extract_json(text: str) -> dict:
 def generate_judgment(config: "Config", prompt: str) -> dict:
     """Call the configured LLM backend and return the parsed JSON dict.
 
-    Raises on any backend error or unparseable reply; the caller converts that
-    into a deterministic fallback rather than surfacing it.
+    Uses the judgment role's model (config.for_role), so the decision call can
+    run on a different model than the conversational agent. Raises on any
+    backend error or unparseable reply; the caller converts that into a
+    deterministic fallback rather than surfacing it.
     """
+    from smart_assignment.shared.config import ROLE_JUDGMENT
     from smart_assignment.shared.llm import generate_text
 
-    return _extract_json(generate_text(config, prompt))
+    return _extract_json(generate_text(config.for_role(ROLE_JUDGMENT), prompt))
