@@ -14,7 +14,11 @@ import pytest
 from smart_assignment.integrations.geocoding_client import MockGeocoder
 from smart_assignment.tools import slot_recommendation as tools_module
 from smart_assignment.tools.slot_recommendation import intake_customer, recommend_or_escalate
-from smart_assignment.triage.context import get_escalation_context
+from smart_assignment.triage.context import (
+    _STATE_TRIAGE_GROUNDING_KEY,
+    check_brief_grounding,
+    get_escalation_context,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -97,3 +101,42 @@ def test_recommend_or_escalate_now_exposes_alternative_takes():
     # so triage can surface split opinions.
     ctx = _escalated_ctx()
     assert "alternative_takes" in ctx.state["sa_last_recommendation"]
+
+
+# --- brief groundedness self-check tool --------------------------------------
+
+
+def test_get_escalation_context_stashes_grounding_for_the_verifier():
+    ctx = _escalated_ctx()
+    get_escalation_context(ctx)
+    grounding = ctx.state.get(_STATE_TRIAGE_GROUNDING_KEY)
+    assert grounding and grounding["numbers"] and grounding["route_ids"]
+
+
+def test_check_brief_grounding_passes_a_faithful_brief():
+    ctx = _escalated_ctx()
+    context = get_escalation_context(ctx)
+    facts = context["feasible_candidates"][0]["facts"]
+    pct = round(float(facts["utilization_after"]) * 100)
+    rid = context["feasible_candidates"][0]["route_id"]
+    brief = f"Route {rid} sits at about {pct}% utilization -- a thin margin, hence the review."
+
+    result = check_brief_grounding(ctx, brief)
+    assert result["ok"] is True
+
+
+def test_check_brief_grounding_flags_a_hallucinated_figure():
+    ctx = _escalated_ctx()
+    get_escalation_context(ctx)
+
+    result = check_brief_grounding(ctx, "This route has 9999 cases of headroom, plenty of room.")
+    assert result["ok"] is False
+    assert "9999" in result["ungrounded_numbers"]
+    assert "caution" in result["message"].lower()
+
+
+def test_check_brief_grounding_requires_context_first():
+    ctx = _FakeToolContext()
+    result = check_brief_grounding(ctx, "some brief")
+    assert result["ok"] is False
+    assert "get_escalation_context" in result["error"]
