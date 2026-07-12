@@ -189,12 +189,16 @@ def run_slot_recommendation(
 ) -> RecommendationResult:
     """Run the full workflow for one customer and return the complete trace.
 
-    `judge` selects the step-5 decision strategy. When omitted, the behavior is
-    unchanged: the weighted-sum `decide(...)` gated on `total_score_threshold`.
-    Pass a `judgment.GroundedJudge` (or use `judgment.default_judge(config)`) to
-    have an LLM make the recommend/escalate call over the evidence packet
-    instead. Hard constraints run first either way, so the choice only affects
-    how the *feasible* survivors are ranked and gated.
+    `judge` selects the step-5 decision strategy. Precedence:
+      1. an explicitly-passed `judge` always wins;
+      2. otherwise, if `config.use_grounded_judgment` is on, an LLM makes the
+         recommend/escalate call over the evidence packet (`judgment` package);
+      3. otherwise, the weighted-sum `decide(...)` gated on
+         `total_score_threshold` (the default).
+    Hard constraints run first in every case, so the choice only affects how the
+    *feasible* survivors are ranked and gated. Note the grounded path needs an
+    LLM backend + credentials; without them it transparently falls back to the
+    weighted deterministic result, so this still runs fully offline.
     """
     config = config or DEFAULT_CONFIG
     geocoder = geocoder or MockGeocoder()
@@ -202,6 +206,14 @@ def run_slot_recommendation(
     # deterministic trace when GOOGLE_API_KEY / Vertex credentials are absent,
     # so this still runs fully offline.
     reasoner = reasoner or LLMReasoner(config)
+
+    # No explicit strategy injected -> honor the config flag. This is what makes
+    # SMART_ASSIGNMENT_USE_GROUNDED_JUDGMENT take effect on the offline demo, the
+    # page generator, and the web app -- not just the conversational tool.
+    if judge is None and config.use_grounded_judgment:
+        from smart_assignment.judgment import default_judge
+
+        judge = default_judge(config, reasoner=reasoner)
 
     customer = intake(customer)
     all_routes = routes if routes is not None else fetch_candidate_routes()
