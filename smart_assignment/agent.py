@@ -37,7 +37,7 @@ from google.adk.agents import LlmAgent
 from google.adk.tools import FunctionTool, request_input
 
 from smart_assignment.prompts import build_instruction
-from smart_assignment.shared.config import DEFAULT_CONFIG
+from smart_assignment.shared.config import DEFAULT_CONFIG, ROLE_ROOT_AGENT
 from smart_assignment.shared.llm import get_llm
 from smart_assignment.tools import (
     evaluate_and_score_routes,
@@ -73,7 +73,7 @@ def _build_root_agent() -> LlmAgent:
 
     return LlmAgent(
         name="smart_assignment_agent",
-        model=get_llm(DEFAULT_CONFIG),
+        model=get_llm(DEFAULT_CONFIG.for_role(ROLE_ROOT_AGENT)),
         description=(
             "Collects a new prospect customer's delivery details conversationally "
             "and recommends -- or escalates -- a delivery route and slot."
