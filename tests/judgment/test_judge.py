@@ -192,6 +192,24 @@ def test_mechanical_failure_falls_back_to_the_deterministic_pick():
     assert grounded.reasoning == weighted.reasoning  # identical deterministic output
 
 
+def test_mechanical_failure_is_logged_not_silent(caplog):
+    # The fallback must be observable: a backend/credentials failure that lands
+    # on the deterministic text should leave a WARNING explaining why, so an
+    # identical-looking output is never a silent mystery.
+    import logging
+
+    config = Config(use_grounded_judgment=True)
+    customer, evals = evaluations_for(CLEAR_RECOMMEND, config)
+    fake = FakeJudgmentFn(RuntimeError("SAGE_CLIENT_ID missing"))
+
+    with caplog.at_level(logging.WARNING, logger="smart_assignment.judgment.judge"):
+        _judge(fake).decide(customer, evals, config)
+
+    text = caplog.text
+    assert "SAGE_CLIENT_ID missing" in text  # the underlying cause is surfaced
+    assert "falling back" in text.lower()
+
+
 def test_no_feasible_route_never_calls_the_model_and_escalates():
     config = Config(use_grounded_judgment=True)
     customer, evals = evaluations_for(NO_FEASIBLE, config)
