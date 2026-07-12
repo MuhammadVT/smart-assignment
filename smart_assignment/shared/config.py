@@ -145,6 +145,15 @@ class Config:
     # always resamples regardless of this flag.
     judgment_retry_on_low_confidence_recommend: bool = True
 
+    # --- Escalation triage (optional sub-agent) ---
+    # When True, root_agent exposes an `escalation_triage` AgentTool (see the
+    # `triage` package) and, on any escalation, calls it to compose a specialist
+    # brief (root cause + concrete remediation options + a question) before the
+    # human handoff. It runs downstream of the deterministic decision and never
+    # changes the route, score, or decision, so auditability is unaffected;
+    # turning it off just reverts to a bare request_input handoff.
+    use_escalation_triage: bool = True
+
     # --- LLM backend ---
     # "sage"     → enterprise-governed SageLlmRegistry (requires SAGE_CLIENT_ID,
     #              SAGE_CLIENT_SECRET, SAGE_ENVIRONMENT to be set).
@@ -184,6 +193,7 @@ class Config:
             judgment_retry_on_low_confidence_recommend=_bool_env(
                 "SMART_ASSIGNMENT_JUDGMENT_RETRY_ON_LOW_CONFIDENCE", True
             ),
+            use_escalation_triage=_bool_env("SMART_ASSIGNMENT_USE_ESCALATION_TRIAGE", True),
             llm_backend=os.environ.get("SMART_ASSIGNMENT_LLM_BACKEND", "sage"),
             model=os.environ.get("SMART_ASSIGNMENT_MODEL", "gemini-2.5-flash"),
             sage_model=os.environ.get("SMART_ASSIGNMENT_SAGE_MODEL", "sage-gemini-2.5-flash"),

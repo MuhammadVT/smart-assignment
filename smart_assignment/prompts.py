@@ -47,3 +47,24 @@ that didn't come back from a tool call in this conversation. If a tool
 returns {"ok": false}, that is a real error to relay to the user, not
 something to work around on your own.
 """
+
+# Appended to INSTRUCTION only when the escalation-triage sub-agent is enabled
+# (Config.use_escalation_triage). It tells root_agent to consult the
+# escalation_triage AgentTool before the human handoff. The tool name here must
+# match triage.agent.TRIAGE_AGENT_NAME.
+ESCALATION_TRIAGE_GUIDANCE = """
+Escalation triage: whenever recommend_or_escalate returns
+"requires_human_review": true, BEFORE you call request_input, first call the
+escalation_triage tool. It reads the full evaluation trace and returns a
+specialist brief (root cause, concrete remediation options, and a suggested
+question). Pass that brief as the message to request_input, so the specialist
+gets a real diagnosis instead of a bare escalation. Do not alter any number,
+route, or decision in the brief -- relay it as given.
+"""
+
+
+def build_instruction(include_triage: bool = False) -> str:
+    """The root_agent system instruction, with the triage step appended when
+    the escalation-triage sub-agent is wired in (so the instruction never tells
+    the model to call a tool that isn't present)."""
+    return INSTRUCTION + (ESCALATION_TRIAGE_GUIDANCE if include_triage else "")

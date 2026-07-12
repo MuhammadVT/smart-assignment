@@ -19,6 +19,43 @@ a score itself -- every number comes back from the tool call. See
 `smart_assignment/tools/slot_recommendation.py` for the tool implementations
 and `smart_assignment/prompts.py` for the instruction that enforces this.
 
+## Escalation-triage sub-agent (`triage/` package)
+
+The first real multi-agent split. When `recommend_or_escalate` returns
+`requires_human_review: true` and `Config.use_escalation_triage` is on (env
+`SMART_ASSIGNMENT_USE_ESCALATION_TRIAGE`, default on), `root_agent` consults an
+`escalation_triage` sub-agent — an `LlmAgent` exposed as an ADK `AgentTool` —
+before the human handoff:
+
+```
+recommend_or_escalate -> requires_human_review?
+        | yes
+        v
+  escalation_triage   (AgentTool: a second LlmAgent, consult-and-return)
+     └─ get_escalation_context (reads session state: the profile + last
+        recommendation; re-derives every feasible/infeasible route with its
+        raw facts + any split model opinions)  -> composes a specialist brief:
+        root cause · concrete remediation options · the question to ask
+        |
+        v
+  root_agent -> request_input(message = the brief)   (root_agent still owns
+                                                       the human-in-the-loop pause)
+```
+
+**Why an `AgentTool` (consult-and-return), not a peer agent with control
+transfer:** `root_agent` stays in control of the conversation and keeps
+ownership of the `request_input` pause/resume; triage is a bounded call that
+returns text. It runs strictly *downstream* of the deterministic decision and
+is **read-only** — `get_escalation_context` never writes state, and the triage
+agent has no tool to change the route, score, or decision. So the pipeline's
+deterministic auditability is untouched; triage only turns the escalation into
+a better-explained, more actionable handoff. Turning the flag off reverts to a
+bare `request_input`.
+
+Built lazily inside `root_agent`'s construction (`agent.py`), so importing the
+package stays credential-free; the sub-agent resolves the LLM backend only when
+`root_agent` itself is built.
+
 Reasoning (the natural-language trace on the final recommendation) is
 produced deterministically inside `recommend_or_escalate` and then narrated
 by the agent; the pipeline's own optional LLM-narrated reasoner

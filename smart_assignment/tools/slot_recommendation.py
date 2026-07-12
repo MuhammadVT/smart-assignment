@@ -392,6 +392,10 @@ def recommend_or_escalate(tool_context: ToolContext) -> dict:
         "reasoning": rec.reasoning,
         "rejected_alternatives": rec.rejected_alternatives,
         "review_reason": rec.review_reason,
+        # Split model opinions from grounded-judgment resampling (empty on the
+        # weighted path). Surfaced so the escalation-triage sub-agent can show
+        # the specialist where the automated judgment was divided.
+        "alternative_takes": rec.alternative_takes,
     }
     tool_context.state[_STATE_LAST_RECOMMENDATION_KEY] = result
     return result
