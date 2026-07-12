@@ -51,6 +51,13 @@ def _opt_float_env(name: str) -> Optional[float]:
         return None
 
 
+def _bool_env(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
 def _default_weights() -> dict[str, float]:
     # Priority order per spec: geographic clustering > capacity buffer > window match.
     return {
@@ -108,7 +115,35 @@ class Config:
     # must meet this bar to auto-assign; below it, the agent escalates to a
     # human. A route's own merit is judged on its own -- this is intentionally
     # NOT a function of how close a runner-up scored (see reasoning.py).
+    #
+    # NOTE: this gate applies to the default *weighted-sum* decision path only.
+    # When `use_grounded_judgment` is on, the LLM makes the recommend/escalate
+    # call itself (see the `judgment` package) and this threshold is not used as
+    # a gate -- the weighted score is demoted to a reference-only fact.
     total_score_threshold: float = 0.60
+
+    # --- Grounded LLM judgment (optional, opt-in) ---
+    # When True, the recommend/escalate decision is made by an LLM reasoning
+    # over a structured *evidence packet* of the raw per-candidate facts
+    # (see the `judgment` package), instead of by the fixed weighted-sum +
+    # `total_score_threshold` gate. Hard constraints (constraints.py) still run
+    # first and remain the only thing that can eliminate a candidate, so the
+    # LLM can never pick an over-capacity or out-of-area route. Defaults to
+    # False so the existing deterministic path is unchanged unless enabled.
+    use_grounded_judgment: bool = False
+    # Number of independent judgment samples to draw for an "escalation-side"
+    # case (first sample is not a confident recommendation). k=1 disables
+    # resampling. Confident recommendations always ship on a single call.
+    judgment_sample_count: int = 3
+    # How the k samples' decisions are combined to clear an escalation-side
+    # case back to a recommendation: "unanimous" (default, precautionary --
+    # every sample must recommend) or "majority".
+    judgment_consensus: str = "unanimous"
+    # Whether a first sample that recommends a route but with LOW confidence is
+    # treated as "escalation-side" (True -> resample to confirm; the safe
+    # default) or shipped as-is (False -> a pick is a pick). A hard ESCALATE
+    # always resamples regardless of this flag.
+    judgment_retry_on_low_confidence_recommend: bool = True
 
     # --- LLM backend ---
     # "sage"     → enterprise-governed SageLlmRegistry (requires SAGE_CLIENT_ID,
@@ -141,6 +176,14 @@ class Config:
             slot_neighbor_max_miles=_opt_float_env("SMART_ASSIGNMENT_SLOT_NEIGHBOR_MAX_MILES"),
             slot_window_minutes=_int_env("SMART_ASSIGNMENT_SLOT_WINDOW_MINUTES", 180),
             total_score_threshold=_float_env("SMART_ASSIGNMENT_TOTAL_SCORE_THRESHOLD", 0.60),
+            use_grounded_judgment=_bool_env("SMART_ASSIGNMENT_USE_GROUNDED_JUDGMENT", False),
+            judgment_sample_count=_int_env("SMART_ASSIGNMENT_JUDGMENT_SAMPLE_COUNT", 3),
+            judgment_consensus=os.environ.get("SMART_ASSIGNMENT_JUDGMENT_CONSENSUS", "unanimous")
+            .strip()
+            .lower(),
+            judgment_retry_on_low_confidence_recommend=_bool_env(
+                "SMART_ASSIGNMENT_JUDGMENT_RETRY_ON_LOW_CONFIDENCE", True
+            ),
             llm_backend=os.environ.get("SMART_ASSIGNMENT_LLM_BACKEND", "sage"),
             model=os.environ.get("SMART_ASSIGNMENT_MODEL", "gemini-2.5-flash"),
             sage_model=os.environ.get("SMART_ASSIGNMENT_SAGE_MODEL", "sage-gemini-2.5-flash"),
