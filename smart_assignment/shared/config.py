@@ -26,6 +26,7 @@ ROLE_ROOT_AGENT = "root_agent"  # the conversational LlmAgent
 ROLE_TRIAGE = "triage"  # the escalation-triage sub-agent (AgentTool)
 ROLE_JUDGMENT = "judgment"  # the grounded-judgment decision call
 ROLE_REASONING = "reasoning"  # the LLM-narrated reasoning trace (LLMReasoner)
+ROLE_SLOTPICK = "slotpick"  # the grounded slot selection over a route's candidate menu
 
 # role -> env var that overrides that role's model. A role whose env var is
 # unset uses the global `model` / `sage_model`, so behavior is unchanged.
@@ -34,6 +35,7 @@ _ROLE_MODEL_ENV = {
     ROLE_TRIAGE: "SMART_ASSIGNMENT_MODEL_TRIAGE",
     ROLE_JUDGMENT: "SMART_ASSIGNMENT_MODEL_JUDGMENT",
     ROLE_REASONING: "SMART_ASSIGNMENT_MODEL_REASONING",
+    ROLE_SLOTPICK: "SMART_ASSIGNMENT_MODEL_SLOTPICK",
 }
 
 
@@ -148,6 +150,13 @@ class Config:
     slot_weight_fit: float = 0.5  # proximity-weight share of the slot's cluster
     slot_weight_contention: float = 0.2  # emptier (less committed overlap) is better
     slot_weight_preference: float = 0.3  # overlap with the customer's stated slot
+    # When True, the FINAL recommended slot for the chosen route is picked by an
+    # LLM reasoning over that route's candidate menu (see the `slotpick`
+    # package), constrained to the enumerated candidates and grounded in their
+    # facts -- instead of the deterministic blend above. It never changes the
+    # route or the score, only which candidate slot is presented, and falls back
+    # to the deterministic pick on any failure. Off by default.
+    use_grounded_slot_selection: bool = False
 
     # --- Decision / escalation ---
     # The winning route's own total_score (see shared/scoring.score_candidate)
@@ -256,6 +265,9 @@ class Config:
             slot_weight_fit=_float_env("SMART_ASSIGNMENT_SLOT_WEIGHT_FIT", 0.5),
             slot_weight_contention=_float_env("SMART_ASSIGNMENT_SLOT_WEIGHT_CONTENTION", 0.2),
             slot_weight_preference=_float_env("SMART_ASSIGNMENT_SLOT_WEIGHT_PREFERENCE", 0.3),
+            use_grounded_slot_selection=_bool_env(
+                "SMART_ASSIGNMENT_USE_GROUNDED_SLOT_SELECTION", False
+            ),
             total_score_threshold=_float_env("SMART_ASSIGNMENT_TOTAL_SCORE_THRESHOLD", 0.60),
             use_grounded_judgment=_bool_env("SMART_ASSIGNMENT_USE_GROUNDED_JUDGMENT", False),
             judgment_sample_count=_int_env("SMART_ASSIGNMENT_JUDGMENT_SAMPLE_COUNT", 3),

@@ -247,6 +247,10 @@ class SlotRecommendation:
     recommended_day: Optional[str] = None
     recommended_window: Optional[str] = None
     recommended_window_basis: Optional[str] = None  # why this slot was chosen (audit trail)
+    # Set only when the grounded slot selector (see the `slotpick` package)
+    # picked the recommended slot from the route's candidate menu -- its
+    # grounded rationale. None on the deterministic path.
+    recommended_window_rationale: Optional[str] = None
     factor_breakdown: list[FactorScore] = field(default_factory=list)
     rejected_alternatives: list[str] = field(default_factory=list)
     review_reason: Optional[str] = None
