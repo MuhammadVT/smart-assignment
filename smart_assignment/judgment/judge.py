@@ -21,6 +21,7 @@ app, the tools) is untouched regardless of which strategy ran.
 
 from __future__ import annotations
 
+import logging
 from collections import Counter
 from typing import Callable, Optional, Protocol
 
@@ -43,6 +44,8 @@ from smart_assignment.shared.models import (
     SlotRecommendation,
 )
 from smart_assignment.shared.timeutils import fmt_window
+
+logger = logging.getLogger(__name__)
 
 # A judgment_fn turns (config, prompt) into a raw judgment dict. Injectable so
 # tests drive the whole strategy with a fake and no network/credentials.
@@ -125,7 +128,20 @@ class GroundedJudge:
 
         first = self._verified_sample(packet, config)
         if first is None:
-            return self._deterministic_fallback(customer, evaluations, config)
+            logger.warning(
+                "Grounded judgment produced no verified result; falling back to the "
+                "deterministic weighted pick (output will be identical to "
+                "SMART_ASSIGNMENT_USE_GROUNDED_JUDGMENT=false). See the WARNING above "
+                "for the underlying cause."
+            )
+            rec = self._deterministic_fallback(customer, evaluations, config)
+            rec.grounded_fallback = True
+            rec.grounded_fallback_reason = (
+                "Grounded LLM reasoning was unavailable, so this shows the deterministic "
+                "result. Check the LLM backend (SMART_ASSIGNMENT_LLM_BACKEND) and its "
+                "credentials."
+            )
+            return rec
 
         if self._ships_on_first_call(first, config):
             return self._to_recommendation(customer, first, packet, samples=[first])
@@ -142,21 +158,49 @@ class GroundedJudge:
 
     def _verified_sample(self, packet: EvidencePacket, config: Config) -> Optional[JudgmentOutput]:
         """One sample: call the model, parse, verify; one corrective retry on a
-        verification failure; None on any mechanical failure."""
+        verification failure; None on any mechanical failure.
+
+        Every failure path is logged (WARNING) so a silent deterministic
+        fallback is never a mystery -- a missing LLM backend/credentials, a
+        malformed reply, or a persistent grounding failure all surface in the
+        logs with their cause.
+        """
         try:
             raw = self._judgment_fn(config, build_judgment_prompt(packet))
             output = parse_judgment(raw)
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "Grounded judgment LLM call/parse failed (%s: %s) -- falling back. "
+                "Check SMART_ASSIGNMENT_LLM_BACKEND and its credentials.",
+                type(exc).__name__,
+                exc,
+            )
             return None
         result = verify(output, packet)
         if result.ok:
             return output
+        logger.info(
+            "Grounded judgment failed verification; retrying once. Reasons: %s",
+            result.as_feedback(),
+        )
         try:
             raw2 = self._judgment_fn(config, build_retry_prompt(packet, result.as_feedback()))
             output2 = parse_judgment(raw2)
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "Grounded judgment retry call/parse failed (%s: %s) -- falling back.",
+                type(exc).__name__,
+                exc,
+            )
             return None
-        return output2 if verify(output2, packet).ok else None
+        verdict = verify(output2, packet)
+        if verdict.ok:
+            return output2
+        logger.warning(
+            "Grounded judgment still ungrounded after one retry (%s) -- falling back.",
+            verdict.as_feedback(),
+        )
+        return None
 
     def _ships_on_first_call(self, output: JudgmentOutput, config: Config) -> bool:
         """Only a confident recommendation ships on one call. A hard ESCALATE

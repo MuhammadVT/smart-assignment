@@ -990,7 +990,29 @@ def build_workflow_payload(result: RecommendationResult, config: Config) -> dict
         "resultHtml": _example_card(result, include_routes=False),
         "routesHtml": _route_cards(result, config),
         "map": build_map_data(result),
+        # UI banners (e.g. grounded reasoning fell back to deterministic). Empty
+        # for the normal deterministic/weighted path, so the published static
+        # page never shows one.
+        "notices": _payload_notices(result),
     }
+
+
+def _payload_notices(result: RecommendationResult) -> list[dict]:
+    """Structured UI notices derived from the recommendation (rendered as
+    banners by the web app). Currently just the grounded-judgment fallback."""
+    rec = result.recommendation
+    notices: list[dict] = []
+    if getattr(rec, "grounded_fallback", False):
+        notices.append(
+            {
+                "kind": "warning",
+                "text": _esc(
+                    rec.grounded_fallback_reason
+                    or "Grounded reasoning was unavailable; showing the deterministic result."
+                ),
+            }
+        )
+    return notices
 
 
 def build_page(results: list[RecommendationResult], config: Config) -> str:

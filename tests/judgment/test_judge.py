@@ -192,6 +192,62 @@ def test_mechanical_failure_falls_back_to_the_deterministic_pick():
     assert grounded.reasoning == weighted.reasoning  # identical deterministic output
 
 
+def test_mechanical_failure_marks_grounded_fallback_for_the_ui():
+    # A backend/credentials failure must flag the result so the UI can show a
+    # "grounded reasoning unavailable" notice.
+    config = Config(use_grounded_judgment=True)
+    customer, evals = evaluations_for(CLEAR_RECOMMEND, config)
+    fake = FakeJudgmentFn(RuntimeError("SAGE_CLIENT_ID missing"))
+
+    rec = _judge(fake).decide(customer, evals, config)
+
+    assert rec.grounded_fallback is True
+    assert rec.grounded_fallback_reason and "unavailable" in rec.grounded_fallback_reason.lower()
+
+
+def test_successful_grounded_recommend_does_not_flag_fallback():
+    config = Config(use_grounded_judgment=True)
+    customer, evals = evaluations_for(CLEAR_RECOMMEND, config)
+    winner = feasible_ids(evals)[0]
+    fake = FakeJudgmentFn(recommend(winner, confidence="HIGH"))
+
+    rec = _judge(fake).decide(customer, evals, config)
+
+    assert rec.grounded_fallback is False
+    assert rec.grounded_fallback_reason is None
+
+
+def test_no_feasible_route_is_not_a_grounded_fallback():
+    # No feasible route is a legitimate deterministic outcome, not a grounded
+    # failure -- it must NOT trigger the "reasoning unavailable" notice.
+    config = Config(use_grounded_judgment=True)
+    customer, evals = evaluations_for(NO_FEASIBLE, config)
+    fake = FakeJudgmentFn(recommend("RTE-ANYTHING"))
+
+    rec = _judge(fake).decide(customer, evals, config)
+
+    assert fake.calls == 0
+    assert rec.grounded_fallback is False
+
+
+def test_mechanical_failure_is_logged_not_silent(caplog):
+    # The fallback must be observable: a backend/credentials failure that lands
+    # on the deterministic text should leave a WARNING explaining why, so an
+    # identical-looking output is never a silent mystery.
+    import logging
+
+    config = Config(use_grounded_judgment=True)
+    customer, evals = evaluations_for(CLEAR_RECOMMEND, config)
+    fake = FakeJudgmentFn(RuntimeError("SAGE_CLIENT_ID missing"))
+
+    with caplog.at_level(logging.WARNING, logger="smart_assignment.judgment.judge"):
+        _judge(fake).decide(customer, evals, config)
+
+    text = caplog.text
+    assert "SAGE_CLIENT_ID missing" in text  # the underlying cause is surfaced
+    assert "falling back" in text.lower()
+
+
 def test_no_feasible_route_never_calls_the_model_and_escalates():
     config = Config(use_grounded_judgment=True)
     customer, evals = evaluations_for(NO_FEASIBLE, config)
