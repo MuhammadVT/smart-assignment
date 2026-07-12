@@ -526,7 +526,13 @@
       await sleep(260);
     }
     await sleep(180);
-    outEl.innerHTML = d.resultHtml;
+    var noticeHtml = '';
+    if (d.notices && d.notices.length) {
+      noticeHtml = d.notices.map(function (n) {
+        return '<div class="sim-notice ' + (n.kind || 'info') + '">' + n.text + '</div>';
+      }).join('');
+    }
+    outEl.innerHTML = noticeHtml + d.resultHtml;
     viz.classList.remove('running');
     viz.classList.add('has-result');
     routesPanel.innerHTML = d.routesHtml || '';

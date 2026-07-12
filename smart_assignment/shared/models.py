@@ -254,6 +254,12 @@ class SlotRecommendation:
     # sample's reasoned take, surfaced to the specialist so they see where the
     # model agreed or was split. Empty for the default weighted-sum path.
     alternative_takes: list[str] = field(default_factory=list)
+    # Set by GroundedJudge when grounded judgment was requested but the LLM path
+    # failed (no backend/credentials, unparseable/ungrounded reply) and it fell
+    # back to the deterministic weighted result. Lets the UI tell the user the
+    # reasoning shown is the deterministic fallback, not grounded output.
+    grounded_fallback: bool = False
+    grounded_fallback_reason: Optional[str] = None
 
     @property
     def requires_human_review(self) -> bool:

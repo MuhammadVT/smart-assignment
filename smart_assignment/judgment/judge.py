@@ -134,7 +134,14 @@ class GroundedJudge:
                 "SMART_ASSIGNMENT_USE_GROUNDED_JUDGMENT=false). See the WARNING above "
                 "for the underlying cause."
             )
-            return self._deterministic_fallback(customer, evaluations, config)
+            rec = self._deterministic_fallback(customer, evaluations, config)
+            rec.grounded_fallback = True
+            rec.grounded_fallback_reason = (
+                "Grounded LLM reasoning was unavailable, so this shows the deterministic "
+                "result. Check the LLM backend (SMART_ASSIGNMENT_LLM_BACKEND) and its "
+                "credentials."
+            )
+            return rec
 
         if self._ships_on_first_call(first, config):
             return self._to_recommendation(customer, first, packet, samples=[first])

@@ -429,3 +429,23 @@
   .tw-axis,
   .tw-row { grid-template-columns: 68px minmax(0, 1fr); }
 }
+
+/* Fallback / status banner shown above the result card (e.g. grounded LLM
+ * reasoning was unavailable and the deterministic result is shown instead). */
+.sim-notice {
+  margin: 0 0 12px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.45;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--ink);
+}
+.sim-notice::before { margin-right: 6px; }
+.sim-notice.warning {
+  border-color: var(--amber, #b7791f);
+  background: color-mix(in srgb, var(--amber, #b7791f) 12%, var(--card));
+}
+.sim-notice.warning::before { content: "⚠"; }
+.sim-notice.info::before { content: "ℹ️"; }
