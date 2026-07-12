@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from smart_assignment.shared.config import Config
 from smart_assignment.slotpick.evidence import build_slot_packet
 from smart_assignment.slotpick.schema import parse_slot_choice
 from smart_assignment.slotpick.verifier import verify_choice
@@ -10,7 +11,7 @@ from .conftest import AFTERNOON, MORNING, customer, evaluation
 
 
 def _packet():
-    return build_slot_packet(customer(), evaluation([MORNING, AFTERNOON]))
+    return build_slot_packet(customer(), evaluation([MORNING, AFTERNOON]), Config())
 
 
 def test_valid_index_and_grounded_citation_passes():

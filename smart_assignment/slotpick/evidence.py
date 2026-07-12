@@ -9,11 +9,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
+from smart_assignment.shared.config import Config
 from smart_assignment.shared.models import (
     CandidateEvaluation,
     CustomerProfile,
     SlotOption,
 )
+from smart_assignment.shared.slot_selection import blended_slot_score
 from smart_assignment.shared.timeutils import (
     duration_minutes,
     fmt_time,
@@ -21,8 +23,14 @@ from smart_assignment.shared.timeutils import (
     overlap_minutes,
 )
 
-# The numeric fact keys a citation may reference on a candidate slot.
-NUMERIC_SLOT_FIELDS = ("fit_score", "committed_overlap", "preference_overlap_minutes")
+# The numeric fact keys a citation may reference on a candidate slot. blended_score
+# is the deterministic weighted-blend value -- reference evidence, not a directive.
+NUMERIC_SLOT_FIELDS = (
+    "fit_score",
+    "committed_overlap",
+    "preference_overlap_minutes",
+    "blended_score",
+)
 
 
 @dataclass
@@ -34,6 +42,10 @@ class SlotPacket:
     route: dict
     preferred_window_minutes: Optional[int]
     candidates: list[dict]
+    # Index the deterministic weighted blend would pick -- the fallback, offered
+    # to the LLM as a reference it may agree with or (with justification) diverge
+    # from. None when the menu is empty.
+    deterministic_choice_index: Optional[int] = None
     _options: list[SlotOption] = field(default_factory=list)
 
     @property
@@ -55,6 +67,7 @@ class SlotPacket:
             "customer": self.customer,
             "route": self.route,
             "preferred_window_minutes": self.preferred_window_minutes,
+            "deterministic_choice_index": self.deterministic_choice_index,
             "candidates": self.candidates,
         }
 
@@ -65,10 +78,12 @@ def _slot_phrase(customer: CustomerProfile) -> Optional[str]:
 
 
 def build_slot_packet(
-    customer: CustomerProfile, evaluation: CandidateEvaluation
+    customer: CustomerProfile, evaluation: CandidateEvaluation, config: Config
 ) -> SlotPacket:
     """Enumerate the chosen route's candidate slots (with per-candidate facts)
-    for the grounded slot picker."""
+    for the grounded slot picker. The deterministic weighted blend's own score
+    and pick are included as *reference* evidence -- demoted from the decider to
+    an input the LLM may agree with or, with justification, diverge from."""
     pref = customer.preferred_slot.window if customer.preferred_slot else None
     pref_minutes = duration_minutes(pref) if pref else None
 
@@ -85,6 +100,7 @@ def build_slot_packet(
                     "fit_score": round(s.fit_score, 4),
                     "committed_overlap": s.committed_overlap,
                     "preference_overlap_minutes": int(pref_overlap),
+                    "blended_score": round(blended_slot_score(s, pref, config), 4),
                 },
             }
         )
@@ -102,5 +118,15 @@ def build_slot_packet(
         },
         preferred_window_minutes=pref_minutes,
         candidates=candidates,
+        deterministic_choice_index=_deterministic_index(evaluation),
         _options=list(evaluation.available_slots),
     )
+
+
+def _deterministic_index(evaluation: CandidateEvaluation) -> Optional[int]:
+    """The menu index of the slot the deterministic blend already chose
+    (`chosen_window`) -- the fallback pick, surfaced as a reference."""
+    for i, s in enumerate(evaluation.available_slots):
+        if s.window == evaluation.chosen_window:
+            return i
+    return None

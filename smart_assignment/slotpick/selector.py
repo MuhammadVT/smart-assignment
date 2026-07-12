@@ -84,7 +84,7 @@ class GroundedSlotSelector:
         if not evaluation.available_slots:
             return fallback  # nothing to choose among
 
-        packet = build_slot_packet(customer, evaluation)
+        packet = build_slot_packet(customer, evaluation, config)
         try:
             choice = parse_slot_choice(self._choice_fn(config, build_slot_prompt(packet)))
             result = verify_choice(choice, packet)

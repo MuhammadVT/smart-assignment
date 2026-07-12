@@ -277,6 +277,16 @@ def _blended_score(option: SlotOption, preferred_window: Optional[Window], confi
     return (wp * pref_frac + fit_term) / ((wp + wf + wc) or 1.0)
 
 
+def blended_slot_score(
+    option: SlotOption, preferred_window: Optional[Window], config: Config
+) -> float:
+    """Public view of the deterministic blend score for one candidate slot -- the
+    exact number `recommend_slot` maximizes. Surfaced as *reference* evidence to
+    the grounded slot picker (the LLM may agree with or diverge from it), while
+    remaining the deterministic fallback pick."""
+    return _blended_score(option, preferred_window, config)
+
+
 def recommend_slot(
     options: list[SlotOption],
     preferred_window: Optional[Window],

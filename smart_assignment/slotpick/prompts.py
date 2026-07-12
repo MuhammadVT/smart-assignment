@@ -20,11 +20,18 @@ own facts:
 emptier / less contended);
  - preference_overlap_minutes: how much the slot overlaps the customer's stated \
 preferred window (higher honors the preference more; 0 means no preference or no \
-overlap).
+overlap);
+ - blended_score: what a fixed weighted heuristic scores this slot (higher is \
+better by that heuristic). This is REFERENCE ONLY -- a sanity check, not the \
+answer. `deterministic_choice_index` names the candidate that heuristic would \
+pick by itself.
 
-There is no fixed formula -- reason about which candidate is the best overall \
-slot for THIS prospect. When a stated preference is well covered by a candidate, \
-lean toward honoring it unless another candidate is clearly better on fit and \
+There is no fixed formula you must follow. Reason from the facts about which \
+candidate is the best overall slot for THIS prospect. The blended_score / \
+deterministic_choice_index reference is a strong default: agree with it unless \
+the other facts clearly justify a better choice, and if you diverge, say why in \
+your rationale. When a stated preference is well covered by a candidate, lean \
+toward honoring it unless another candidate is clearly better on fit and \
 contention.
 """
 

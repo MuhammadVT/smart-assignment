@@ -62,6 +62,16 @@ picks the final window instead — but only from the *same* deterministically
 enumerated menu, and only by index. It reasons over the evidence; it never
 generates a window.
 
+The weighted blend is **demoted, not removed**. Its per-candidate `blended_score`
+and the index it would pick on its own (`deterministic_choice_index`) ride along
+in the evidence packet as *reference* — a strong default the model is told to
+agree with unless the other facts clearly justify diverging (and to say why in
+its rationale when it does). And it stays the **fallback**: any parse/verify
+failure or backend error reverts to exactly that blended pick. So the weights go
+from being the sole, opaque decider to one grounded input among several, with the
+LLM doing the reasoning over the valid set — while the auditable heuristic remains
+the floor.
+
 This is the same **constrained-option + grounded + deterministic-fallback**
 pattern as the judgment and triage layers, applied to the slot pick:
 
@@ -71,7 +81,8 @@ route already chosen (route/score/decision are FINAL and untouched)
         v
 build_slot_packet   enumerate the winning route's available_slots -> for each,
  (evidence.py)      index + window + anchor_time + basis + numeric facts
-                    (fit_score, committed_overlap, preference_overlap_minutes)
+                    (fit_score, committed_overlap, preference_overlap_minutes,
+                    blended_score) + deterministic_choice_index
         |
         v
 generate_slot_choice  LLM returns {chosen_index, rationale, citations[]}
