@@ -224,6 +224,14 @@ def run_slot_recommendation(
     else:
         recommendation = decide(customer, evaluations, reasoner, config)
 
+    # Optionally let an LLM pick the winning route's final slot from its
+    # candidate menu (constrained + grounded); a no-op unless
+    # use_grounded_slot_selection is on, and it never changes the route/score.
+    if config.use_grounded_slot_selection:
+        from smart_assignment.slotpick import refine_slot
+
+        refine_slot(recommendation, evaluations, customer, config)
+
     return RecommendationResult(
         customer=customer,
         candidates_considered=evaluations,

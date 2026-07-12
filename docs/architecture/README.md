@@ -52,6 +52,59 @@ the interpolation becomes true bracketing between the two sequential stops the
 prospect is inserted between) — with no caller change. Knobs:
 `SMART_ASSIGNMENT_SLOT_{NEIGHBORS,CLUSTER_GAP,WINDOW_MINUTES,CANDIDATES,WEIGHT_*}`.
 
+## Grounded slot selection (`slotpick/` package)
+
+The deterministic `recommend_slot` blend above is auditable but its weights
+(`SLOT_WEIGHT_{FIT,CONTENTION,PREFERENCE}`) are hand-picked and can't adapt to a
+situation the weights didn't anticipate. When `Config.use_grounded_slot_selection`
+is on (env `SMART_ASSIGNMENT_USE_GROUNDED_SLOT_SELECTION`, default **off**), an LLM
+picks the final window instead — but only from the *same* deterministically
+enumerated menu, and only by index. It reasons over the evidence; it never
+generates a window.
+
+This is the same **constrained-option + grounded + deterministic-fallback**
+pattern as the judgment and triage layers, applied to the slot pick:
+
+```
+route already chosen (route/score/decision are FINAL and untouched)
+        |
+        v
+build_slot_packet   enumerate the winning route's available_slots -> for each,
+ (evidence.py)      index + window + anchor_time + basis + numeric facts
+                    (fit_score, committed_overlap, preference_overlap_minutes)
+        |
+        v
+generate_slot_choice  LLM returns {chosen_index, rationale, citations[]}
+ (prompts + llm.py)    -- "pick by index from this menu, cite the facts"
+        |
+        v
+parse_slot_choice   strict shape (schema.py); one retry on parse/verify failure
+verify_choice       chosen_index in range AND every cited (index, field, value)
+ (verifier.py)      matches the packet within tolerance -> no fabricated numbers
+        |
+   ok / fail
+        v
+refine_slot         on OK: rewrite recommendation.recommended_window / _basis /
+ (selector.py)      _window_rationale to the model's pick.
+                    on fail / backend error: keep the deterministic blended pick
+                    (logs a warning). Never worse than the flag being off.
+```
+
+`GroundedSlotSelector` wraps the call/parse/verify/fallback; `DeterministicSlotSelector`
+is the trivial "return the blended `chosen_window`" default. `refine_slot(recommendation,
+evaluations, customer, config, selector=None)` locates the winning route by
+`recommended_route_id` and *only re-orders that route's already-computed candidate
+slots* — it never changes the route, score, or decision, and is a no-op when there
+is no recommended route (e.g. a no-feasible escalation) or the flag is off.
+
+It's deliberately lightweight — a single grounded call + verify + fallback, no
+resampling (unlike escalation-side judgment) — because a slot pick from a small
+valid menu is low-stakes: the worst case is a suboptimal-but-feasible window, and
+the deterministic pick is always there as the floor. Wired in two places behind the
+flag: `pipeline.run_slot_recommendation` and the conversational
+`tools/slot_recommendation.recommend_or_escalate` (which also serializes
+`recommended_window_rationale`).
+
 ## Escalation-triage sub-agent (`triage/` package)
 
 The first real multi-agent split. When `recommend_or_escalate` returns
@@ -101,6 +154,7 @@ without changing any call site's logic. Roles and their env overrides:
 | `triage` | the escalation-triage sub-agent | `SMART_ASSIGNMENT_MODEL_TRIAGE` |
 | `judgment` | the grounded recommend/escalate decision | `SMART_ASSIGNMENT_MODEL_JUDGMENT` |
 | `reasoning` | the LLM-narrated reasoning trace (`LLMReasoner`) | `SMART_ASSIGNMENT_MODEL_REASONING` |
+| `slotpick` | the grounded delivery-slot pick (`slotpick/` package) | `SMART_ASSIGNMENT_MODEL_SLOTPICK` |
 
 `for_role` returns a copy of the config with the *active* model field overridden
 (`sage_model` under the sage backend, `model` otherwise); a role with no override

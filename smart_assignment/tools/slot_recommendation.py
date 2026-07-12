@@ -380,6 +380,14 @@ def recommend_or_escalate(tool_context: ToolContext) -> dict:
     judge = default_judge(DEFAULT_CONFIG, reasoner=LLMReasoner(DEFAULT_CONFIG))
     rec = judge.decide(customer, evaluations, DEFAULT_CONFIG)
 
+    # Optionally let an LLM pick the winning route's final slot from its
+    # candidate menu (see the `slotpick` package). No-op unless
+    # use_grounded_slot_selection is on; falls back to the deterministic slot.
+    if DEFAULT_CONFIG.use_grounded_slot_selection:
+        from smart_assignment.slotpick import refine_slot
+
+        refine_slot(rec, evaluations, customer, DEFAULT_CONFIG)
+
     result = {
         "ok": True,
         "decision": rec.decision.value,
@@ -390,6 +398,7 @@ def recommend_or_escalate(tool_context: ToolContext) -> dict:
         "recommended_day": rec.recommended_day,
         "recommended_window": rec.recommended_window,
         "recommended_window_basis": rec.recommended_window_basis,
+        "recommended_window_rationale": rec.recommended_window_rationale,
         "reasoning": rec.reasoning,
         "rejected_alternatives": rec.rejected_alternatives,
         "review_reason": rec.review_reason,
