@@ -124,3 +124,16 @@ answered by the model's own confidence plus cross-sample agreement, not a fixed
 | `SMART_ASSIGNMENT_JUDGMENT_SAMPLE_COUNT` | `3` | `k` — samples drawn for an escalation-side case (`1` disables resampling). |
 | `SMART_ASSIGNMENT_JUDGMENT_CONSENSUS` | `unanimous` | How the `k` decisions clear back to a recommend: `unanimous` (precautionary) or `majority`. |
 | `SMART_ASSIGNMENT_JUDGMENT_RETRY_ON_LOW_CONFIDENCE` | `true` | Whether a LOW-confidence *recommend* is escalation-side (resample) or ships as-is. A hard ESCALATE always resamples. |
+
+**Where the flag takes effect.** `run_slot_recommendation(...)` honors
+`use_grounded_judgment` whenever no explicit `judge=` is injected, so the master
+switch reaches every surface — the offline demo (`scripts/run_local.py`), the
+page generator, the web app, and the conversational tool alike. An explicitly
+passed `judge=` always wins over the flag.
+
+**Credentials required to see a difference.** Grounded judgment needs a working
+LLM backend (`SMART_ASSIGNMENT_LLM_BACKEND` + its credentials). Without them the
+judgment call fails and `GroundedJudge` deterministically falls back to the
+weighted pick + `DeterministicReasoner` text — *byte-identical to the flag-off
+output*. So on an offline/no-key run the two flag settings produce the same
+text by design; a real LLM backend is what surfaces the grounded reasoning.
