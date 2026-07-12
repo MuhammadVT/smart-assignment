@@ -191,7 +191,16 @@
       ordered.forEach(function (s) {
         var latlng = [s.lat, s.lng];
         bounds.push(latlng);
-        L.circleMarker(latlng, markerStyle(color, r.feasible, 3.5)).addTo(mapLayer);
+        var marker = L.circleMarker(latlng, markerStyle(color, r.feasible, 3.5));
+        // Hover label: the stop's customer number (+ tier), so a point on the map
+        // can be matched to its bar in the delivery-window timeline below.
+        if (s.id) {
+          marker.bindTooltip(
+            s.id + (s.tier ? ' · ' + tierLabel(s.tier) : ''),
+            { direction: 'top', offset: [0, -3], className: 'stop-tip', sticky: true }
+          );
+        }
+        marker.addTo(mapLayer);
       });
     });
 
@@ -286,7 +295,10 @@
   // Customer-tier palette (bar colour). Ordered high-to-low for the legend;
   // unknown/other tiers fall back to slate.
   var TIER_ORDER = ['Perks', '5', '4', 'Other'];
-  var TIER_COLORS = { 'Perks': '#b45309', '5': '#7c3aed', '4': '#2563eb', 'Other': '#64748b' };
+  // Distinct hues per tier -- amber / violet / teal / slate -- chosen so no two
+  // adjacent tiers read as the same colour (Tier 4 and Tier 5 used to be a blue
+  // and a purple that were easy to confuse).
+  var TIER_COLORS = { 'Perks': '#d97706', '5': '#7c3aed', '4': '#0d9488', 'Other': '#64748b' };
   var TIER_FALLBACK = '#64748b';
   function tierColor(t) { return (t && TIER_COLORS[t]) || TIER_FALLBACK; }
   function tierLabel(t) { return t ? ('Tier ' + t).replace('Tier Perks', 'Perks') : 'Unknown'; }
@@ -302,6 +314,14 @@
   function fmtDur(m) {
     var h = Math.floor(m / 60), mm = m % 60;
     return (h ? h + 'h' : '') + (h && mm ? ' ' : '') + (mm ? mm + 'm' : (h ? '' : '0m'));
+  }
+  // Plain-language reason the recommended slot won, from the pipeline's
+  // window_basis (see shared/slot_selection.py).
+  function basisLabel(b) {
+    return b === 'between_adjacent_stops' ? 'nearest stops'
+      : b === 'preference_accommodated' ? 'matches request'
+      : b === 'least_contended' ? 'least crowded'
+      : '';
   }
 
   function renderWindows() {
@@ -331,6 +351,12 @@
         lo = Math.min(lo, toMin(s.window.open));
         hi = Math.max(hi, toMin(s.window.close));
       });
+      // The recommended window may extend past the committed stops (e.g. a 3h
+      // slot off a 2h historical window), so keep it inside the drawn domain.
+      if (r.chosen_window) {
+        lo = Math.min(lo, toMin(r.chosen_window.open));
+        hi = Math.max(hi, toMin(r.chosen_window.close));
+      }
     });
     lo = Math.floor(lo / 60) * 60;
     hi = Math.ceil(hi / 60) * 60;
@@ -370,10 +396,34 @@
         return toMin(a.window.open) - toMin(b.window.open);
       });
 
+      // A route only carries a recommended slot when it's feasible; show it as a
+      // reason chip in the header (A) and as two dashed guide lines (below).
+      var rec = (r.feasible && r.chosen_window) ? r.chosen_window : null;
+      var recBasis = rec ? basisLabel(r.window_basis) : '';
+      var recChip = rec
+        ? '<span class="tw-rec" style="color:' + color + '">◆ recommend '
+          + rec.open + '–' + rec.close + (recBasis ? ' · ' + recBasis : '') + '</span>'
+        : '';
+
       html += '<div class="tw-route">'
         + '<span class="tw-dot" style="background:' + color + '"></span>'
         + '<b>' + r.route_id + '</b> · ' + r.name + ' <span class="tw-day">(' + r.day + ')</span>'
+        + recChip
         + ' <span class="tw-count">' + stops.length + ' stops</span></div>';
+
+      // Rows (stops + availability) wrapped so the recommended-window guide lines
+      // can span all of them, aligned to the shared time axis.
+      html += '<div class="tw-route-block">';
+      if (rec) {
+        var gOpen = pct(toMin(rec.open)), gClose = pct(toMin(rec.close));
+        var gTitle = 'recommended ' + rec.open + '–' + rec.close
+          + (recBasis ? ' · ' + recBasis : '');
+        html += '<div class="tw-guides">'
+          + '<span class="tw-guide" style="left:' + gOpen + '%;border-color:' + color
+          + '" title="' + gTitle + '"></span>'
+          + '<span class="tw-guide" style="left:' + gClose + '%;border-color:' + color
+          + '" title="' + gTitle + '"></span></div>';
+      }
 
       stops.forEach(function (s) {
         var o = toMin(s.window.open), c = toMin(s.window.close);
@@ -425,6 +475,7 @@
       }).join('');
       html += '<div class="tw-row tw-lane-row"><span class="tw-label">availability</span>'
         + '<span class="tw-track tw-lane">' + ribbon + '</span></div>';
+      html += '</div>';  // .tw-route-block
     });
 
     windowsChart.innerHTML = html;

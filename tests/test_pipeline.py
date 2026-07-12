@@ -32,6 +32,11 @@ def test_clear_case_is_recommended():
     assert rec.decision == Decision.RECOMMENDED
     assert rec.recommended_route_id == "RTE-4100"
     assert rec.requires_human_review is False
+    # RTE-4100's nearest committed stops to this downtown prospect are its two
+    # 07:00-10:00 accounts, and the customer also prefers that window -- the
+    # location-aware selector lands on it, tagged with an auditable basis.
+    assert rec.recommended_window == "07:00-10:00"
+    assert rec.recommended_window_basis in {"between_adjacent_stops", "preference_accommodated"}
 
 
 def test_unserviceable_customer_escalates_no_feasible_slot():
