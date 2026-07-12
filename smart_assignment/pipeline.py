@@ -18,7 +18,7 @@ not editing this file.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from smart_assignment.integrations.geocoding_client import MockGeocoder
 from smart_assignment.integrations.route_capacity_client import fetch_candidate_routes
@@ -41,6 +41,9 @@ from smart_assignment.shared.models import (
 from smart_assignment.shared.scoring import score_candidate
 from smart_assignment.shared.timeutils import fmt_window
 from smart_assignment.reasoning import LLMReasoner, Reasoner, compute_total_score
+
+if TYPE_CHECKING:
+    from smart_assignment.judgment import Judge
 
 # --- Step 1: intake ---------------------------------------------------------
 
@@ -182,8 +185,17 @@ def run_slot_recommendation(
     config: Optional[Config] = None,
     geocoder: Optional[Geocoder] = None,
     reasoner: Optional[Reasoner] = None,
+    judge: Optional["Judge"] = None,
 ) -> RecommendationResult:
-    """Run the full workflow for one customer and return the complete trace."""
+    """Run the full workflow for one customer and return the complete trace.
+
+    `judge` selects the step-5 decision strategy. When omitted, the behavior is
+    unchanged: the weighted-sum `decide(...)` gated on `total_score_threshold`.
+    Pass a `judgment.GroundedJudge` (or use `judgment.default_judge(config)`) to
+    have an LLM make the recommend/escalate call over the evidence packet
+    instead. Hard constraints run first either way, so the choice only affects
+    how the *feasible* survivors are ranked and gated.
+    """
     config = config or DEFAULT_CONFIG
     geocoder = geocoder or MockGeocoder()
     # LLM-backed reasoning by default; it transparently falls back to the
@@ -195,7 +207,10 @@ def run_slot_recommendation(
     all_routes = routes if routes is not None else fetch_candidate_routes()
     candidates = geo_lookup(customer, all_routes, geocoder, config)
     evaluations = evaluate_candidates(customer, candidates, config)
-    recommendation = decide(customer, evaluations, reasoner, config)
+    if judge is not None:
+        recommendation = judge.decide(customer, evaluations, config)
+    else:
+        recommendation = decide(customer, evaluations, reasoner, config)
 
     return RecommendationResult(
         customer=customer,

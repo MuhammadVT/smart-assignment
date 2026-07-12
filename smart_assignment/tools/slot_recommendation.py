@@ -49,7 +49,8 @@ from smart_assignment.shared.models import (
     Route,
 )
 from smart_assignment.shared.timeutils import fmt_time, fmt_window, parse_time
-from smart_assignment.pipeline import decide, evaluate_candidates, geo_lookup, intake
+from smart_assignment.judgment import default_judge
+from smart_assignment.pipeline import evaluate_candidates, geo_lookup, intake
 from smart_assignment.reasoning import LLMReasoner
 
 # Namespaced so this doesn't collide with other state a larger app might keep.
@@ -243,9 +244,7 @@ def intake_customer(
     if not profile.get("address"):
         return _error("I still need the customer's address before I can do anything else.")
     if not profile.get("order_quantity_cases"):
-        return _error(
-            "I still need the order quantity, in cases, before I can do anything else."
-        )
+        return _error("I still need the order quantity, in cases, before I can do anything else.")
 
     try:
         customer = _profile_from_state_dict(profile)
@@ -371,11 +370,14 @@ def recommend_or_escalate(tool_context: ToolContext) -> dict:
     except GeocodingError as exc:
         return _geocoding_error_result(exc)
     evaluations = evaluate_candidates(customer, candidates, DEFAULT_CONFIG)
-    # LLM-backed reasoning by default (LLMReasoner), for a more fluent
-    # narrative; it transparently falls back to the deterministic trace on
-    # any error (no credentials, no network, SDK issue), so this is safe
-    # even when the model/credentials are unavailable.
-    rec = decide(customer, evaluations, LLMReasoner(DEFAULT_CONFIG), DEFAULT_CONFIG)
+    # Step-5 strategy comes from config: with SMART_ASSIGNMENT_USE_GROUNDED_JUDGMENT
+    # off (the default) this is the existing weighted-sum pick narrated by the
+    # LLM-backed reasoner; with it on, an LLM makes the recommend/escalate call
+    # over the evidence packet (see the `judgment` package). Either way the LLM
+    # path transparently falls back to the deterministic trace/pick on any
+    # error, so this stays safe when the model/credentials are unavailable.
+    judge = default_judge(DEFAULT_CONFIG, reasoner=LLMReasoner(DEFAULT_CONFIG))
+    rec = judge.decide(customer, evaluations, DEFAULT_CONFIG)
 
     result = {
         "ok": True,

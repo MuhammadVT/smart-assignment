@@ -249,6 +249,11 @@ class SlotRecommendation:
     factor_breakdown: list[FactorScore] = field(default_factory=list)
     rejected_alternatives: list[str] = field(default_factory=list)
     review_reason: Optional[str] = None
+    # Populated only by the grounded-judgment path (see the `judgment` package)
+    # when an escalation-side case was resampled: each entry is one independent
+    # sample's reasoned take, surfaced to the specialist so they see where the
+    # model agreed or was split. Empty for the default weighted-sum path.
+    alternative_takes: list[str] = field(default_factory=list)
 
     @property
     def requires_human_review(self) -> bool:
