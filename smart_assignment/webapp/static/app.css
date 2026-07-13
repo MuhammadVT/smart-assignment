@@ -270,16 +270,22 @@
   border-radius: 10px;
   padding: 12px 14px;
 }
-.slot-why-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+/* Summary is the click target: keep the native disclosure triangle (no flex,
+   which would strip the marker), like "Routes the agent evaluated". */
+.slot-why-head { cursor: pointer; }
+.slot-why-head::-webkit-details-marker { color: var(--green); }
 .slot-why-title {
   font-weight: 700;
   font-size: 11px;
   letter-spacing: .05em;
   text-transform: uppercase;
   color: var(--green);
+  margin-right: 6px;
 }
 .slot-why-slot { font-size: 13px; color: var(--ink); }
 .slot-why-slot b { color: var(--navy); font-family: var(--mono); }
+.slot-why-body { margin-top: 12px; }
+.slot-why-body > :first-child { margin-top: 0; }
 .slot-why-basis { margin-top: 10px; font-size: 13px; color: var(--ink); line-height: 1.5; }
 .slot-why-sub { font-size: 11.5px; color: var(--muted); margin: 11px 0 0; }
 /* One factor in the rationale: the shared score bar, then the concrete figure it

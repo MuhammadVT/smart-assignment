@@ -1394,20 +1394,23 @@ def _slot_rationale_html(result: RecommendationResult, config: Config) -> Option
         if result.customer.location is not None:
             detail += _proximity_stops_html(result.customer.location, winner.route, config)
 
+    # Collapsible (like "Routes the agent evaluated"): a triangle on the summary
+    # toggles it, collapsed by default so the panel stays compact until asked.
     return (
-        '<div class="slot-why">'
-        '<div class="slot-why-head"><span class="slot-why-title">Why this time slot</span>'
+        '<details class="slot-why">'
+        '<summary class="slot-why-head"><span class="slot-why-title">Why this time slot</span>'
         f"<span class=\"slot-why-slot\"><b>{_esc(rec.recommended_day)} · "
         f'{_win(rec.recommended_window)}</b> '
         f'<small style="color:var(--muted)">on {_esc(rec.recommended_route_id)} · '
-        f'{_esc(rec.recommended_route_name)}</small></span></div>'
+        f'{_esc(rec.recommended_route_name)}</small></span></summary>'
+        '<div class="slot-why-body">'
         f"{basis_html}"
         '<div class="slot-why-sub">The slot-level factors that pick this window from the '
         "route's options (its geography &amp; capacity are covered in the evaluated routes "
         "above):</div>"
         f'<div class="factors">{factors}</div>'
         f"{detail}"
-        "</div>"
+        "</div></details>"
     )
 
 

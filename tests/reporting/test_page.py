@@ -251,7 +251,10 @@ def test_build_map_data_carries_slot_rationale():
     )
     html = build_map_data(result, config)["rationaleHtml"]
 
-    assert html and 'class="slot-why"' in html
+    # Collapsible via a <details>/<summary> (triangle), collapsed by default.
+    assert html and '<details class="slot-why">' in html
+    assert '<summary class="slot-why-head">' in html
+    assert "<details open" not in html  # hidden by default
     assert rec.recommended_route_id in html  # small route context
     # Slot-level factors, each with the concrete figure behind its score.
     assert "Slot availability (openness)" in html
