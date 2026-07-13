@@ -1310,9 +1310,10 @@ def _tier_label(tier: Optional[str]) -> str:
 
 
 def _openness_breakdown_html(route, window, config: Config) -> str:
-    """The exact openness calculation for the chosen window: every committed
-    delivery whose own window overlaps it, its tier and tier-weighted "harm",
-    then the ``1 / (1 + Σ harm)`` roll-up. This is what sets slot availability."""
+    """The exact openness calculation for the chosen window: its **contention** —
+    every committed delivery whose own window overlaps it, each weighted by tier
+    ("harm") — summed, then rolled up as ``openness = 1 / (1 + contention)``.
+    Contention is the sole input to the slot-availability (openness) score."""
     overlapping = [
         s
         for s in route.committed_stops
@@ -1321,9 +1322,9 @@ def _openness_breakdown_html(route, window, config: Config) -> str:
     ]
     if not overlapping:
         return (
-            '<div class="why-calc"><div class="why-calc-head">Openness</div>'
+            '<div class="why-calc"><div class="why-calc-head">Contention → openness</div>'
             '<div class="why-calc-sum">no committed delivery overlaps this window → '
-            "openness = 1 ÷ (1 + 0) = <b>1.00</b> (fully open)</div></div>"
+            "contention = 0 → openness = 1 ÷ (1 + 0) = <b>1.00</b> (fully open)</div></div>"
         )
     items = "".join(
         f'<li><span class="why-cust">{_esc(s.customer_number)}</span>'
@@ -1335,12 +1336,14 @@ def _openness_breakdown_html(route, window, config: Config) -> str:
     )
     total = sum(config.tier_harm_weight(s.customer_tier) for s in overlapping)
     openness = 1.0 / (1.0 + total)
+    n = len(overlapping)
     return (
-        '<div class="why-calc"><div class="why-calc-head">Openness — committed deliveries '
-        "sharing this window (tier-weighted “harm”)</div>"
+        '<div class="why-calc"><div class="why-calc-head">Contention → openness — committed '
+        "deliveries already overlapping this window, weighted by tier (“harm”)</div>"
         f'<ul class="why-list">{items}</ul>'
-        f'<div class="why-calc-sum">openness = 1 ÷ (1 + {total:.2f}) = <b>{openness:.2f}</b>'
-        "</div></div>"
+        f'<div class="why-calc-sum">contention = Σ harm = <b>{total:.2f}</b> '
+        f'({n} overlapping {"delivery" if n == 1 else "deliveries"}) → '
+        f"openness = 1 ÷ (1 + {total:.2f}) = <b>{openness:.2f}</b></div></div>"
     )
 
 
