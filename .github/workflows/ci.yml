@@ -3,6 +3,13 @@ name: CI
 # Runs the full test suite on every merge (push) to main, and on pull requests
 # targeting main so changes are validated before they land. Can also be run
 # manually from the Actions tab.
+#
+# IMPORTANT – GitHub IP allow list
+# If jobs fail at the "Checkout" step with "IP allow list" errors, an org admin
+# must enable "Allow GitHub-hosted runners" under:
+#   Organization Settings → Code, planning, and automation → GitHub Actions
+#   → IP allow list → "Allow GitHub Actions to access the organization"
+# This lets GitHub-hosted runner IPs reach private org repositories.
 on:
   push:
     branches: [main]

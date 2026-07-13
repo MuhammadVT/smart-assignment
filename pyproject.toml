@@ -71,6 +71,14 @@ line_length = 100
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+filterwarnings = [
+    # google-adk internally subclasses BaseAgentConfig (a deprecated Pydantic v2
+    # base) at import time; the warning originates in a transitive library import
+    # and is not actionable from user code.
+    "ignore:BaseAgentConfig is deprecated:DeprecationWarning",
+    # starlette.TestClient warns about httpx vs httpx2; third-party concern only.
+    "ignore::starlette.testclient.StarletteDeprecationWarning",
+]
 
 [tool.uv.sources]
 ds-utils-lite = { path = "smart_assignment/ds_utils_lite", editable = true }
