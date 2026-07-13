@@ -1205,6 +1205,87 @@ def _config_sources(config: Config, results: list[RecommendationResult]) -> str:
     </div>"""
 
 
+def _slot_rationale_factors(factor_scores, has_preference: bool, order=None) -> str:
+    """Like ``_slot_factor_bars`` but annotates each bar with the concrete input
+    it cited (from ``FactorScore.detail``) and its weight — the "full details"
+    behind each factor's score, for the "why this slot" rationale card. ``order``
+    limits/orders which factors are shown (defaults to all four)."""
+    by_name = {f.name: f for f in factor_scores}
+    rows = []
+    for name in order or _RS_FACTOR_ORDER:
+        f = by_name.get(name)
+        label = FACTOR_LABEL.get(name, name)
+        if f is not None:
+            pct = round(f.value * 100)
+            rows.append(
+                '<div class="why-factor"><div class="factor">'
+                f'<span class="fname">{_esc(label)}</span>'
+                f'<div class="bar"><span style="width:{pct}%"></span></div>'
+                f'<span class="fval">{f.value:.2f}'
+                f'<small style="color:var(--muted)"> ×{f.weight:.2f}</small></span></div>'
+                f'<div class="why-factor-detail">{_esc(f.detail)}</div></div>'
+            )
+        elif name == FACTOR_WINDOW_MATCH and not has_preference:
+            rows.append(
+                '<div class="why-factor"><div class="factor na">'
+                f'<span class="fname">{_esc(label)}</span>'
+                '<span class="na-note">not scored · no preferred slot given</span>'
+                "</div></div>"
+            )
+    return "".join(rows)
+
+
+# How this specific time WINDOW was placed on the route, in plain language.
+_SLOT_BASIS_SENTENCE = {
+    "preference_accommodated": (
+        "This window was placed to line up with the customer's requested day and time."
+    ),
+    "between_adjacent_stops": (
+        "This window sits between the route's nearest committed stops, so the delivery "
+        "drops into the existing time cluster instead of stretching the day."
+    ),
+    "least_contended": (
+        "This is the most open window on the route — the fewest / lowest-tier committed "
+        "deliveries already overlap it."
+    ),
+}
+
+# The two SLOT-level factors: they differ window-to-window on the same route, so
+# they are what actually pick the time slot. (Geographic clustering and capacity
+# buffer are route-level — they explain the route, not the slot.)
+_SLOT_LEVEL_FACTORS = (FACTOR_WINDOW_MATCH, FACTOR_SLOT_AVAILABILITY)
+
+
+def _slot_rationale_html(result: RecommendationResult) -> Optional[str]:
+    """A "why this time slot" card for the recommended slot, shown under the
+    delivery-window panel. It explains the SLOT choice only: how the window was
+    placed on the route (its basis) and the slot-level factors that pick it from
+    the route's options (slot match + availability, each with the figure it
+    cited). Route-level factors (geography, capacity) are deliberately excluded —
+    they explain the route, not the slot. ``None`` when nothing was recommended."""
+    rec = result.recommendation
+    if not rec.recommended_route_id or not rec.factor_breakdown:
+        return None
+    has_pref = result.customer.preferred_slot is not None
+    basis = _SLOT_BASIS_SENTENCE.get(rec.recommended_window_basis or "", "")
+    basis_html = f'<div class="slot-why-basis">{basis}</div>' if basis else ""
+    factors = _slot_rationale_factors(rec.factor_breakdown, has_pref, _SLOT_LEVEL_FACTORS)
+    return (
+        '<div class="slot-why">'
+        '<div class="slot-why-head"><span class="slot-why-title">Why this time slot</span>'
+        f"<span class=\"slot-why-slot\"><b>{_esc(rec.recommended_day)} · "
+        f'{_win(rec.recommended_window)}</b> '
+        f'<small style="color:var(--muted)">on {_esc(rec.recommended_route_id)} · '
+        f'{_esc(rec.recommended_route_name)}</small></span></div>'
+        f"{basis_html}"
+        '<div class="slot-why-sub">The slot-level factors that pick this window from the '
+        "route's options (its geography &amp; capacity are covered in the evaluated routes "
+        "above):</div>"
+        f'<div class="factors">{factors}</div>'
+        "</div>"
+    )
+
+
 def build_map_data(result: RecommendationResult) -> Optional[dict]:
     """Lat/lng data for a proximity map: the prospect's geocoded location plus,
     for every evaluated route, its service center, service radius, and existing
@@ -1316,6 +1397,9 @@ def build_map_data(result: RecommendationResult) -> Optional[dict]:
             "lng": loc.longitude,
         },
         "routes": routes,
+        # "Why this slot" rationale for the recommended route-slot, rendered under
+        # the delivery-window panel. None when nothing was recommended.
+        "rationaleHtml": _slot_rationale_html(result),
     }
 
 

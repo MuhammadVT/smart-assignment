@@ -24,6 +24,7 @@
   var filterBtn = document.getElementById('route-filter-btn');
   var filterMenu = document.getElementById('route-filter-menu');
   var windowsChart = document.getElementById('windows-chart');
+  var windowsRationale = document.getElementById('windows-rationale');
 
   var MODE = 'deterministic';
   var SESSION_ID = (window.crypto && window.crypto.randomUUID)
@@ -350,9 +351,12 @@
     if (!routes.length) {
       if (panel) { panel.style.display = 'none'; }
       windowsChart.innerHTML = '';
+      if (windowsRationale) { windowsRationale.innerHTML = ''; }
       return;
     }
     if (panel) { panel.style.display = ''; }
+    // "Why this slot" rationale for the recommended route-slot, under the chart.
+    if (windowsRationale) { windowsRationale.innerHTML = currentMapData.rationaleHtml || ''; }
 
     // Shared time domain across all selected routes, snapped to the hour.
     var lo = Infinity, hi = -Infinity;
