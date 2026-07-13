@@ -239,17 +239,35 @@ def test_build_map_data_carries_slot_rationale():
     factors that pick it (slot match + availability, each with its figure). The
     route-level factors (geography, capacity) are excluded -- they explain the
     route, not the slot."""
+    from smart_assignment.shared.timeutils import overlap_minutes as _overlap
+
     config = Config(use_route_slot_scoring=True)
     result = _results(config)[0]  # a clean recommend
     rec = result.recommendation
-    html = build_map_data(result)["rationaleHtml"]
+    winner = next(
+        c
+        for c in result.candidates_considered
+        if c.route.route_id == rec.recommended_route_id
+    )
+    html = build_map_data(result, config)["rationaleHtml"]
 
     assert html and 'class="slot-why"' in html
     assert rec.recommended_route_id in html  # small route context
     # Slot-level factors, each with the concrete figure behind its score.
     assert "Slot availability (openness)" in html
     assert 'class="why-factor-detail"' in html
-    assert "openness" in html  # the availability detail
+    # Openness calculation: the exact 1 / (1 + Σ harm) roll-up ...
+    assert "openness = 1 ÷" in html
+    # ... and each contending committed stop is listed with its tier + harm.
+    overlapping = [
+        s for s in winner.route.committed_stops
+        if s.delivery_time_window
+        and _overlap(winner.chosen_window, s.delivery_time_window) > 0
+    ]
+    assert overlapping and all(s.customer_number in html for s in overlapping)
+    assert "harm" in html
+    # Proximity: the nearest committed stops the window was clustered around.
+    assert "Proximity" in html and " mi" in html
     # Route-level factors are NOT in the slot rationale.
     assert "Geographic clustering" not in html
     assert "Capacity buffer" not in html

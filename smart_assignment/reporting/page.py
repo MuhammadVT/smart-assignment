@@ -41,7 +41,13 @@ from smart_assignment.shared.models import (
     RecommendationResult,
     SlotRecommendation,
 )
-from smart_assignment.shared.timeutils import duration_minutes, fmt_time, fmt_window
+from smart_assignment.shared.slot_selection import nearest_neighbors
+from smart_assignment.shared.timeutils import (
+    duration_minutes,
+    fmt_time,
+    fmt_window,
+    overlap_minutes,
+)
 
 DEFAULT_OUTPUT = Path(__file__).resolve().parents[2] / "docs" / "index.html"
 
@@ -1286,13 +1292,76 @@ _SLOT_BASIS_SENTENCE = {
 _SLOT_LEVEL_FACTORS = (FACTOR_WINDOW_MATCH, FACTOR_SLOT_AVAILABILITY)
 
 
-def _slot_rationale_html(result: RecommendationResult) -> Optional[str]:
+def _tier_label(tier: Optional[str]) -> str:
+    if not tier:
+        return "unknown tier"
+    return "Perks" if tier == "Perks" else f"Tier {tier}"
+
+
+def _openness_breakdown_html(route, window, config: Config) -> str:
+    """The exact openness calculation for the chosen window: every committed
+    delivery whose own window overlaps it, its tier and tier-weighted "harm",
+    then the ``1 / (1 + Σ harm)`` roll-up. This is what sets slot availability."""
+    overlapping = [
+        s
+        for s in route.committed_stops
+        if s.delivery_time_window is not None
+        and overlap_minutes(window, s.delivery_time_window) > 0
+    ]
+    if not overlapping:
+        return (
+            '<div class="why-calc"><div class="why-calc-head">Openness</div>'
+            '<div class="why-calc-sum">no committed delivery overlaps this window → '
+            "openness = 1 ÷ (1 + 0) = <b>1.00</b> (fully open)</div></div>"
+        )
+    items = "".join(
+        f'<li><span class="why-cust">{_esc(s.customer_number)}</span>'
+        f'<span class="why-meta">{_esc(_tier_label(s.customer_tier))}</span>'
+        f'<span class="why-num">harm {config.tier_harm_weight(s.customer_tier):.2f}</span></li>'
+        for s in sorted(
+            overlapping, key=lambda s: config.tier_harm_weight(s.customer_tier), reverse=True
+        )
+    )
+    total = sum(config.tier_harm_weight(s.customer_tier) for s in overlapping)
+    openness = 1.0 / (1.0 + total)
+    return (
+        '<div class="why-calc"><div class="why-calc-head">Openness — committed deliveries '
+        "sharing this window (tier-weighted “harm”)</div>"
+        f'<ul class="why-list">{items}</ul>'
+        f'<div class="why-calc-sum">openness = 1 ÷ (1 + {total:.2f}) = <b>{openness:.2f}</b>'
+        "</div></div>"
+    )
+
+
+def _proximity_stops_html(location, route, config: Config) -> str:
+    """The nearest committed stops the window was clustered around — the
+    "proximity" set: customer number, distance, tier."""
+    neighbors = nearest_neighbors(
+        location, route.committed_stops, config.slot_neighbor_count, config.slot_neighbor_max_miles
+    )
+    if not neighbors:
+        return ""
+    items = "".join(
+        f'<li><span class="why-cust">{_esc(n.stop.customer_number)}</span>'
+        f'<span class="why-meta">{_esc(_tier_label(n.stop.customer_tier))}</span>'
+        f'<span class="why-num">{n.distance_miles:.1f} mi</span></li>'
+        for n in neighbors
+    )
+    return (
+        '<div class="why-calc"><div class="why-calc-head">Proximity — nearest committed '
+        "stops the window is placed among</div>"
+        f'<ul class="why-list">{items}</ul></div>'
+    )
+
+
+def _slot_rationale_html(result: RecommendationResult, config: Config) -> Optional[str]:
     """A "why this time slot" card for the recommended slot, shown under the
     delivery-window panel. It explains the SLOT choice only: how the window was
-    placed on the route (its basis) and the slot-level factors that pick it from
-    the route's options (slot match + availability, each with the figure it
-    cited). Route-level factors (geography, capacity) are deliberately excluded —
-    they explain the route, not the slot. ``None`` when nothing was recommended."""
+    placed on the route (its basis), the slot-level factors that pick it (slot
+    match + availability), and the underlying detail — the exact openness
+    calculation (which committed stops contend, by tier + harm) and the proximity
+    stops the window was clustered around. Route-level factors (geography,
+    capacity) are excluded. ``None`` when nothing was recommended."""
     rec = result.recommendation
     if not rec.recommended_route_id or not rec.factor_breakdown:
         return None
@@ -1300,6 +1369,17 @@ def _slot_rationale_html(result: RecommendationResult) -> Optional[str]:
     basis = _SLOT_BASIS_SENTENCE.get(rec.recommended_window_basis or "", "")
     basis_html = f'<div class="slot-why-basis">{basis}</div>' if basis else ""
     factors = _slot_rationale_factors(rec.factor_breakdown, has_pref, _SLOT_LEVEL_FACTORS)
+
+    winner = next(
+        (c for c in result.candidates_considered if c.route.route_id == rec.recommended_route_id),
+        None,
+    )
+    detail = ""
+    if winner is not None and winner.chosen_window is not None:
+        detail += _openness_breakdown_html(winner.route, winner.chosen_window, config)
+        if result.customer.location is not None:
+            detail += _proximity_stops_html(result.customer.location, winner.route, config)
+
     return (
         '<div class="slot-why">'
         '<div class="slot-why-head"><span class="slot-why-title">Why this time slot</span>'
@@ -1312,6 +1392,7 @@ def _slot_rationale_html(result: RecommendationResult) -> Optional[str]:
         "route's options (its geography &amp; capacity are covered in the evaluated routes "
         "above):</div>"
         f'<div class="factors">{factors}</div>'
+        f"{detail}"
         "</div>"
     )
 
@@ -1475,7 +1556,7 @@ def _llm_touchpoints_section(config: Config) -> str:
       succeeds — better-reasoned and better-explained.</div>"""
 
 
-def build_map_data(result: RecommendationResult) -> Optional[dict]:
+def build_map_data(result: RecommendationResult, config: Optional[Config] = None) -> Optional[dict]:
     """Lat/lng data for a proximity map: the prospect's geocoded location plus,
     for every evaluated route, its service center, service radius, and existing
     committed stops -- everything needed to visually judge why a route was
@@ -1484,6 +1565,7 @@ def build_map_data(result: RecommendationResult) -> Optional[dict]:
     Returns ``None`` if the customer was never geocoded (e.g. intake failed
     before geo-lookup ran).
     """
+    config = config or DEFAULT_CONFIG
     loc = result.customer.location
     if loc is None:
         return None
@@ -1588,7 +1670,7 @@ def build_map_data(result: RecommendationResult) -> Optional[dict]:
         "routes": routes,
         # "Why this slot" rationale for the recommended route-slot, rendered under
         # the delivery-window panel. None when nothing was recommended.
-        "rationaleHtml": _slot_rationale_html(result),
+        "rationaleHtml": _slot_rationale_html(result, config),
     }
 
 
@@ -1610,7 +1692,7 @@ def build_workflow_payload(result: RecommendationResult, config: Config) -> dict
         # the map in the web app) so it can be a rich, default-open section.
         "resultHtml": _example_card(result, include_routes=False),
         "routesHtml": _route_cards(result, config),
-        "map": build_map_data(result),
+        "map": build_map_data(result, config),
         # UI banners (e.g. grounded reasoning fell back to deterministic). Empty
         # for the normal deterministic/weighted path, so the published static
         # page never shows one.
