@@ -416,6 +416,13 @@ def recommend_or_escalate(tool_context: ToolContext) -> dict:
         "recommended_window_basis": rec.recommended_window_basis,
         "recommended_window_rationale": rec.recommended_window_rationale,
         "reasoning": rec.reasoning,
+        # Structured grounded explanation of a route-slot pick (see the `routeslot`
+        # package). None/empty unless the grounded route-slot decision succeeded.
+        "decision_summary": rec.decision_summary,
+        "primary_reasons": rec.primary_reasons,
+        "key_tradeoff": rec.key_tradeoff,
+        "runner_up": rec.runner_up,
+        "default_comparison": rec.default_comparison,
         "rejected_alternatives": rec.rejected_alternatives,
         "review_reason": rec.review_reason,
         # Split model opinions from grounded-judgment resampling (empty on the

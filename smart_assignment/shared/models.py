@@ -279,6 +279,17 @@ class SlotRecommendation:
     # picked the recommended slot from the route's candidate menu -- its
     # grounded rationale. None on the deterministic path.
     recommended_window_rationale: Optional[str] = None
+    # Structured, grounded explanation of a RECOMMENDED route-slot pick, populated
+    # only when the grounded route-slot decision (see the `routeslot` package)
+    # succeeded. Each field maps to its own UI section so the ops manager sees the
+    # rationale AND the trade-off, not a one-liner. All None/empty on the
+    # deterministic path, so flag-off output is unchanged. `reasoning` is still set
+    # (composed from these) so existing consumers keep working.
+    decision_summary: Optional[str] = None  # one action line
+    primary_reasons: list[str] = field(default_factory=list)  # the decisive factors
+    key_tradeoff: Optional[str] = None  # what the winner gives up, and why it's acceptable
+    runner_up: Optional[str] = None  # the next-best option and why it lost
+    default_comparison: Optional[str] = None  # agreed-with / diverged-from the weighted default
     factor_breakdown: list[FactorScore] = field(default_factory=list)
     rejected_alternatives: list[str] = field(default_factory=list)
     review_reason: Optional[str] = None

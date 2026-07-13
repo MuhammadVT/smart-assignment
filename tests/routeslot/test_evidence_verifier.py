@@ -12,7 +12,7 @@ from smart_assignment.routeslot.schema import (
 )
 from smart_assignment.routeslot.verifier import verify_choice
 
-from .conftest import AFTERNOON, MORNING, customer, scored_eval, scored_slot
+from .conftest import AFTERNOON, MORNING, choice_dict, customer, scored_eval, scored_slot
 
 
 def _evals():
@@ -49,14 +49,21 @@ def test_min_score_filters_the_menu_to_above_threshold_options():
 
 
 def test_parse_valid_and_malformed_choices():
-    ok = parse_route_slot_choice({
-        "chosen_index": 2,
-        "rationale": "Most open slot.",
-        "citations": [{"index": 2, "field": "slot_availability", "value": 0.9}],
-    })
+    ok = parse_route_slot_choice(choice_dict(
+        2,
+        citations=[{"index": 2, "field": "slot_availability", "value": 0.9}],
+    ))
     assert ok.chosen_index == 2 and ok.citations[0].field == "slot_availability"
-    for bad in ({"rationale": "x"}, {"chosen_index": "two", "rationale": "x"},
-                {"chosen_index": 0, "rationale": ""}):
+    assert ok.decision_summary and ok.primary_reasons
+    assert ok.runner_up is not None and ok.vs_deterministic_default.verdict == "DIVERGE"
+    for bad in (
+        {"decision_summary": "x", "primary_reasons": ["y"]},       # no chosen_index
+        {"chosen_index": "two", "decision_summary": "x", "primary_reasons": ["y"]},
+        {"chosen_index": 0, "decision_summary": "", "primary_reasons": ["y"]},  # empty summary
+        {"chosen_index": 0, "decision_summary": "x", "primary_reasons": []},    # empty reasons
+        {"chosen_index": 0, "decision_summary": "x", "primary_reasons": ["y"],  # bad verdict
+         "vs_deterministic_default": {"verdict": "MAYBE"}},
+    ):
         with pytest.raises(RouteSlotChoiceParseError):
             parse_route_slot_choice(bad)
 
@@ -69,25 +76,59 @@ def _packet():
 def test_verifier_accepts_grounded_choice():
     packet = _packet()
     val = packet.options[0]["facts"]["reference_weighted_score"]
-    choice = parse_route_slot_choice({
-        "chosen_index": 0, "rationale": "best",
-        "citations": [{"index": 0, "field": "reference_weighted_score", "value": val}],
-    })
+    choice = parse_route_slot_choice(choice_dict(
+        0,  # == deterministic default -> AGREE
+        runner_up_index=1,
+        citations=[{"index": 0, "field": "reference_weighted_score", "value": val}],
+    ))
     assert verify_choice(choice, packet).ok
 
 
 def test_verifier_rejects_out_of_range_and_fabricated_and_unknown_field():
     packet = _packet()
     assert not verify_choice(
-        parse_route_slot_choice({"chosen_index": 9, "rationale": "x", "citations": []}), packet
+        parse_route_slot_choice(choice_dict(9)), packet
     ).ok
-    fabricated = parse_route_slot_choice({
-        "chosen_index": 0, "rationale": "x",
-        "citations": [{"index": 0, "field": "slot_availability", "value": 0.99}],
-    })
+    fabricated = parse_route_slot_choice(choice_dict(
+        0, runner_up_index=1,
+        citations=[{"index": 0, "field": "slot_availability", "value": 0.99}],
+    ))
     assert not verify_choice(fabricated, packet).ok
-    unknown = parse_route_slot_choice({
-        "chosen_index": 0, "rationale": "x",
-        "citations": [{"index": 0, "field": "made_up", "value": 1}],
-    })
+    unknown = parse_route_slot_choice(choice_dict(
+        0, runner_up_index=1,
+        citations=[{"index": 0, "field": "made_up", "value": 1}],
+    ))
     assert not verify_choice(unknown, packet).ok
+
+
+def test_verifier_rejects_dishonest_verdict_and_missing_tradeoff():
+    packet = _packet()  # n == 3
+    # Picks the non-default option but claims AGREE -> inconsistent.
+    dishonest = parse_route_slot_choice(choice_dict(
+        1, runner_up_index=0,
+        vs_deterministic_default={"verdict": "AGREE", "note": ""},
+    ))
+    assert not verify_choice(dishonest, packet).ok
+    # More than one option, but no runner_up / trade-off named.
+    incomplete = parse_route_slot_choice(choice_dict(0, runner_up=None, key_tradeoff=""))
+    assert not verify_choice(incomplete, packet).ok
+
+
+def test_verifier_rejects_ungrounded_number_in_prose():
+    packet = _packet()
+    liar = parse_route_slot_choice(choice_dict(
+        0, runner_up_index=1,
+        primary_reasons=["Fits within 42.7 miles of every stop."],  # 42.7 is nowhere in the packet
+    ))
+    result = verify_choice(liar, packet)
+    assert not result.ok
+    assert "42.7" in result.as_feedback()
+
+
+def test_verifier_allows_single_option_without_runner_up():
+    # One eligible route-slot: no runner-up is possible, and that's fine.
+    evals = [scored_eval("RTE-A", "Alpha", [scored_slot(MORNING, avail=0.7, total=0.80)])]
+    packet = build_route_slot_packet(customer(), evals, Config())
+    assert packet.n == 1
+    choice = parse_route_slot_choice(choice_dict(0, runner_up=None, key_tradeoff=""))
+    assert verify_choice(choice, packet).ok

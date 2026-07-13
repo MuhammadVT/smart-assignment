@@ -185,6 +185,31 @@ total per route-slot is the reference and the fallback. The prior route-only pat
 (scoring, `judgment`, `slotpick`) is **untouched** and remains the rollback when
 the flag is off — flag-off reproduces prior output exactly.
 
+**Structured explanation (`routeslot/schema.py`).** A one-line rationale can't
+carry the *trade-off* an ops manager needs to trust an auto-assign, so on a
+RECOMMENDED pick the model returns a decomposed explanation rather than a
+sentence: `decision_summary` (the action line), `primary_reasons[]` (the decisive
+factors, each with its number), `key_tradeoff` (what the winner gives up vs. the
+runner-up and why that's acceptable), `runner_up {index, why_not}`, and
+`vs_deterministic_default {verdict, note}` (an explicit AGREE/DIVERGE against the
+weighted blend). Only `chosen_index` is *actionable* — a real index from the
+enumerated menu; every other field is grounded explanation. These land on
+`SlotRecommendation` as their own fields (populated **only** on a successful
+grounded pick, so flag-off / fallback output is unchanged), and `reasoning` is
+still composed from them so existing consumers keep working. `page.py` renders
+each as its own section, falling back to the flat `reasoning` line when the
+structured fields are absent.
+
+The verifier (`routeslot/verifier.py`) gains two checks beyond the structured
+citations: it rejects a **dishonest self-assessment** (verdict must match whether
+the pick actually equals the deterministic default; a DIVERGE needs a note; the
+trade-off and a valid, distinct runner-up are required whenever more than one
+option is offered), and it runs a **tolerant prose scan** (mirroring
+`triage/verifier.py`) so *every* number stated in any free-text field must be a
+real fact the packet contains — not just the ones in the citation list. Any
+failure feeds the single corrective retry, then the deterministic fallback: never
+worse than before, only — on success — better explained.
+
 **Threshold.** `route_slot_score_threshold` defaults to `0.55`, a touch below the
 route-only `0.60`: dropping the 0.6 window neutral and adding availability shifts
 the score distribution, and ops asked to err slightly toward recommending. On the
