@@ -178,9 +178,14 @@ class LlmChatService:
             )
         return types.Content(role="user", parts=[types.Part(text=message)])
 
-    async def _visualization_from_state(self, session_id: str) -> Optional[dict]:
+    async def _visualization_from_state(
+        self, session_id: str, reasoning_override: Optional[str] = None
+    ) -> Optional[dict]:
         """Rebuild the profile from session state and produce the Simulator
-        payload by re-running the deterministic pipeline (drift-free)."""
+        payload by re-running the deterministic pipeline (drift-free on the
+        numbers). ``reasoning_override`` carries the agent's own recommendation
+        narration so the result card's "Why the agent chose this" shows the same
+        text the chat box did, not a separately-rendered one."""
         session = await self._get_session_service().get_session(
             app_name=_APP_NAME, user_id=_USER_ID, session_id=session_id
         )
@@ -195,7 +200,7 @@ class LlmChatService:
             geocoder=self._geocoder,
             reasoner=DeterministicReasoner(),
         )
-        return build_workflow_payload(result, DEFAULT_CONFIG)
+        return build_workflow_payload(result, DEFAULT_CONFIG, reasoning_override=reasoning_override)
 
     # -- the turn stream --
 
@@ -215,6 +220,10 @@ class LlmChatService:
         from google.adk.agents.run_config import RunConfig, StreamingMode
 
         saw_recommendation = False
+        # The agent's own recommendation narration (everything it says AFTER it
+        # calls recommend_or_escalate this turn), captured so the visualization's
+        # "Why the agent chose this" can show the same words as the chat box.
+        recommendation_reply: list[str] = []
         async for event in runner.run_async(
             user_id=_USER_ID,
             session_id=session_id,
@@ -267,10 +276,13 @@ class LlmChatService:
             if event.content and event.content.parts and not getattr(event, "partial", False):
                 text = "".join(p.text for p in event.content.parts if getattr(p, "text", None))
                 if text.strip():
+                    if saw_recommendation:
+                        recommendation_reply.append(text.strip())
                     yield {"type": "message", "text": text.strip()}
 
         if saw_recommendation:
-            payload = await self._visualization_from_state(session_id)
+            override = "\n\n".join(recommendation_reply) or None
+            payload = await self._visualization_from_state(session_id, reasoning_override=override)
             if payload:
                 yield {"type": "visualization", "payload": payload}
 

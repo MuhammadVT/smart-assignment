@@ -241,6 +241,32 @@ async def test_stream_turn_human_in_the_loop_then_resume():
     assert any(f["type"] == "message" for f in frames2)
 
 
+async def test_recommendation_narration_shown_in_visualization():
+    """The agent's own recommendation narration (what it says AFTER calling
+    recommend_or_escalate) is rendered in the result card's 'Why the agent chose
+    this', so the panel matches the chat box word-for-word. Text emitted BEFORE
+    the recommendation (e.g. a Score & Rank summary) must not leak into it."""
+    events = [
+        _FakeEvent(calls=[_FakeCall("evaluate_and_score_routes")]),
+        _FakeEvent(text="All three routes look feasible with this order."),
+        _FakeEvent(calls=[_FakeCall("recommend_or_escalate")]),
+        _FakeEvent(text="I recommend RTE-A on TUE, 07:20-10:20 — tight fit and an open slot."),
+    ]
+    service = LlmChatService(
+        runner=_FakeRunner([events]),
+        session_service=_FakeSessionService(_SAMPLE_STATE),
+        geocoder=MockGeocoder(),
+    )
+    frames = await _collect(service.stream_turn("s1", "what is your rec"))
+    viz = [f for f in frames if f["type"] == "visualization"]
+    assert len(viz) == 1
+    html = viz[0]["payload"]["resultHtml"]
+    # The exact narration the chat box showed is what the panel shows.
+    assert "I recommend RTE-A on TUE, 07:20-10:20" in html
+    # A pre-recommendation summary is NOT captured as the recommendation reasoning.
+    assert "All three routes look feasible" not in html
+
+
 async def test_visualization_none_when_profile_incomplete():
     service = LlmChatService(
         runner=_FakeRunner([[]]),
