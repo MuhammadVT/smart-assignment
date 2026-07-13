@@ -368,7 +368,10 @@ def recommend_or_escalate(tool_context: ToolContext) -> dict:
       {"ok": true, "decision", "requires_human_review", "total_score",
        "recommended_route_id", "recommended_route_name", "recommended_day",
        "recommended_window", "recommended_window_basis" (why that slot was
-       chosen), "reasoning", "rejected_alternatives", "review_reason"}
+       chosen), "reasoning", "rejected_alternatives", "review_reason", and -- on a
+       route-slot RECOMMENDED pick -- the structured explanation the agent should
+       present: "decision_summary", "primary_reasons", "key_tradeoff",
+       "runner_up", "default_comparison"}
       or {"ok": false, "error": "..."}.
     """
     profile = tool_context.state.get(_STATE_PROFILE_KEY)

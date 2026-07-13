@@ -40,7 +40,13 @@ from smart_assignment.routeslot.schema import (
     parse_route_slot_choice,
 )
 from smart_assignment.routeslot.verifier import verify_choice
-from smart_assignment.shared.config import Config
+from smart_assignment.shared.config import (
+    FACTOR_CAPACITY_BUFFER,
+    FACTOR_GEO_CLUSTERING,
+    FACTOR_SLOT_AVAILABILITY,
+    FACTOR_WINDOW_MATCH,
+    Config,
+)
 from smart_assignment.shared.constraints import CONSTRAINT_LABEL
 from smart_assignment.shared.models import (
     CandidateEvaluation,
@@ -51,6 +57,20 @@ from smart_assignment.shared.models import (
 from smart_assignment.shared.timeutils import fmt_window
 
 logger = logging.getLogger(__name__)
+
+# Readable factor names for the deterministic narrative (kept local so routeslot
+# doesn't depend on the reporting layer).
+_FACTOR_LABEL = {
+    FACTOR_GEO_CLUSTERING: "geographic fit",
+    FACTOR_CAPACITY_BUFFER: "capacity headroom",
+    FACTOR_WINDOW_MATCH: "preferred-window match",
+    FACTOR_SLOT_AVAILABILITY: "slot openness",
+}
+
+
+def _factor_label(name: str) -> str:
+    return _FACTOR_LABEL.get(name, name.replace("_", " "))
+
 
 # A choice_fn turns (config, prompt) into a raw route-slot-choice dict. Injectable
 # so tests drive the grounded path with a fake and no network/credentials.
@@ -184,9 +204,73 @@ def _recommend(
         rejected_alternatives=_rejected(all_pairs, _key(chosen), evaluations),
         review_reason=None,
     )
+    # Deterministic structured floor: always give the recommendation a summary,
+    # the top reasons, the runner-up, and the trade-off -- grounded in the real
+    # facts, no LLM. This is what a user sees even when grounded reasoning is off
+    # or falls back, so the explanation is never just a one-liner.
+    _apply_deterministic_narrative(rec, chosen, all_pairs)
+    # Grounded enrichment: when the LLM produced a verified choice, its reasoned
+    # prose (and AGREE/DIVERGE self-assessment) replaces the deterministic floor.
     if choice is not None:
         _apply_grounded_narrative(rec, choice, packet)
     return rec
+
+
+def _apply_deterministic_narrative(
+    rec: SlotRecommendation, chosen: RouteSlotOption, all_pairs: list[RouteSlotOption]
+) -> None:
+    """Fill the structured explanation fields from the score breakdown alone --
+    the always-available floor beneath the grounded prose."""
+    route = chosen.evaluation.route
+    scored = chosen.scored
+    rec.decision_summary = (
+        f"Assign {route.name} · {route.day.value} · {fmt_window(scored.slot.window)}."
+    )
+    top = sorted(scored.factor_scores, key=lambda fs: fs.weighted, reverse=True)
+    rec.primary_reasons = [
+        f"{_factor_label(fs.name).capitalize()}: {fs.detail}." for fs in top[:2]
+    ]
+
+    runner = _runner_up_option(chosen, all_pairs)
+    if runner is not None:
+        r_route = runner.evaluation.route
+        rec.runner_up = (
+            f"{r_route.name} ({r_route.day.value}) {fmt_window(runner.scored.slot.window)} "
+            f"— route-slot scored {runner.scored.total_score:.2f}"
+        )
+        rec.key_tradeoff = _deterministic_tradeoff(chosen, runner)
+
+
+def _runner_up_option(
+    chosen: RouteSlotOption, all_pairs: list[RouteSlotOption]
+) -> Optional[RouteSlotOption]:
+    """The next-best route-slot (all_pairs is score-ranked); None if the pick was
+    the only option."""
+    chosen_key = _key(chosen)
+    for p in all_pairs:
+        if _key(p) != chosen_key:
+            return p
+    return None
+
+
+def _deterministic_tradeoff(chosen: RouteSlotOption, runner: RouteSlotOption) -> str:
+    """One grounded sentence: the winner's score edge, and the one factor (if any)
+    the runner-up actually leads on -- so 'why not the alternative' is explicit."""
+    c_total = chosen.scored.total_score
+    r_total = runner.scored.total_score
+    lead = (
+        f"Edges out the runner-up on overall route-slot score "
+        f"({c_total:.2f} vs {r_total:.2f})"
+    )
+    chosen_values = {fs.name: fs.value for fs in chosen.scored.factor_scores}
+    for fs in sorted(runner.scored.factor_scores, key=lambda f: f.weighted, reverse=True):
+        chosen_value = chosen_values.get(fs.name)
+        if chosen_value is not None and fs.value > chosen_value + 0.01:
+            return (
+                f"{lead}; the runner-up is stronger on {_factor_label(fs.name)} "
+                f"({fs.value:.2f} vs {chosen_value:.2f}) but weaker overall."
+            )
+    return f"{lead}; it also matches or leads the runner-up on every scored factor."
 
 
 def _apply_grounded_narrative(

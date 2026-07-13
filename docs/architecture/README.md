@@ -194,11 +194,29 @@ runner-up and why that's acceptable), `runner_up {index, why_not}`, and
 `vs_deterministic_default {verdict, note}` (an explicit AGREE/DIVERGE against the
 weighted blend). Only `chosen_index` is *actionable* — a real index from the
 enumerated menu; every other field is grounded explanation. These land on
-`SlotRecommendation` as their own fields (populated **only** on a successful
-grounded pick, so flag-off / fallback output is unchanged), and `reasoning` is
-still composed from them so existing consumers keep working. `page.py` renders
-each as its own section, falling back to the flat `reasoning` line when the
-structured fields are absent.
+`SlotRecommendation` as their own fields, and `reasoning` is still set so existing
+consumers keep working. `page.py` renders each as its own section, falling back to
+the flat `reasoning` line when the structured fields are absent.
+
+**Deterministic floor, grounded enrichment.** The structured fields are *always*
+populated on a RECOMMENDED route-slot — first deterministically from the score
+breakdown (`_apply_deterministic_narrative`: `decision_summary`, the top-weighted
+`primary_reasons` with their numbers, the score-ranked `runner_up`, and a
+`key_tradeoff` naming the one factor the runner-up actually leads on), then, when
+the grounded LLM produced a *verified* choice, overwritten by its reasoned prose
+and AGREE/DIVERGE `default_comparison`. So the explanation is never a bare
+one-liner: even with grounded reasoning off, credentials missing, or a
+verification fallback, the user still gets the reasons and the trade-off; the LLM
+only makes the prose better when it's available. (`default_comparison` is the one
+field the deterministic floor leaves unset — a self-assessment against the default
+only means something when an LLM actually diverged from it.) The conversational
+agent narrates these fields directly — `prompts.py` step 4 tells `root_agent` to
+lead with the summary, give the reasons, and state the trade-off vs. the runner-up
+— so the web-app recommendation reads the same way the page does, not as a
+one-sentence verdict.
+
+Because this rides on `use_route_slot_scoring` (opt-in, default off), the flag-off
+route-only path never populates these fields and its output is unchanged.
 
 The verifier (`routeslot/verifier.py`) gains two checks beyond the structured
 citations: it rejects a **dishonest self-assessment** (verdict must match whether

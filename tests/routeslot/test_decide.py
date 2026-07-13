@@ -24,9 +24,24 @@ def test_deterministic_picks_the_highest_total_route_slot():
     assert rec.decision is Decision.RECOMMENDED
     assert rec.recommended_route_id == "RTE-A"
     assert rec.total_score == 0.80
-    # Flag off -> no grounded narrative; the flat reasoning line is unchanged.
-    assert rec.decision_summary is None and not rec.primary_reasons
+    # The flat reasoning line is unchanged (compat / page fallback)...
     assert "strongest route-slot overall" in rec.reasoning
+    # ...but the deterministic structured floor is always populated, so a user
+    # (or the agent narration) gets the reasons + trade-off, not a one-liner.
+    assert rec.decision_summary and "RTE-A".lower() not in rec.decision_summary.lower()
+    assert rec.recommended_route_name == "Alpha" and "Alpha" in rec.decision_summary
+    assert len(rec.primary_reasons) == 2
+    assert rec.runner_up and rec.key_tradeoff
+    assert rec.default_comparison is None  # only the grounded self-assessment sets this
+
+
+def test_deterministic_floor_tradeoff_names_the_runner_up_advantage():
+    # RTE-A morning wins overall (0.80) but its slot is tight (avail 0.33); the
+    # runner-up RTE-B is more open (0.90) -> the trade-off should call that out.
+    rec = decide_route_slot(customer(), _evals(), Config(use_route_slot_scoring=True))
+    assert "0.80 vs" in rec.key_tradeoff        # the winner's score edge
+    assert "slot openness" in rec.key_tradeoff  # the factor the runner-up leads on
+    assert "Bravo" in rec.runner_up
 
 
 def test_escalates_when_best_route_slot_is_below_threshold():
@@ -92,7 +107,11 @@ def test_grounded_falls_back_on_persistently_ungrounded_choice():
     rec = decide_route_slot(customer(), _evals(), cfg, choice_fn=liar)
     assert rec.recommended_route_id == "RTE-A"        # fell back
     assert rec.grounded_fallback is True
-    assert rec.decision_summary is None               # no grounded narrative on fallback
+    # On fallback the deterministic structured floor still stands (never a
+    # one-liner), but the grounded-only self-assessment is absent.
+    assert rec.decision_summary and rec.primary_reasons and rec.key_tradeoff
+    assert rec.default_comparison is None
+    assert "Trade-off:" not in rec.reasoning          # reasoning stays the flat line
 
 
 def test_llm_menu_excludes_below_threshold_route_slots():
