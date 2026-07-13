@@ -233,6 +233,28 @@ def test_build_map_data_stops_carry_id_window_and_tier():
     assert any(s["tier"] for s in stops)
 
 
+def test_build_map_data_carries_slot_rationale():
+    """The map payload includes a "why this time slot" rationale for the
+    recommended slot: how the window was placed (its basis) and the SLOT-level
+    factors that pick it (slot match + availability, each with its figure). The
+    route-level factors (geography, capacity) are excluded -- they explain the
+    route, not the slot."""
+    config = Config(use_route_slot_scoring=True)
+    result = _results(config)[0]  # a clean recommend
+    rec = result.recommendation
+    html = build_map_data(result)["rationaleHtml"]
+
+    assert html and 'class="slot-why"' in html
+    assert rec.recommended_route_id in html  # small route context
+    # Slot-level factors, each with the concrete figure behind its score.
+    assert "Slot availability (openness)" in html
+    assert 'class="why-factor-detail"' in html
+    assert "openness" in html  # the availability detail
+    # Route-level factors are NOT in the slot rationale.
+    assert "Geographic clustering" not in html
+    assert "Capacity buffer" not in html
+
+
 def test_build_map_data_routes_carry_ranked_order():
     """Every route carries a `rank` giving the agent's scored order (feasible
     recommended-first, then infeasible) -- the ranks are a 0..n-1 permutation and
