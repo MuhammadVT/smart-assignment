@@ -139,15 +139,16 @@ def _sse_frames(text: str) -> list[dict]:
     return frames
 
 
+class _BrokenService:
+    async def stream_turn(self, session_id, message):
+        raise RuntimeError("no credentials")
+        yield  # pragma: no cover - makes this an async generator
+
+
 def test_chat_falls_back_to_deterministic_on_llm_error(monkeypatch):
-    """When the LLM path raises (no creds / model error), /api/chat degrades to a
-    deterministic run so the chat never dead-ends."""
-
-    class _BrokenService:
-        async def stream_turn(self, session_id, message):
-            raise RuntimeError("no credentials")
-            yield  # pragma: no cover - makes this an async generator
-
+    """When the LLM path raises (no creds / model error), /api/chat degrades to
+    the deterministic brain so the chat never dead-ends."""
+    monkeypatch.setattr(app_module, "resolve_mode", lambda *a, **k: {"mode": "llm"})
     monkeypatch.setattr(app_module, "_chat_service", _BrokenService())
     resp = client.post(
         "/api/chat",
@@ -164,13 +165,36 @@ def test_chat_falls_back_to_deterministic_on_llm_error(monkeypatch):
 
 
 def test_chat_fallback_asks_for_missing_fields(monkeypatch):
-    class _BrokenService:
-        async def stream_turn(self, session_id, message):
-            raise RuntimeError("no credentials")
-            yield  # pragma: no cover
-
+    monkeypatch.setattr(app_module, "resolve_mode", lambda *a, **k: {"mode": "llm"})
     monkeypatch.setattr(app_module, "_chat_service", _BrokenService())
     resp = client.post("/api/chat", json={"session_id": "t2", "message": "how does this work?"})
     frames = _sse_frames(resp.text)
     assert any(f["type"] == "message" for f in frames)
     assert frames[-1] == {"type": "done"}
+
+
+def test_chat_deterministic_conversation_remembers_context():
+    """The deterministic chat is session-aware: a follow-up that only gives the
+    order size still runs, because the address from an earlier turn is remembered
+    -- and a later revision ("try 20 cases") re-runs without re-stating the
+    address. This is the multi-turn behaviour that matches ``adk web``."""
+    sid = "conv-remember"
+
+    def turn(msg):
+        return _sse_frames(client.post("/api/chat", json={"session_id": sid, "message": msg}).text)
+
+    # Turn 1: address only -> asks for the order size, no run yet.
+    f1 = turn("1200 McKinney St, Houston, TX 77010")
+    assert not [f for f in f1 if f["type"] == "visualization"]
+    assert any(f["type"] == "message" and "cases" in f["text"].lower() for f in f1)
+
+    # Turn 2: just the cases -> runs, because the address is remembered.
+    f2 = turn("90 cases")
+    assert [f for f in f2 if f["type"] == "visualization"]
+
+    # Turn 3: a revision that never repeats the address -> still runs.
+    f3 = turn("try 20 cases")
+    viz3 = [f for f in f3 if f["type"] == "visualization"]
+    assert viz3
+    # The run reflects the revised order size (20 cases), proving the merge.
+    assert "20 cases" in viz3[0]["payload"]["resultHtml"]

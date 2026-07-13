@@ -647,8 +647,10 @@
     sendBtn.disabled = true;
     input.disabled = true;
     try {
-      if (MODE === 'llm') { await sendLlm(message); }
-      else { await sendDeterministic(message); }
+      // Always stream through /api/chat: it drives the ADK agent in llm mode and
+      // the session-aware deterministic brain otherwise, so the conversation
+      // stays multi-turn (remembers context, accepts revisions) in every mode.
+      await sendLlm(message);
     } finally {
       sendBtn.disabled = false;
       input.disabled = false;
@@ -675,9 +677,9 @@
           'the prospect in your own words — address, order size, any preferred day/time — ' +
           'and I’ll walk through it. You can also pick a sample below.');
       } else {
-        bubble('agent', 'Hi! I assign delivery slots for new Sysco prospects. Give me an ' +
-          'address and an order size in cases (a preferred day + time is optional), or pick ' +
-          'a sample below.');
+        bubble('agent', 'Hi! I assign delivery slots for new Sysco prospects. Tell me the ' +
+          'address and order size in cases (a preferred day + time is optional) — you can ' +
+          'add or change details as we go, like “try 20 cases”. Or pick a sample below.');
         if (m && m.reason) { bubble('agent', 'ℹ️ ' + m.reason, 'thinking'); }
       }
     });
