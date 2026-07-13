@@ -1,9 +1,24 @@
 """
-Route/capacity data source — mock routes for tests/demo, or prepared ODI data.
+Route/capacity data source. `fetch_candidate_routes()` returns `Route` objects.
 
-`fetch_candidate_routes()` returns `Route` objects. Set
-`SMART_ASSIGNMENT_ROUTE_SOURCE=prepared` to build routes from live SQL (with
-cache fallback); default is `mock`.
+The source is chosen by `SMART_ASSIGNMENT_DATA_SOURCE`, one of:
+
+  - "mock"     — built-in Houston demo routes (fully offline, deterministic).
+  - "cache"    — prepared ODI tables read from the on-disk snapshot ONLY
+                 (deterministic; no SQL). **This is the default**, so a given
+                 machine returns the same routes on every call and across
+                 surfaces (adk web, the web app), which is what you want for
+                 development and demos.
+  - "live_sql" — pull from live SQL, falling back to the cache per table if a
+                 pull fails (the old "prepared" behavior). Data can change
+                 between runs, so two surfaces may disagree — use it only when
+                 you actually want fresh data.
+
+If the cache is requested (or defaulted to) but the snapshot files are missing
+(e.g. a fresh checkout that never built one), we fall back to "mock" with a
+loud warning rather than crash. The legacy `SMART_ASSIGNMENT_ROUTE_SOURCE`
+(values mock|prepared) is still honored with a deprecation warning:
+"prepared" maps to "live_sql".
 """
 
 from __future__ import annotations
@@ -39,7 +54,53 @@ from smart_assignment.shared.models import (
 
 logger = logging.getLogger(__name__)
 
-_ROUTE_SOURCE_ENV = "SMART_ASSIGNMENT_ROUTE_SOURCE"
+_DATA_SOURCE_ENV = "SMART_ASSIGNMENT_DATA_SOURCE"
+_LEGACY_ROUTE_SOURCE_ENV = "SMART_ASSIGNMENT_ROUTE_SOURCE"
+
+SOURCE_MOCK = "mock"
+SOURCE_CACHE = "cache"
+SOURCE_LIVE_SQL = "live_sql"
+_VALID_SOURCES = (SOURCE_MOCK, SOURCE_CACHE, SOURCE_LIVE_SQL)
+
+# Synonyms accepted for each source (incl. the legacy ROUTE_SOURCE values).
+_SOURCE_ALIASES = {
+    "mock": SOURCE_MOCK,
+    "cache": SOURCE_CACHE,
+    "cached": SOURCE_CACHE,
+    "live_sql": SOURCE_LIVE_SQL,
+    "live": SOURCE_LIVE_SQL,
+    "sql": SOURCE_LIVE_SQL,
+    "prepared": SOURCE_LIVE_SQL,  # legacy ROUTE_SOURCE value
+}
+
+
+def _data_source() -> str:
+    """Resolve the active data source (default "cache"). Honors the legacy
+    SMART_ASSIGNMENT_ROUTE_SOURCE with a deprecation warning; an unrecognized
+    value falls back to "cache" with a warning."""
+    raw = os.environ.get(_DATA_SOURCE_ENV)
+    if raw is None:
+        legacy = os.environ.get(_LEGACY_ROUTE_SOURCE_ENV)
+        if legacy is not None and legacy.strip():
+            logger.warning(
+                "%s is deprecated; use %s (mock|cache|live_sql). Honoring %r for now.",
+                _LEGACY_ROUTE_SOURCE_ENV,
+                _DATA_SOURCE_ENV,
+                legacy,
+            )
+            raw = legacy
+    value = (raw or SOURCE_CACHE).strip().lower()
+    resolved = _SOURCE_ALIASES.get(value)
+    if resolved is None:
+        logger.warning("Unknown data source %r; defaulting to %r.", value, SOURCE_CACHE)
+        return SOURCE_CACHE
+    return resolved
+
+
+def _live_first() -> bool:
+    """True when the active source should try live SQL before the cache."""
+    return _data_source() == SOURCE_LIVE_SQL
+
 
 _DELIVERY_DAY_NAME_TO_ENUM = {
     "monday": DayOfWeek.MON,
@@ -70,10 +131,6 @@ def _delivery_day_from_route_id(route_id: str) -> DayOfWeek | None:
     if day_digit == 7:
         return None
     return _ROUTE_ID_DAY_DIGIT_TO_ENUM.get(day_digit)
-
-
-def _use_mock_routes() -> bool:
-    return os.environ.get(_ROUTE_SOURCE_ENV, "mock").lower() == "mock"
 
 
 def _parse_delivery_day_name(day_name: str) -> DayOfWeek:
@@ -223,46 +280,49 @@ def _load_cached_dlvr_window_records() -> pd.DataFrame:
 
 
 def _load_route_capacity_raw_df() -> pd.DataFrame:
-    try:
-        route_capacity_raw_df = _fetch_live_route_stop_records()
-        logger.info("Loaded route stop records from live SQL.")
-        return route_capacity_raw_df
-    except Exception as exc:
-        logger.warning("Live SQL route pull failed (%s); falling back to cache.", exc)
-        route_capacity_raw_df = _load_cached_route_stop_records()
-        logger.info("Loaded route stop records from cache: %s", ROUTES_CACHE_PATH)
-        return route_capacity_raw_df
+    if _live_first():
+        try:
+            route_capacity_raw_df = _fetch_live_route_stop_records()
+            logger.info("Loaded route stop records from live SQL.")
+            return route_capacity_raw_df
+        except Exception as exc:
+            logger.warning("Live SQL route pull failed (%s); falling back to cache.", exc)
+    route_capacity_raw_df = _load_cached_route_stop_records()
+    logger.info("Loaded route stop records from cache: %s", ROUTES_CACHE_PATH)
+    return route_capacity_raw_df
 
 
 def _load_cust_tier_records() -> pd.DataFrame | None:
-    try:
-        cust_tier_df = _fetch_live_cust_tier_records()
-        logger.info("Loaded cust tier records from live SQL.")
-        return cust_tier_df
-    except Exception as exc:
-        logger.warning("Live SQL cust tier pull failed (%s); falling back to cache.", exc)
+    if _live_first():
         try:
-            cust_tier_df = _load_cached_cust_tier_records()
-            logger.info("Loaded cust tier records from cache: %s", CUST_TIER_CACHE_PATH)
+            cust_tier_df = _fetch_live_cust_tier_records()
+            logger.info("Loaded cust tier records from live SQL.")
             return cust_tier_df
-        except Exception as cache_exc:
-            logger.warning(
-                "Cust tier cache unavailable (%s); defaulting stop tiers to Other.",
-                cache_exc,
-            )
-            return None
+        except Exception as exc:
+            logger.warning("Live SQL cust tier pull failed (%s); falling back to cache.", exc)
+    try:
+        cust_tier_df = _load_cached_cust_tier_records()
+        logger.info("Loaded cust tier records from cache: %s", CUST_TIER_CACHE_PATH)
+        return cust_tier_df
+    except Exception as cache_exc:
+        logger.warning(
+            "Cust tier cache unavailable (%s); defaulting stop tiers to Other.",
+            cache_exc,
+        )
+        return None
 
 
 def _load_dlvr_window_records() -> pd.DataFrame:
-    try:
-        dlvr_window_df = _fetch_live_dlvr_window_records()
-        logger.info("Loaded delivery-window records from live SQL.")
-        return dlvr_window_df
-    except Exception as exc:
-        logger.warning("Live SQL delivery-window pull failed (%s); falling back to cache.", exc)
-        dlvr_window_df = _load_cached_dlvr_window_records()
-        logger.info("Loaded delivery-window records from cache: %s", DLVR_WINDOW_CACHE_PATH)
-        return dlvr_window_df
+    if _live_first():
+        try:
+            dlvr_window_df = _fetch_live_dlvr_window_records()
+            logger.info("Loaded delivery-window records from live SQL.")
+            return dlvr_window_df
+        except Exception as exc:
+            logger.warning("Live SQL delivery-window pull failed (%s); falling back to cache.", exc)
+    dlvr_window_df = _load_cached_dlvr_window_records()
+    logger.info("Loaded delivery-window records from cache: %s", DLVR_WINDOW_CACHE_PATH)
+    return dlvr_window_df
 
 
 def _load_committed_tw1_slots_df() -> pd.DataFrame:
@@ -370,9 +430,25 @@ def _mock_routes() -> list[Route]:
 
 
 def fetch_candidate_routes() -> list[Route]:
-    """Return all active route+day instances known to the system."""
-    if _use_mock_routes():
+    """Return all active route+day instances from the configured data source
+    (see the module docstring). "cache" (the default) and "live_sql" build from
+    the prepared ODI tables; "mock" returns the demo routes. If the prepared
+    tables can't be loaded (e.g. no cache snapshot on a fresh checkout), fall
+    back to mock with a loud warning rather than crash."""
+    source = _data_source()
+    if source == SOURCE_MOCK:
         return _mock_routes()
 
-    route_summary, stop_locations, _committed_tw1_slots_df = _load_prepared_route_tables()
-    return routes_from_summary_tables(route_summary, stop_locations)
+    logger.info("Loading candidate routes from data source: %s", source)
+    try:
+        route_summary, stop_locations, _committed_tw1_slots_df = _load_prepared_route_tables()
+        return routes_from_summary_tables(route_summary, stop_locations)
+    except Exception as exc:
+        logger.warning(
+            "Data source %r requested but its data could not be loaded (%s); using the "
+            "mock demo routes instead. Build the cache snapshot (see data_prep/) or check "
+            "SQL access.",
+            source,
+            exc,
+        )
+        return _mock_routes()
