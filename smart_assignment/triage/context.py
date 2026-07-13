@@ -109,6 +109,7 @@ def check_brief_grounding(tool_context: ToolContext, brief: str) -> dict:
     Returns:
       {"ok": true, "message": "..."} when everything is grounded, or
       {"ok": false, "ungrounded_numbers": [...], "ungrounded_routes": [...],
+       "ungrounded_days": [...], "ungrounded_times": [...],
        "message": "<what to fix>"}. Returns {"ok": false, "error": ...} if
       get_escalation_context hasn't run yet.
     """
@@ -122,5 +123,7 @@ def check_brief_grounding(tool_context: ToolContext, brief: str) -> dict:
         "ok": False,
         "ungrounded_numbers": result.ungrounded_numbers,
         "ungrounded_routes": result.ungrounded_routes,
+        "ungrounded_days": result.ungrounded_days,
+        "ungrounded_times": result.ungrounded_times,
         "message": result.caveat(),
     }
