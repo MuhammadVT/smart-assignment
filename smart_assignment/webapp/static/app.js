@@ -82,6 +82,11 @@
     '#4338ca', '#0891b2', '#475569'
   ];
   var PROSPECT_COLOR = '#111827';  // near-black -- distinct from every route hue
+  // Infeasible routes are always drawn in red (an unfilled/ring marker), so a
+  // ruled-out route reads the same everywhere: map, filter, evaluated cards, and
+  // the delivery-window panels. Feasible routes keep their distinct palette hue.
+  var INFEASIBLE_COLOR = '#b42318';
+  function routeColor(r) { return r.feasible ? routeColors[r.route_id] : INFEASIBLE_COLOR; }
 
   // The prospect is a STAR (its own shape + its own colour) so it never reads as
   // a route point; service centers are DIAMONDS; stops stay small circles.
@@ -162,7 +167,7 @@
 
     currentMapData.routes.forEach(function (r) {
       if (!selectedRoutes[r.route_id]) { return; }
-      var color = routeColors[r.route_id];
+      var color = routeColor(r);  // red (ring) for infeasible, palette hue otherwise
       var centerLatLng = [r.service_center.lat, r.service_center.lng];
       bounds.push(centerLatLng);
 
@@ -212,7 +217,9 @@
     setTimeout(function () { mapInstance.invalidateSize(); }, 60);
   }
 
-  // Apply a route's colour to a swatch element (solid if feasible, ring if not).
+  // Apply a route's colour to a swatch element: a solid dot in the route's hue
+  // when feasible, a red unfilled ring when infeasible (so "ruled out" reads red
+  // and the same everywhere).
   function paintSwatch(el, color, feasible) {
     el.className = 'route-swatch';
     if (feasible) {
@@ -220,7 +227,7 @@
       el.style.border = '2px solid ' + color;
     } else {
       el.style.background = 'transparent';
-      el.style.border = '2px solid ' + color;
+      el.style.border = '2px solid ' + INFEASIBLE_COLOR;
     }
   }
 
@@ -384,17 +391,34 @@
       + '<span class="tw-track">' + ticks + '</span></div>';
 
     routes.forEach(function (r) {
-      var color = routeColors[r.route_id];
+      var color = routeColor(r);  // red for infeasible, palette hue otherwise
       var stops = r.stops.filter(function (s) { return s.window; }).slice().sort(function (a, b) {
         return toMin(a.window.open) - toMin(b.window.open);
       });
 
+      // Route dot: a filled hue dot when feasible, a red unfilled ring when not.
+      var dotStyle = r.feasible
+        ? 'background:' + color
+        : 'background:transparent;border:2px solid ' + INFEASIBLE_COLOR;
       html += '<div class="tw-route">'
-        + '<span class="tw-dot" style="background:' + color + '"></span>'
+        + '<span class="tw-dot" style="' + dotStyle + '"></span>'
         + '<b>' + r.route_id + '</b> · ' + r.name + ' <span class="tw-day">(' + r.day + ')</span>'
         + ' <span class="tw-count">' + stops.length + ' stops</span></div>';
 
       html += '<div class="tw-route-block">';
+
+      // Two dashed verticals marking the RECOMMENDED slot's start + end, spanning
+      // the whole block (stops + availability + candidate slots) on the shared axis.
+      var recSlot = (r.slots || []).filter(function (s) { return s.recommended; })[0];
+      if (recSlot) {
+        var gO = pct(toMin(recSlot.open)), gC = pct(toMin(recSlot.close));
+        var gTitle = 'recommended slot ' + recSlot.open + '–' + recSlot.close;
+        html += '<div class="tw-guides">'
+          + '<span class="tw-guide" style="left:' + gO + '%;border-color:' + color
+          + '" title="' + gTitle + '"></span>'
+          + '<span class="tw-guide" style="left:' + gC + '%;border-color:' + color
+          + '" title="' + gTitle + '"></span></div>';
+      }
 
       stops.forEach(function (s) {
         var o = toMin(s.window.open), c = toMin(s.window.close);
