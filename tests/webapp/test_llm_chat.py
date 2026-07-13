@@ -132,15 +132,18 @@ def test_llm_credentials_available_sage(monkeypatch):
     assert llm_credentials_available(cfg) is False
 
 
-def test_resolve_mode_downgrades_without_credentials(monkeypatch):
+def test_resolve_mode_stays_llm_without_a_credential_pre_check(monkeypatch):
+    # The web app drives the real agent (like adk web) rather than pre-guessing
+    # credentials and downgrading to the parser -- that heuristic gave false
+    # negatives and stranded the chat on Phase 1. Genuine no-credential failures
+    # are handled at runtime by the /api/chat deterministic fallback instead.
     monkeypatch.setenv("SMART_ASSIGNMENT_WEBAPP_MODE", "llm")
     cfg = Config(llm_backend="standard", model="gemini-2.5-flash")
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
     res = resolve_mode(cfg)
-    assert res["mode"] == "deterministic"
+    assert res["mode"] == "llm"
     assert res["configured"] == "llm"
-    assert "reason" in res
 
 
 def test_resolve_mode_llm_when_available(monkeypatch):
