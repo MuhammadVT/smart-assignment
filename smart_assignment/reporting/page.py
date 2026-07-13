@@ -851,8 +851,9 @@ def _scoring_section_route_slot(config: Config) -> str:
         preference is stated; otherwise it's absent and the remaining weights renormalize.</span> The agent
         picks the highest-scoring route-slot across all feasible routes and <b>auto-assigns</b> when its own
         total is ≥ {thr:.0%}; otherwise it <b>escalates</b>. When grounded reasoning is enabled an LLM makes
-        the pick from this same enumerated menu (constrained and fact-checked), with the deterministic best as
-        its reference and fallback; the auto-assign bar stays a deterministic threshold.</p>
+        the pick — but only from the route-slots that already clear the {thr:.0%} bar, so its choice is always
+        auto-assignable and the escalate boundary stays a deterministic threshold. The deterministic best is
+        its reference and fallback.</p>
     </div>"""
 
 

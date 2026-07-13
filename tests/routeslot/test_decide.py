@@ -80,3 +80,51 @@ def test_grounded_falls_back_on_persistently_ungrounded_choice():
     rec = decide_route_slot(customer(), _evals(), cfg, choice_fn=liar)
     assert rec.recommended_route_id == "RTE-A"        # fell back
     assert rec.grounded_fallback is True
+
+
+def test_llm_menu_excludes_below_threshold_route_slots():
+    # One route with an above-bar (0.80) and a below-bar (0.50) slot; only the
+    # above-bar one should reach the LLM.
+    evals = [scored_eval("RTE-A", "Alpha", [
+        scored_slot(MORNING, avail=0.7, total=0.80),
+        scored_slot(AFTERNOON, avail=0.3, total=0.50),
+    ])]
+    cfg = Config(use_route_slot_scoring=True, use_grounded_judgment=True,
+                 route_slot_score_threshold=0.55)
+    seen = {}
+
+    def capture(config, prompt):
+        seen["prompt"] = prompt
+        return {"chosen_index": 0, "rationale": "the open morning slot",
+                "citations": [{"index": 0, "field": "reference_weighted_score", "value": 0.80}]}
+
+    rec = decide_route_slot(customer(), evals, cfg, choice_fn=capture)
+    assert rec.decision is Decision.RECOMMENDED
+    assert rec.recommended_window == "08:30-11:30"        # the 0.80 morning slot
+    # The below-bar slot's score never appears in the menu the LLM saw.
+    assert '"reference_weighted_score": 0.8' in seen["prompt"]
+    assert '"reference_weighted_score": 0.5' not in seen["prompt"]
+
+
+def test_low_score_escalation_never_calls_the_llm():
+    evals = [scored_eval("RTE-A", "Alpha", [scored_slot(MORNING, avail=0.3, total=0.40)])]
+    cfg = Config(use_route_slot_scoring=True, use_grounded_judgment=True,
+                 route_slot_score_threshold=0.55)
+
+    def boom(config, prompt):
+        raise AssertionError("LLM must not be consulted when nothing clears the bar")
+
+    rec = decide_route_slot(customer(), evals, cfg, choice_fn=boom)
+    assert rec.decision is Decision.ESCALATED_LOW_SCORE
+    assert "auto-assign bar" in rec.review_reason
+
+
+def test_feasible_route_with_no_slots_has_its_own_reason():
+    # Feasible on hard constraints, but zero candidate slots could be built.
+    empty = scored_eval("RTE-A", "Alpha", [], feasible=True)
+    rec = decide_route_slot(customer(), [empty], Config(use_route_slot_scoring=True))
+    assert rec.decision is Decision.ESCALATED_NO_FEASIBLE_SLOT
+    assert rec.recommended_route_id is None
+    # Distinct from the no-feasible-route reason.
+    assert "no delivery window" in rec.review_reason.lower()
+    assert "hard constraint" not in rec.review_reason.lower()
