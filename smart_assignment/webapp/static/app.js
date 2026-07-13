@@ -86,6 +86,10 @@
   // ruled-out route reads the same everywhere: map, filter, evaluated cards, and
   // the delivery-window panels. Feasible routes keep their distinct palette hue.
   var INFEASIBLE_COLOR = '#b42318';
+  // The recommended route is always drawn green ("go"); other feasible routes use
+  // the palette above (no green, no red) so their hue can't be mistaken for the
+  // recommended route or an infeasible one.
+  var RECOMMENDED_COLOR = '#1a7f37';
   function routeColor(r) { return r.feasible ? routeColors[r.route_id] : INFEASIBLE_COLOR; }
 
   // The prospect is a STAR (its own shape + its own colour) so it never reads as
@@ -283,8 +287,15 @@
     routeFeasible = {};
     mapData.routes.forEach(function (r, i) {
       selectedRoutes[r.route_id] = true;  // all on by default
-      routeColors[r.route_id] = ROUTE_PALETTE[i % ROUTE_PALETTE.length];
       routeFeasible[r.route_id] = r.feasible;
+      // The recommended route is always green; every other feasible route gets a
+      // distinct palette hue (the palette has no green or red, so a feasible
+      // route never reads as "recommended" or "infeasible"). Infeasible routes
+      // fall through to red at draw time via routeColor().
+      var isRec = r.slots && r.slots.some(function (s) { return s.recommended; });
+      routeColors[r.route_id] = isRec
+        ? RECOMMENDED_COLOR
+        : ROUTE_PALETTE[i % ROUTE_PALETTE.length];
     });
     ensureMap();
     buildFilterMenu();
