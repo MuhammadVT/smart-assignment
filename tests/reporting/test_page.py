@@ -347,7 +347,7 @@ def test_route_slot_card_shows_unscored_slot_match_without_preference():
     """When the prospect states no preferred slot, slot-match is dropped from the
     route-slot total -- but the card still LISTS the factor, marked 'not scored',
     so the user knows it exists and why it wasn't scored."""
-    from smart_assignment.reporting.page import _route_cards
+    from smart_assignment.reporting.page import _example_card, _route_cards
 
     config = Config(use_route_slot_scoring=True)
     # Galleria: a sample with preferred_slot=None but a feasible route to score.
@@ -363,6 +363,11 @@ def test_route_slot_card_shows_unscored_slot_match_without_preference():
     assert "Slot match (day + time)" in html  # still listed
     assert "not scored" in html and "no preferred slot" in html
     assert 'class="factor na"' in html
+
+    # The recommendation card's own factor bars carry the same "not scored" pill.
+    rec_card = _example_card(galleria, include_routes=False)
+    assert 'class="factor na"' in rec_card
+    assert "Slot match (day + time)" in rec_card and "not scored" in rec_card
 
 
 def test_page_embeds_map_data_in_workflow_json():

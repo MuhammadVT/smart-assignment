@@ -485,10 +485,6 @@ def _factor_bars(factor_scores) -> str:
     return "".join(rows)
 
 
-def _factor_rows(rec) -> str:
-    return _factor_bars(rec.factor_breakdown)
-
-
 def _route_checks(cand: CandidateEvaluation) -> str:
     checks = []
     for oc in cand.constraint_outcomes:
@@ -691,8 +687,14 @@ def _example_card(result: RecommendationResult, include_routes: bool = True) -> 
             f'<small style="color:var(--muted)">(score {rec.total_score:.2f})</small></p>'
         )
 
+    # Show the winning route-slot's factor bars, always listing Slot match: when
+    # the prospect stated no preference it's excluded from the score, so it shows
+    # the same greyed "not scored" pill as the evaluated-route slot cards.
+    has_pref = result.customer.preferred_slot is not None
     factors_html = (
-        f'<div class="factors">{_factor_rows(rec)}</div>' if rec.factor_breakdown else ""
+        f'<div class="factors">{_slot_factor_bars(rec.factor_breakdown, has_pref)}</div>'
+        if rec.factor_breakdown
+        else ""
     )
     reason_label = "Why the agent escalated" if rec.requires_human_review else "Why the agent chose this"
 
