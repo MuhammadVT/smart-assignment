@@ -83,26 +83,25 @@ def llm_credentials_available(config: Config) -> bool:
 
 
 def resolve_mode(config: Optional[Config] = None) -> dict:
-    """Effective mode the app will actually serve, plus why.
+    """Effective mode the app will serve.
 
-    Returns ``{"mode", "configured"[, "reason"]}``. ``mode`` is what the client
-    should use; ``configured`` is what the env var asked for; ``reason`` explains
-    any downgrade (e.g. llm requested but no credentials).
+    Returns ``{"mode", "configured"}``. Unless the operator explicitly asks for
+    deterministic mode (``SMART_ASSIGNMENT_WEBAPP_MODE=deterministic``), the chat
+    drives the **real ADK agent** -- exactly what ``adk web`` does -- so the
+    web-app conversation behaves identically (free-form Q&A, the escalation-triage
+    handoff, revisions, etc.).
+
+    We deliberately do NOT pre-guess credential availability and downgrade to the
+    Phase-1 parser here: that heuristic can disagree with what the agent actually
+    needs (e.g. Vertex via a service account) and wrongly strand the app on the
+    parser even when ``adk web`` works. If the agent genuinely can't run (no
+    credentials, a model/network error), the ``/api/chat`` stream falls back to a
+    deterministic result per turn (see ``app.chat``), so the chat never dead-ends.
     """
     config = config or DEFAULT_CONFIG
     configured = webapp_mode()
     if configured != "llm":
         return {"mode": "deterministic", "configured": configured}
-    if not llm_credentials_available(config):
-        return {
-            "mode": "deterministic",
-            "configured": "llm",
-            "reason": (
-                "Conversational (LLM) mode is configured but no credentials were detected "
-                "for the active backend. Running in deterministic mode. Set "
-                "SMART_ASSIGNMENT_LLM_BACKEND and the matching credentials to enable it."
-            ),
-        }
     return {"mode": "llm", "configured": "llm"}
 
 
