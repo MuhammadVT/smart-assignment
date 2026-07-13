@@ -238,6 +238,19 @@ _STYLE = """
   .route.routecard .factors { margin-top: 9px; }
   .rectag { font-size: 10px; font-weight: 700; color: var(--green); background: var(--green-soft);
     border-radius: 999px; padding: 2px 7px; margin-left: 6px; white-space: nowrap; }
+  /* Candidate (route, slot) options listed inside a route card (route-slot path). */
+  .slot-options { margin-top: 12px; display: grid; gap: 10px; }
+  .slot-option { border: 1px solid var(--line); border-radius: 10px; padding: 9px 11px; background: var(--bg); }
+  .slot-option.rec { border-color: var(--green); background: var(--green-soft); }
+  .slot-head { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+  .slot-win { font-weight: 700; color: var(--navy); font-family: var(--mono); }
+  .slot-score { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .slot-option .factors { margin-top: 8px; }
+  /* A factor that's present but deliberately unscored (no stated preference). */
+  .factor.na { grid-template-columns: 150px 1fr; }
+  .factor.na .fname { color: var(--muted); }
+  .factor.na .na-note { font-size: 11px; color: var(--muted); font-weight: 600; justify-self: start;
+    background: #f1f4f9; border: 1px dashed #cfd8e6; border-radius: 6px; padding: 2px 8px; }
   .checks { margin: 6px 0 0; padding-left: 0; list-style: none; color: var(--muted); }
   .checks li { padding: 1px 0; }
   .checks li .ok { color: var(--green); font-weight: 700; }
@@ -517,30 +530,82 @@ def _feasible_route_card(cand: CandidateEvaluation, winner_id, threshold) -> str
     )
 
 
-def _route_slot_card(cand: CandidateEvaluation, ss, winner_id, threshold) -> str:
-    """A routecard for one (route, slot) option (route-slot scoring on): the
-    slot's own window in the title, its own route-slot score bar, and its own
-    per-slot factor bars (geo/capacity route-level, window/availability slot-level)."""
-    r = cand.route
+# Canonical order of the route-slot factors, so "Slot match" always sits in the
+# same place -- even when it's shown as un-scored (no stated preference).
+_RS_FACTOR_ORDER = [
+    FACTOR_GEO_CLUSTERING,
+    FACTOR_CAPACITY_BUFFER,
+    FACTOR_WINDOW_MATCH,
+    FACTOR_SLOT_AVAILABILITY,
+]
+
+
+def _slot_factor_bars(factor_scores, has_preference: bool) -> str:
+    """Factor bars for one route-slot, in canonical order. Slot match is always
+    listed: when the prospect stated no preference it is *excluded from the
+    weighted total* (rather than given an arbitrary neutral), so it's shown greyed
+    with a clear 'not scored' note instead of a bar."""
+    by_name = {f.name: f for f in factor_scores}
+    rows = []
+    for name in _RS_FACTOR_ORDER:
+        f = by_name.get(name)
+        label = FACTOR_LABEL.get(name, name)
+        if f is not None:
+            pct = round(f.value * 100)
+            rows.append(
+                f'<div class="factor"><span class="fname">{_esc(label)}</span>'
+                f'<div class="bar"><span style="width:{pct}%"></span></div>'
+                f'<span class="fval">{f.value:.2f}</span></div>'
+            )
+        elif name == FACTOR_WINDOW_MATCH and not has_preference:
+            rows.append(
+                f'<div class="factor na"><span class="fname">{_esc(label)}</span>'
+                '<span class="na-note" title="The prospect stated no preferred slot, '
+                'so slot match is excluded from the score and the other weights '
+                'renormalize">not scored · no preferred slot given</span></div>'
+            )
+    return "".join(rows)
+
+
+def _slot_option(cand: CandidateEvaluation, ss, winner_id, threshold, has_preference) -> str:
+    """One candidate (route, slot) inside a route card: its window, its own
+    route-slot score bar, and its per-slot factor bars. The recommended slot is
+    highlighted + starred."""
+    is_rec = cand.route.route_id == winner_id and ss.slot.window == cand.chosen_window
     win = _win(fmt_window(ss.slot.window))
-    title = (
-        f"{_esc(r.route_id)} · {_esc(r.name)} · {r.day.value} · "
-        f"<b>{win}</b> · {cand.distance_miles:.1f} mi"
-    )
-    is_rec = r.route_id == winner_id and ss.slot.window == cand.chosen_window
-    rec_tag = ' <span class="rectag">★ recommended</span>' if is_rec else ""
-    status = f'<span class="status ok">FEASIBLE · {ss.total_score:.2f}</span>'
+    star = ' <span class="rectag">★ recommended</span>' if is_rec else ""
     score_cls = "g" if ss.total_score >= threshold else "a"
     pct = round(ss.total_score * 100)
-    body = (
+    return (
+        f'<div class="slot-option{" rec" if is_rec else ""}">'
+        f'<div class="slot-head"><span class="slot-win">◆ {win}</span>{star}'
+        f'<span class="slot-score">score {ss.total_score:.2f}</span></div>'
         f'<div class="score"><div class="bar">'
         f'<span class="{score_cls}" style="width:{pct}%"></span></div></div>'
-        f'<div class="factors">{_factor_bars(ss.factor_scores)}</div>'
+        f'<div class="factors">{_slot_factor_bars(ss.factor_scores, has_preference)}</div></div>'
+    )
+
+
+def _route_slot_group_card(cand: CandidateEvaluation, winner_id, threshold, has_preference) -> str:
+    """A routecard for one feasible ROUTE on the route-slot path: the route header
+    + constraint checks once (no per-slot repetition), then its candidate slots
+    listed inside (each with its own score + factor bars). Mirrors the per-route
+    delivery-window panel."""
+    r = cand.route
+    title = f"{_esc(r.route_id)} · {_esc(r.name)} · {r.day.value} · {cand.distance_miles:.1f} mi"
+    has_rec = r.route_id == winner_id and any(
+        ss.slot.window == cand.chosen_window for ss in cand.scored_slots
+    )
+    rec_tag = ' <span class="rectag">★ recommended</span>' if has_rec else ""
+    slots = "".join(
+        _slot_option(cand, ss, winner_id, threshold, has_preference)
+        for ss in sorted(cand.scored_slots, key=lambda s: s.total_score, reverse=True)
     )
     return (
         f'<div class="route routecard" data-route-id="{_esc(r.route_id)}"><div class="rtitle">'
-        f"<span>{title}{rec_tag}</span>{status}</div>"
-        f'{body}<ul class="checks">{_route_checks(cand)}</ul></div>'
+        f'<span>{title}{rec_tag}</span><span class="status ok">FEASIBLE</span></div>'
+        f'<ul class="checks">{_route_checks(cand)}</ul>'
+        f'<div class="slot-options">{slots}</div></div>'
     )
 
 
@@ -549,9 +614,11 @@ def _route_cards(result: RecommendationResult, config: Config) -> str:
     ``<summary>`` still collapses it). Each card carries ``data-route-id`` so the
     web app can tint it to match the route's colour on the map.
 
-    On the route-slot path it renders one card per **(route, slot)** option,
-    ranked by route-slot score across all feasible routes, then the infeasible
-    routes. Off that path it keeps one card per route (feasible ranked first)."""
+    On the route-slot path it renders one card per **route** (feasible ranked
+    first), with that route's candidate **slots** listed inside -- each slot with
+    its own score and factor bars -- so the route info isn't repeated per slot and
+    the section mirrors the per-route delivery-window panels. Off that path it
+    keeps one card per route with the route's own score."""
     rec = result.recommendation
     winner_id = rec.recommended_route_id
     feasible = list(result.ranked_feasible)
@@ -561,22 +628,18 @@ def _route_cards(result: RecommendationResult, config: Config) -> str:
     cards = []
     if route_slot_mode:
         threshold = config.route_slot_score_threshold
-        # One card per (route, slot), ranked by the slot's own score across routes.
-        pairs = [(e, ss) for e in feasible for ss in e.scored_slots]
-        pairs.sort(key=lambda t: t[1].total_score, reverse=True)
-        cards.extend(_route_slot_card(e, ss, winner_id, threshold) for e, ss in pairs)
-        cards.extend(_infeasible_card(e) for e in infeasible)
-        n = len(pairs) + len(infeasible)
-        summary = f"Route-slots the agent evaluated ({n})"
+        has_pref = result.customer.preferred_slot is not None
+        cards.extend(
+            _route_slot_group_card(e, winner_id, threshold, has_pref) for e in feasible
+        )
     else:
         threshold = config.total_score_threshold
         cards.extend(_feasible_route_card(e, winner_id, threshold) for e in feasible)
-        cards.extend(_infeasible_card(e) for e in infeasible)
-        n = len(result.candidates_considered)
-        summary = f"Routes the agent evaluated ({n})"
+    cards.extend(_infeasible_card(e) for e in infeasible)
+    n = len(result.candidates_considered)
 
     return (
-        f'<details class="routes" open><summary>{summary}</summary>'
+        f'<details class="routes" open><summary>Routes the agent evaluated ({n})</summary>'
         f'<div class="routelist">{"".join(cards)}</div></details>'
     )
 

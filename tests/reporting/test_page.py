@@ -302,8 +302,9 @@ def test_route_cards_show_bars_for_feasible_and_checks_for_infeasible():
 
 def test_route_slot_cards_and_payload_are_slot_level():
     """With route-slot scoring on, the evaluated section renders one card per
-    (route, slot), the map payload carries each route's scored slots, and Step 4
-    shows each factor's formula so the math is checkable."""
+    ROUTE with its candidate slots listed inside (route info not repeated), the
+    map payload carries each route's scored slots, and Step 4 shows each factor's
+    formula so the math is checkable."""
     from smart_assignment.reporting.page import (
         _route_cards,
         _sim_steps,
@@ -313,13 +314,14 @@ def test_route_slot_cards_and_payload_are_slot_level():
     config = Config(use_route_slot_scoring=True)
     bayou = _results(config)[0]  # a clean recommend with feasible routes + slots
     feasible = [e for e in bayou.candidates_considered if e.feasible]
-    infeasible = [e for e in bayou.candidates_considered if not e.feasible]
     assert feasible and any(e.scored_slots for e in feasible)
 
     html = _route_cards(bayou, config)
-    n_slot_cards = sum(len(e.scored_slots) for e in feasible) + len(infeasible)
-    assert "Route-slots the agent evaluated" in html
-    assert html.count('class="route routecard"') == n_slot_cards
+    # One card per ROUTE (feasible + infeasible), not one per slot; each feasible
+    # route's slots are listed inside (one .slot-head per candidate slot).
+    assert "Routes the agent evaluated" in html
+    assert html.count('class="route routecard"') == len(bayou.candidates_considered)
+    assert html.count('class="slot-head"') == sum(len(e.scored_slots) for e in feasible)
     assert "★ recommended" in html  # exactly the winning (route, slot) is flagged
 
     # Map payload: each feasible route carries its scored slots (score-ranked),
@@ -339,6 +341,28 @@ def test_route_slot_cards_and_payload_are_slot_level():
     assert "clamp(1 − avg_mi" in joined  # geo formula
     assert "1 ÷ (1 + Σ tier-harm" in joined  # slot-availability formula
     assert "total = (" in joined  # weighted-sum breakdown
+
+
+def test_route_slot_card_shows_unscored_slot_match_without_preference():
+    """When the prospect states no preferred slot, slot-match is dropped from the
+    route-slot total -- but the card still LISTS the factor, marked 'not scored',
+    so the user knows it exists and why it wasn't scored."""
+    from smart_assignment.reporting.page import _route_cards
+
+    config = Config(use_route_slot_scoring=True)
+    # Galleria: a sample with preferred_slot=None but a feasible route to score.
+    galleria = _results(config)[1]
+    assert galleria.customer.preferred_slot is None
+    feasible = [e for e in galleria.candidates_considered if e.feasible]
+    assert feasible and feasible[0].scored_slots
+    # The dropped factor really is absent from the scored breakdown.
+    names = {f.name for f in feasible[0].scored_slots[0].factor_scores}
+    assert "window_match" not in names
+
+    html = _route_cards(galleria, config)
+    assert "Slot match (day + time)" in html  # still listed
+    assert "not scored" in html and "no preferred slot" in html
+    assert 'class="factor na"' in html
 
 
 def test_page_embeds_map_data_in_workflow_json():
