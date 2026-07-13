@@ -116,6 +116,69 @@ flag: `pipeline.run_slot_recommendation` and the conversational
 `tools/slot_recommendation.recommend_or_escalate` (which also serializes
 `recommended_window_rationale`).
 
+## Route-slot scoring (`routeslot/` package)
+
+The layers above have a blind spot: scoring ranks **routes**, and slot contention
+only enters *after* a route is chosen (slotpick). So a route can win on capacity
+and clustering while its only workable slot is densely shared by high-value
+customers — and the route ranker can't see that. When
+`Config.use_route_slot_scoring` is on (env `SMART_ASSIGNMENT_USE_ROUTE_SLOT_SCORING`,
+default **off** in code, on in `.env.example`), the **decision unit becomes the
+(route, slot) pair**: every candidate slot on every feasible route is scored
+separately, so slot availability influences which *route* wins.
+
+Two factor levels (`shared/scoring.score_route_slot`):
+
+| Factor | Level | Varies across a route's slots? |
+|---|---|---|
+| `geographic_clustering` | route | no — shared down to every slot |
+| `capacity_buffer` | route | no — shared down to every slot |
+| `window_match` | slot | yes — *this* slot's overlap with the preference |
+| `slot_availability` | slot | yes — *this* slot's tier-weighted openness |
+
+`window_match` is **dropped entirely** when there's no stated preference (rather
+than the old 0.6 neutral); the total self-normalizes over whatever factors are
+active. **Openness** = `1 / (1 + Σ harm(incumbent))` over committed stops sharing
+the window, where `harm` protects valued tiers — 5/Perks `1.0` > 4 `0.6` > *the
+prospect* > Other `0.1` (unknown `0.4`). So a window jammed with Other-tier stops
+still scores open, while one shared by tier-5/Perks incumbents scores contended.
+
+```
+evaluate_candidates (flag on) -> per feasible route, score each candidate slot as
+                                 its own (route, slot); fold the route's BEST
+                                 scored slot back onto the evaluation so
+                                 route-level ranking reflects the best route-slot
+        |
+        v
+build_route_slot_packet   flatten all feasible route-slots into one indexed menu,
+ (routeslot/evidence.py)  each with per-slot factor values + reference total; name
+                          the deterministic best index
+        |
+        v
+decide_route_slot         deterministic: highest-total route-slot.
+ (routeslot/decide.py)    grounded (use_grounded_judgment on): an LLM picks a
+                          route-slot from the menu (constrained + cited + verified,
+                          one retry, deterministic fallback) — this ABSORBS the
+                          slotpick pass. Recommend vs. escalate stays a
+                          deterministic threshold on the chosen option's own total
+                          (route_slot_score_threshold), so the high-stakes
+                          auto-assign gate remains auditable.
+```
+
+This is the same **constrained-option + grounded + deterministic-fallback**
+pattern as judgment/triage/slotpick, applied to the route-slot unit; the weighted
+total per route-slot is the reference and the fallback. The prior route-only path
+(scoring, `judgment`, `slotpick`) is **untouched** and remains the rollback when
+the flag is off — flag-off reproduces prior output exactly.
+
+**Threshold.** `route_slot_score_threshold` defaults to `0.55`, a touch below the
+route-only `0.60`: dropping the 0.6 window neutral and adding availability shifts
+the score distribution, and ops asked to err slightly toward recommending. On the
+mock accounts the natural separation sits between the designed escalation
+(Galleria, a large order on a near-full route, ≈0.54) and the clean recommends
+(≈0.77–0.83); `0.55` sits at the low end of that gap — auto-recommending as much as
+possible while still catching the genuinely over-full route.
+
 ## Escalation-triage sub-agent (`triage/` package)
 
 The first real multi-agent split. When `recommend_or_escalate` returns

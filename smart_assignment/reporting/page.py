@@ -30,6 +30,7 @@ from smart_assignment.shared.config import (
     DEFAULT_CONFIG,
     FACTOR_CAPACITY_BUFFER,
     FACTOR_GEO_CLUSTERING,
+    FACTOR_SLOT_AVAILABILITY,
     FACTOR_WINDOW_MATCH,
     Config,
 )
@@ -47,6 +48,7 @@ FACTOR_LABEL = {
     FACTOR_GEO_CLUSTERING: "Geographic clustering",
     FACTOR_CAPACITY_BUFFER: "Capacity buffer",
     FACTOR_WINDOW_MATCH: "Slot match (day + time)",
+    FACTOR_SLOT_AVAILABILITY: "Slot availability (openness)",
 }
 DECISION_PILL = {
     Decision.RECOMMENDED: ("rec", "✔ Recommended"),

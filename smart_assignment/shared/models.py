@@ -178,6 +178,28 @@ class SlotOption:
 
 
 @dataclass
+class ScoredSlot:
+    """One candidate slot scored as its own (route, slot) option, for the
+    route-slot scoring path (see shared/scoring.score_route_slot). `total_score`
+    is this slot's weighted total; `factor_scores` its per-slot breakdown
+    (geo/capacity shared from the route, window_match/availability slot-specific).
+    Only populated when `Config.use_route_slot_scoring` is on.
+    """
+
+    slot: SlotOption
+    factor_scores: list[FactorScore]
+    total_score: float
+
+    @property
+    def window(self) -> Window:
+        return self.slot.window
+
+    @property
+    def basis(self) -> str:
+        return self.slot.basis
+
+
+@dataclass
 class CandidateEvaluation:
     """
     Full evaluation trace for a single candidate route: the geo/capacity
@@ -187,6 +209,11 @@ class CandidateEvaluation:
     `chosen_window` is the single recommended slot; `available_slots` is the
     full menu that was considered (with fit + contention), and `window_basis`
     records why `chosen_window` won.
+
+    `scored_slots` is populated only on the route-slot path: each candidate slot
+    scored as its own option. On that path `total_score`, `chosen_window` and
+    `factor_scores` mirror the route's BEST scored slot, so route-level ranking
+    reflects the best obtainable route-slot.
     """
 
     route: Route
@@ -199,6 +226,7 @@ class CandidateEvaluation:
     total_score: float = 0.0
     window_basis: str = ""
     available_slots: list[SlotOption] = field(default_factory=list)
+    scored_slots: list[ScoredSlot] = field(default_factory=list)
 
     @property
     def feasible(self) -> bool:
