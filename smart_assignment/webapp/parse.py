@@ -55,6 +55,12 @@ _DAY_ALIASES.update(
 # "400 cases", "90 case", "order of 150 cases" -> the integer before "case(s)".
 _CASES_RE = re.compile(r"(\d+)\s*cases?\b", re.IGNORECASE)
 
+# Same, for REMOVAL from the address text: also swallow an "order of"/"order for"
+# lead-in so "1200 Main St, order of 150 cases" -> "1200 Main St", and strip the
+# quantity in place so it can share a comma-segment with a city
+# ("Houston. 90 cases" -> "Houston") without dropping that city.
+_ORDER_QTY_RE = re.compile(r"(?:order\s+(?:of|for)\s+)?\b\d+\s*cases?\b", re.IGNORECASE)
+
 # A time window like "07:00-10:00", "7:00 - 10:00", "07:00–10:00" (en dash),
 # "7-10" or "7am-10am". Captures the two endpoints.
 _WINDOW_RE = re.compile(
@@ -132,24 +138,24 @@ def _extract_address(text: str, cases: Optional[int]) -> Optional[str]:
 
     A prospect message typically looks like
     ``"1200 McKinney St, Houston, TX 77010, 90 cases, TUE 07:00-10:00"``.
-    We drop the segments that clearly encode the order quantity or the slot and
-    treat the remaining street/city/state/zip segments as the address. Requires
-    a leading street number to avoid mistaking a bare "Houston" for an address.
+    We drop the segments that clearly encode a time window or a bare day of week
+    (slot info), and strip the order-quantity token *in place* from whatever
+    segment carries it -- so a city that shares that segment (e.g.
+    ``"Houston. 90 cases"``) is kept, not dropped along with the quantity.
+    Requires a leading street number to avoid mistaking free text for an address.
     """
-    parts = [p.strip() for p in text.split(",") if p.strip()]
     kept: list[str] = []
-    for part in parts:
+    for part in (p.strip() for p in text.split(",")):
         low = part.lower()
-        if _CASES_RE.search(low):
+        # Whole-segment slot info: a day-only segment, or one carrying a time
+        # window, is not address text.
+        if low in _DAY_ALIASES or _WINDOW_RE.search(low):
             continue
-        if _WINDOW_RE.search(low):
-            continue
-        # A segment that is only a day name ("TUE") is slot info, not address.
-        if low in _DAY_ALIASES:
-            continue
-        # "TUE 07:00-10:00" with no comma between day and window: strip a
-        # leading day token if the rest is empty afterwards.
-        kept.append(part)
+        # Strip just the order-quantity token, keeping any address text with it.
+        cleaned = _ORDER_QTY_RE.sub(" ", part)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip(" .;-")
+        if cleaned and re.search(r"[A-Za-z0-9]", cleaned):
+            kept.append(cleaned)
     candidate = ", ".join(kept).strip()
     if not candidate:
         return None

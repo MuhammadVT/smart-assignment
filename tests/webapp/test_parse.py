@@ -32,6 +32,23 @@ def test_slot_is_optional():
     assert res.missing == []
 
 
+def test_city_is_kept_when_it_shares_a_segment_with_the_order_quantity():
+    # Regression: "Houston. 90 cases" was one comma-segment, and dropping the
+    # whole segment for containing "90 cases" also dropped the city, leaving a
+    # bare "1200 McKinney St" that the live geocoder can't match.
+    res = parse_intake("1200 McKinney St, Houston. 90 cases")
+    assert res.profile is not None
+    assert res.profile.address == "1200 McKinney St, Houston"
+    assert res.profile.order_quantity_cases == 90
+
+
+def test_order_of_lead_in_is_not_left_in_the_address():
+    res = parse_intake("1200 Main St, order of 150 cases")
+    assert res.profile is not None
+    assert res.profile.address == "1200 Main St"
+    assert res.profile.order_quantity_cases == 150
+
+
 def test_missing_cases_asks_for_them():
     res = parse_intake("1200 McKinney St, Houston, TX 77010")
     assert res.profile is None
