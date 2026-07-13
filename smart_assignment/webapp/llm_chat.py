@@ -219,7 +219,24 @@ class LlmChatService:
             user_id=_USER_ID,
             session_id=session_id,
             new_message=new_message,
-            run_config=RunConfig(streaming_mode=StreamingMode.SSE),
+            # Run the model in NON-streaming mode -- exactly what ``adk web`` does
+            # by default (its dev UI sends ``streaming=false`` unless "Token
+            # Streaming" is toggled on, so ADK builds
+            # ``RunConfig(streaming_mode=NONE)``). Two reasons this is the right
+            # choice here, not a downgrade:
+            #   1. Parity + robustness. Some LiteLLM-backed models (e.g. the Sage
+            #      path) raise inside LiteLLM's async streaming handler
+            #      ("'coroutine' object is not an iterator") when token streaming
+            #      is requested. ``adk web`` avoids it by defaulting to NONE; when
+            #      this service forced ``StreamingMode.SSE`` it hit that bug on
+            #      every turn and silently fell back to the deterministic brain --
+            #      the web-app-vs-``adk web`` divergence users saw.
+            #   2. No lost behavior. The browser-facing SSE stream is emitted by
+            #      THIS method (one frame per tool call / completed message); it
+            #      does not depend on model token streaming. The loop below only
+            #      emits aggregated, non-partial events anyway, so requesting
+            #      token streaming bought nothing while adding a failure mode.
+            run_config=RunConfig(streaming_mode=StreamingMode.NONE),
         ):
             # Human-in-the-loop: request_input surfaces as a long-running call.
             if getattr(event, "long_running_tool_ids", None):
