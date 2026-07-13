@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional
 
-from smart_assignment.integrations.geocoding_client import MockGeocoder
+from smart_assignment.integrations.geocoding_client import resolve_geocoder
 from smart_assignment.integrations.route_capacity_client import fetch_candidate_routes
 from smart_assignment.shared.config import DEFAULT_CONFIG, Config
 from smart_assignment.shared.constraints import (
@@ -229,7 +229,7 @@ def run_slot_recommendation(
     weighted deterministic result, so this still runs fully offline.
     """
     config = config or DEFAULT_CONFIG
-    geocoder = geocoder or MockGeocoder()
+    geocoder = geocoder or resolve_geocoder()
     # LLM-backed reasoning by default; it transparently falls back to the
     # deterministic trace when GOOGLE_API_KEY / Vertex credentials are absent,
     # so this still runs fully offline.
