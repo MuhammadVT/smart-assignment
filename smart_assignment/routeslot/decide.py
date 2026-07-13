@@ -4,16 +4,19 @@ recommend-vs-escalate. This supersedes the two-stage "judge the route, then pick
 the slot" flow when `Config.use_route_slot_scoring` is on -- the slot choice is
 absorbed into one grounded decision over route-slot options.
 
-  - Deterministic (always the floor): the highest-total route-slot; escalate if
-    its own total is below `route_slot_score_threshold`.
-  - Grounded (`use_grounded_judgment` on): an LLM picks a route-slot from the
-    enumerated options (constrained to the valid set, grounded + verified), with
-    the deterministic best as reference and fallback. The recommend/escalate gate
-    stays deterministic (a threshold on the chosen option's own total), so the
-    high-stakes auto-assign decision remains auditable.
+The recommend-vs-escalate boundary is a DETERMINISTIC threshold
+(`route_slot_score_threshold`): a route-slot must clear it to auto-assign. The LLM
+reasons only over the route-slots that already clear the bar -- so its pick is
+always auto-assignable, and it can never *cause* an escalation. Escalation is
+decided before/without the LLM:
 
-Any parse/verify/backend failure falls back to the deterministic best, logged --
-so it is never worse than the flag being off.
+  - no feasible route at all          -> ESCALATED_NO_FEASIBLE_SLOT
+  - feasible route, but no slot built -> ESCALATED_NO_FEASIBLE_SLOT (distinct reason)
+  - feasible route-slots, none clear  -> ESCALATED_LOW_SCORE (deterministic best
+                                         proposed for the specialist; no LLM call)
+  - >= 1 route-slot clears the bar     -> RECOMMENDED (LLM picks among the eligible
+                                         ones when grounded; else the deterministic
+                                         best), with verify + deterministic fallback.
 """
 
 from __future__ import annotations
@@ -57,18 +60,29 @@ def decide_route_slot(
     choice_fn: Optional[ChoiceFn] = None,
 ) -> SlotRecommendation:
     """Decide over route-slot options. `choice_fn` is only consulted when
-    `config.use_grounded_judgment` is on; it defaults to the real backend call."""
+    `config.use_grounded_judgment` is on AND at least one route-slot clears the
+    auto-assign bar; it defaults to the real backend call."""
     if not any(e.feasible for e in evaluations):
-        return _no_feasible(customer, evaluations)
+        return _escalate_no_feasible(customer, evaluations)
 
-    packet = build_route_slot_packet(customer, evaluations, config)
-    if packet.n == 0:  # feasible routes but no candidate slots -- defensive
-        return _no_feasible(customer, evaluations)
+    all_pairs = _all_route_slots(evaluations)
+    if not all_pairs:
+        # Serviceable route(s), but no delivery window could be constructed.
+        return _escalate_no_slot(customer, evaluations)
 
+    threshold = config.route_slot_score_threshold
+    eligible = [p for p in all_pairs if p.scored.total_score >= threshold]
+    if not eligible:
+        # Nothing clears the bar -- escalate, proposing the deterministic best for
+        # the specialist. The LLM is not consulted (it only reasons over recommendable
+        # options).
+        return _escalate_low_score(customer, all_pairs, evaluations, config)
+
+    # >= 1 route-slot is auto-assignable. The LLM reasons over ONLY these.
+    packet = build_route_slot_packet(customer, evaluations, config, min_score=threshold)
+    index = 0  # deterministic best (packet is sorted by descending total)
     grounded_rationale: Optional[str] = None
     grounded_fallback_reason: Optional[str] = None
-    index = 0  # deterministic best (packet is sorted by descending total)
-
     if config.use_grounded_judgment:
         picked, rationale, reason = _grounded_index(packet, config, choice_fn)
         if picked is not None:
@@ -77,14 +91,25 @@ def decide_route_slot(
             grounded_fallback_reason = reason
 
     chosen = packet.option_at(index)
-    rec = _to_recommendation(customer, chosen, packet, config, grounded_rationale)
+    rec = _recommend(customer, chosen, all_pairs, evaluations, grounded_rationale)
     if grounded_fallback_reason is not None:
         rec.grounded_fallback = True
         rec.grounded_fallback_reason = grounded_fallback_reason
     return rec
 
 
-# --- grounded selection ------------------------------------------------------
+def _all_route_slots(evaluations: list[CandidateEvaluation]) -> list[RouteSlotOption]:
+    pairs = [
+        RouteSlotOption(evaluation=ev, scored=s)
+        for ev in evaluations
+        if ev.feasible
+        for s in ev.scored_slots
+    ]
+    pairs.sort(key=lambda p: p.scored.total_score, reverse=True)
+    return pairs
+
+
+# --- grounded selection (over the eligible, above-threshold options) ---------
 
 
 def _grounded_index(
@@ -124,30 +149,26 @@ def _grounded_index(
     return choice.chosen_index, choice.rationale, None
 
 
-# --- mapping to a SlotRecommendation -----------------------------------------
+# --- recommendation + escalations --------------------------------------------
 
 
-def _to_recommendation(
+def _recommend(
     customer: CustomerProfile,
     chosen: RouteSlotOption,
-    packet: RouteSlotPacket,
-    config: Config,
+    all_pairs: list[RouteSlotOption],
+    evaluations: list[CandidateEvaluation],
     grounded_rationale: Optional[str],
 ) -> SlotRecommendation:
     ev = chosen.evaluation
     route = ev.route
     scored = chosen.scored
-    total = round(scored.total_score, 2)
-    escalate = scored.total_score < config.route_slot_score_threshold
-    decision = Decision.ESCALATED_LOW_SCORE if escalate else Decision.RECOMMENDED
-
     reasoning = grounded_rationale or _deterministic_reasoning(chosen)
     return SlotRecommendation(
         customer_number=customer.customer_number,
         customer_address=customer.address,
         customer_name=customer.name,
-        decision=decision,
-        total_score=total,
+        decision=Decision.RECOMMENDED,
+        total_score=round(scored.total_score, 2),
         reasoning=reasoning,
         recommended_route_id=route.route_id,
         recommended_route_name=route.name,
@@ -156,51 +177,68 @@ def _to_recommendation(
         recommended_window_basis=scored.slot.basis or None,
         recommended_window_rationale=grounded_rationale,
         factor_breakdown=scored.factor_scores,
-        rejected_alternatives=_rejected(packet, chosen),
+        rejected_alternatives=_rejected(all_pairs, _key(chosen), evaluations),
+        review_reason=None,
+    )
+
+
+def _escalate_low_score(
+    customer: CustomerProfile,
+    all_pairs: list[RouteSlotOption],
+    evaluations: list[CandidateEvaluation],
+    config: Config,
+) -> SlotRecommendation:
+    best = all_pairs[0]  # highest total, but below the bar
+    ev = best.evaluation
+    scored = best.scored
+    bar = config.route_slot_score_threshold
+    return SlotRecommendation(
+        customer_number=customer.customer_number,
+        customer_address=customer.address,
+        customer_name=customer.name,
+        decision=Decision.ESCALATED_LOW_SCORE,
+        total_score=round(scored.total_score, 2),
+        reasoning=_deterministic_reasoning(best),
+        recommended_route_id=ev.route.route_id,
+        recommended_route_name=ev.route.name,
+        recommended_day=ev.route.day.value,
+        recommended_window=fmt_window(scored.slot.window),
+        recommended_window_basis=scored.slot.basis or None,
+        factor_breakdown=scored.factor_scores,
+        rejected_alternatives=_rejected(all_pairs, _key(best), evaluations),
         review_reason=(
-            f"Best route-slot scored {total:.0%}, below the "
-            f"{config.route_slot_score_threshold:.0%} auto-assign bar."
-            if escalate
-            else None
+            f"No route-slot cleared the {bar:.0%} auto-assign bar "
+            f"(best {scored.total_score:.0%}). Surfacing the strongest option for a specialist."
         ),
     )
 
 
-def _deterministic_reasoning(chosen: RouteSlotOption) -> str:
-    route = chosen.evaluation.route
-    top = max(chosen.scored.factor_scores, key=lambda fs: fs.weighted)
-    return (
-        f"{route.name} ({route.day.value}) at {fmt_window(chosen.scored.slot.window)} is the "
-        f"strongest route-slot overall; {top.detail}."
+def _escalate_no_slot(
+    customer: CustomerProfile, evaluations: list[CandidateEvaluation]
+) -> SlotRecommendation:
+    """Feasible route(s) exist, but none produced a candidate delivery slot -- its
+    own escalation reason, distinct from the no-feasible-route case."""
+    return SlotRecommendation(
+        customer_number=customer.customer_number,
+        customer_address=customer.address,
+        customer_name=customer.name,
+        decision=Decision.ESCALATED_NO_FEASIBLE_SLOT,
+        total_score=0.0,
+        reasoning=(
+            "A serviceable route was found, but no delivery window could be constructed "
+            "from its committed stops -- a routing specialist is needed to place a slot."
+        ),
+        rejected_alternatives=_infeasible_lines(evaluations),
+        review_reason=(
+            "Serviceable route(s) found, but no delivery window could be built from their "
+            "committed stops."
+        ),
     )
 
 
-def _rejected(packet: RouteSlotPacket, chosen: RouteSlotOption) -> list[str]:
-    out: list[str] = []
-    for i, opt in enumerate(packet.options):
-        p = packet.option_at(i)
-        if p is chosen:
-            continue
-        out.append(
-            f"{opt['route_id']} ({opt['day']}) {opt['window']}: route-slot scored "
-            f"{opt['facts']['reference_weighted_score']:.2f}"
-        )
-    for c in packet.infeasible:
-        failed = ", ".join(fc["name"] for fc in c.get("failed_constraints", []))
-        out.append(f"{c['route_id']} ({c['day']}): infeasible — {failed}")
-    return out
-
-
-def _no_feasible(
+def _escalate_no_feasible(
     customer: CustomerProfile, evaluations: list[CandidateEvaluation]
 ) -> SlotRecommendation:
-    rejected = []
-    for ev in evaluations:
-        if not ev.feasible:
-            failed = ", ".join(
-                CONSTRAINT_LABEL.get(c.name, c.name) for c in ev.failed_constraints
-            )
-            rejected.append(f"{ev.route.route_id} ({ev.route.day.value}): infeasible — {failed}")
     return SlotRecommendation(
         customer_number=customer.customer_number,
         customer_address=customer.address,
@@ -208,6 +246,50 @@ def _no_feasible(
         decision=Decision.ESCALATED_NO_FEASIBLE_SLOT,
         total_score=0.0,
         reasoning="No candidate route satisfied all hard constraints.",
-        rejected_alternatives=rejected,
+        rejected_alternatives=_infeasible_lines(evaluations),
         review_reason="No candidate route satisfied all hard constraints.",
     )
+
+
+# --- helpers -----------------------------------------------------------------
+
+
+def _key(option: RouteSlotOption) -> tuple:
+    return (option.evaluation.route.route_id, fmt_window(option.scored.slot.window))
+
+
+def _deterministic_reasoning(option: RouteSlotOption) -> str:
+    route = option.evaluation.route
+    top = max(option.scored.factor_scores, key=lambda fs: fs.weighted)
+    return (
+        f"{route.name} ({route.day.value}) at {fmt_window(option.scored.slot.window)} is the "
+        f"strongest route-slot overall; {top.detail}."
+    )
+
+
+def _rejected(
+    all_pairs: list[RouteSlotOption],
+    chosen_key: tuple,
+    evaluations: list[CandidateEvaluation],
+) -> list[str]:
+    out: list[str] = []
+    for p in all_pairs:
+        if _key(p) == chosen_key:
+            continue
+        out.append(
+            f"{p.evaluation.route.route_id} ({p.evaluation.route.day.value}) "
+            f"{fmt_window(p.scored.slot.window)}: route-slot scored {p.scored.total_score:.2f}"
+        )
+    out.extend(_infeasible_lines(evaluations))
+    return out
+
+
+def _infeasible_lines(evaluations: list[CandidateEvaluation]) -> list[str]:
+    lines: list[str] = []
+    for ev in evaluations:
+        if not ev.feasible:
+            failed = ", ".join(
+                CONSTRAINT_LABEL.get(c.name, c.name) for c in ev.failed_constraints
+            )
+            lines.append(f"{ev.route.route_id} ({ev.route.day.value}): infeasible — {failed}")
+    return lines

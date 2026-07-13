@@ -39,6 +39,15 @@ def test_packet_enumerates_all_feasible_route_slots_sorted_by_total():
             assert k in o["facts"]
 
 
+def test_min_score_filters_the_menu_to_above_threshold_options():
+    # Totals present: 0.80, 0.66, 0.60. A 0.65 floor keeps only the first two.
+    full = build_route_slot_packet(customer(), _evals(), Config())
+    assert full.n == 3
+    filtered = build_route_slot_packet(customer(), _evals(), Config(), min_score=0.65)
+    assert filtered.n == 2
+    assert all(o["facts"]["reference_weighted_score"] >= 0.65 for o in filtered.options)
+
+
 def test_parse_valid_and_malformed_choices():
     ok = parse_route_slot_choice({
         "chosen_index": 2,

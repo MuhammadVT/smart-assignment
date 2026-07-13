@@ -83,15 +83,19 @@ def build_route_slot_packet(
     customer: CustomerProfile,
     evaluations: list[CandidateEvaluation],
     config: Config,
+    min_score: Optional[float] = None,
 ) -> RouteSlotPacket:
-    """Enumerate every feasible route-slot as an indexed option for the grounded
-    decision. Options are ordered by descending deterministic total so index 0 is
-    typically the deterministic pick, but the pick is named explicitly."""
+    """Enumerate feasible route-slots as an indexed option menu for the grounded
+    decision. When ``min_score`` is given, only options whose deterministic total
+    meets it are included -- so the LLM reasons over the auto-assignable
+    (above-threshold) route-slots only. Options are ordered by descending total so
+    index 0 is the deterministic pick, but the pick is named explicitly."""
     pairs: list[RouteSlotOption] = [
         RouteSlotOption(evaluation=ev, scored=s)
         for ev in evaluations
         if ev.feasible
         for s in ev.scored_slots
+        if min_score is None or s.total_score >= min_score
     ]
     pairs.sort(key=lambda p: p.scored.total_score, reverse=True)
 

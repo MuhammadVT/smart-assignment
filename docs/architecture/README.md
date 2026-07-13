@@ -155,15 +155,29 @@ build_route_slot_packet   flatten all feasible route-slots into one indexed menu
                           the deterministic best index
         |
         v
-decide_route_slot         deterministic: highest-total route-slot.
- (routeslot/decide.py)    grounded (use_grounded_judgment on): an LLM picks a
-                          route-slot from the menu (constrained + cited + verified,
-                          one retry, deterministic fallback) — this ABSORBS the
-                          slotpick pass. Recommend vs. escalate stays a
-                          deterministic threshold on the chosen option's own total
-                          (route_slot_score_threshold), so the high-stakes
-                          auto-assign gate remains auditable.
+decide_route_slot         recommend-vs-escalate is a DETERMINISTIC threshold
+ (routeslot/decide.py)    (route_slot_score_threshold); the LLM reasons only over
+                          the route-slots that already clear it. Branches:
+                            · no feasible route            -> ESCALATED_NO_FEASIBLE_SLOT
+                            · feasible route, no slot built -> ESCALATED_NO_FEASIBLE_SLOT
+                                                              (distinct review_reason)
+                            · feasible slots, none ≥ bar    -> ESCALATED_LOW_SCORE
+                                                              (deterministic best proposed;
+                                                               NO llm call)
+                            · ≥1 slot ≥ bar                 -> RECOMMENDED: LLM picks among
+                                                              the eligible (above-bar) menu
+                                                              (constrained + cited + verified,
+                                                              one retry, deterministic fallback);
+                                                              ABSORBS the slotpick pass.
 ```
+
+Because the LLM's menu is filtered to the **above-threshold** options, its pick is
+always auto-assignable — it can never *cause* an escalation, and no grounded call
+is spent on cases that were going to escalate anyway. The recommend/escalate
+boundary stays a deterministic, reproducible threshold, so the high-stakes
+auto-assign gate remains auditable. (Whether the LLM should additionally
+*re-decide* marginal escalations with k-sample resampling, as `judgment/` does, is
+a deferred option; today it only selects among the recommendable route-slots.)
 
 This is the same **constrained-option + grounded + deterministic-fallback**
 pattern as judgment/triage/slotpick, applied to the route-slot unit; the weighted
