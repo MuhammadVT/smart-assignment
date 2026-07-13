@@ -36,9 +36,10 @@ from smart_assignment.shared.models import (
     Decision,
     RecommendationResult,
     Route,
+    ScoredSlot,
     SlotRecommendation,
 )
-from smart_assignment.shared.scoring import score_candidate
+from smart_assignment.shared.scoring import score_candidate, score_route_slot
 from smart_assignment.shared.timeutils import fmt_window
 from smart_assignment.reasoning import LLMReasoner, Reasoner, compute_total_score
 
@@ -106,8 +107,35 @@ def evaluate_candidates(
             breakdown, total = score_candidate(customer, route, ctx, config)
             evaluation.factor_scores = breakdown
             evaluation.total_score = total
+            if config.use_route_slot_scoring:
+                _apply_route_slot_scores(customer, route, ctx, evaluation, config)
         evaluations.append(evaluation)
     return evaluations
+
+
+def _apply_route_slot_scores(
+    customer: CustomerProfile,
+    route: Route,
+    ctx,
+    evaluation: CandidateEvaluation,
+    config: Config,
+) -> None:
+    """Score each candidate slot as its own (route, slot) option and fold the
+    route's BEST scored slot back onto the evaluation, so route-level ranking and
+    the existing serialization reflect the best obtainable route-slot."""
+    scored = [
+        ScoredSlot(slot=slot, factor_scores=fb, total_score=tot)
+        for slot in evaluation.available_slots
+        for fb, tot in [score_route_slot(customer, route, ctx, slot, config)]
+    ]
+    if not scored:
+        return
+    evaluation.scored_slots = scored
+    best = max(scored, key=lambda s: s.total_score)
+    evaluation.total_score = best.total_score
+    evaluation.factor_scores = best.factor_scores
+    evaluation.chosen_window = best.slot.window
+    evaluation.window_basis = best.slot.basis
 
 
 def rank_feasible(evaluations: list[CandidateEvaluation]) -> list[CandidateEvaluation]:
@@ -219,18 +247,28 @@ def run_slot_recommendation(
     all_routes = routes if routes is not None else fetch_candidate_routes()
     candidates = geo_lookup(customer, all_routes, geocoder, config)
     evaluations = evaluate_candidates(customer, candidates, config)
-    if judge is not None:
-        recommendation = judge.decide(customer, evaluations, config)
+
+    if config.use_route_slot_scoring and judge is None:
+        # The decision unit is the (route, slot) pair: one grounded decision over
+        # route-slot options that also absorbs the slot pick (see the `routeslot`
+        # package). Its own grounded/deterministic + fallback logic is internal,
+        # so slotpick's separate pass is skipped here.
+        from smart_assignment.routeslot import decide_route_slot
+
+        recommendation = decide_route_slot(customer, evaluations, config)
     else:
-        recommendation = decide(customer, evaluations, reasoner, config)
+        if judge is not None:
+            recommendation = judge.decide(customer, evaluations, config)
+        else:
+            recommendation = decide(customer, evaluations, reasoner, config)
 
-    # Optionally let an LLM pick the winning route's final slot from its
-    # candidate menu (constrained + grounded); a no-op unless
-    # use_grounded_slot_selection is on, and it never changes the route/score.
-    if config.use_grounded_slot_selection:
-        from smart_assignment.slotpick import refine_slot
+        # Optionally let an LLM pick the winning route's final slot from its
+        # candidate menu (constrained + grounded); a no-op unless
+        # use_grounded_slot_selection is on, and it never changes the route/score.
+        if config.use_grounded_slot_selection:
+            from smart_assignment.slotpick import refine_slot
 
-        refine_slot(recommendation, evaluations, customer, config)
+            refine_slot(recommendation, evaluations, customer, config)
 
     return RecommendationResult(
         customer=customer,

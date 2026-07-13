@@ -14,10 +14,14 @@ import os
 from dataclasses import dataclass, field, replace
 from typing import Optional
 
-# Canonical names of the three weighted scoring factors (spec step 4).
+# Canonical names of the weighted scoring factors (spec step 4).
 FACTOR_GEO_CLUSTERING = "geographic_clustering"
 FACTOR_CAPACITY_BUFFER = "capacity_buffer"
 FACTOR_WINDOW_MATCH = "window_match"
+# The route-slot scoring path (Config.use_route_slot_scoring) adds a fourth,
+# slot-level factor: how OPEN the candidate window is (few/low-tier committed
+# stops already in it). See shared/scoring.slot_availability.
+FACTOR_SLOT_AVAILABILITY = "slot_availability"
 
 # Canonical role names for per-task model selection (see Config.for_role). Each
 # LLM-using surface passes its role so the right model can be assigned to the
@@ -158,6 +162,41 @@ class Config:
     # to the deterministic pick on any failure. Off by default.
     use_grounded_slot_selection: bool = False
 
+    # --- Route-slot scoring (optional; supersedes route-only scoring) ---
+    # When True, the decision unit becomes the (route, slot) PAIR: every
+    # candidate slot on every feasible route is scored separately, so slot
+    # availability influences which ROUTE wins -- not just which slot within an
+    # already-chosen route (see the `routeslot` package). geo/capacity are
+    # route-level (shared across a route's slots); window_match and
+    # slot_availability are slot-level. When on, window_match is dropped entirely
+    # for a prospect with no stated preference (instead of the 0.6 neutral), and
+    # the grounded route-slot decision absorbs the separate slotpick pass. Off
+    # reproduces the prior route-only behavior exactly.
+    use_route_slot_scoring: bool = False
+    # Route-slot factor weights (kept SEPARATE from factor_weights so the legacy
+    # route-only path is byte-identical when the flag is off). Normalized over
+    # whichever factors are active (window_match only when a preference exists).
+    rs_weight_geo: float = 0.35
+    rs_weight_capacity: float = 0.25
+    rs_weight_window: float = 0.20
+    rs_weight_availability: float = 0.20
+    # Slot-openness "harm" weights: how costly it is to add the prospect to a
+    # window already claimed by a committed stop of each tier. Higher = protect
+    # more. Ordering per ops: tier 5 / Perks (most valued) > tier 4 > the prospect
+    # itself > Other (lowest). So crowding an Other-tier stop is nearly free,
+    # while crowding a tier-5/Perks stop is heavily penalized. openness =
+    # 1 / (1 + sum of harm weights over overlapping committed stops).
+    slot_tier_harm_high: float = 1.0  # tier "5" / "Perks"
+    slot_tier_harm_mid: float = 0.6  # tier "4"
+    slot_tier_harm_low: float = 0.1  # "Other"
+    slot_tier_harm_unknown: float = 0.4  # tier not known (missing in data)
+    # Auto-assign bar for the route-slot path (the chosen route-slot's own total
+    # must meet it, else escalate). Deliberately a touch LOWER than the legacy
+    # total_score_threshold: the new composition drops the 0.6 window neutral and
+    # adds an availability term, shifting the score distribution, and ops asked to
+    # err slightly toward recommending. See routeslot/decide.py.
+    route_slot_score_threshold: float = 0.55
+
     # --- Decision / escalation ---
     # The winning route's own total_score (see shared/scoring.score_candidate)
     # must meet this bar to auto-assign; below it, the agent escalates to a
@@ -225,6 +264,20 @@ class Config:
     # standard); the backend itself stays global.
     role_models: dict[str, str] = field(default_factory=dict)
 
+    def tier_harm_weight(self, tier: Optional[str]) -> float:
+        """Harm weight for crowding a committed stop of the given Sysco tier --
+        how much to protect it when scoring slot openness. Unknown/absent tiers
+        get the neutral fallback so the metric degrades gracefully where tier
+        data is missing (mock/phase-A routes)."""
+        key = (tier or "").strip().lower()
+        if key in ("5", "perks"):
+            return self.slot_tier_harm_high
+        if key == "4":
+            return self.slot_tier_harm_mid
+        if key == "other":
+            return self.slot_tier_harm_low
+        return self.slot_tier_harm_unknown
+
     def for_role(self, role: str) -> "Config":
         """A copy of this config with the active model field overridden by the
         per-role model, if one is configured for ``role``; otherwise ``self``.
@@ -267,6 +320,18 @@ class Config:
             slot_weight_preference=_float_env("SMART_ASSIGNMENT_SLOT_WEIGHT_PREFERENCE", 0.3),
             use_grounded_slot_selection=_bool_env(
                 "SMART_ASSIGNMENT_USE_GROUNDED_SLOT_SELECTION", False
+            ),
+            use_route_slot_scoring=_bool_env("SMART_ASSIGNMENT_USE_ROUTE_SLOT_SCORING", False),
+            rs_weight_geo=_float_env("SMART_ASSIGNMENT_RS_WEIGHT_GEO", 0.35),
+            rs_weight_capacity=_float_env("SMART_ASSIGNMENT_RS_WEIGHT_CAPACITY", 0.25),
+            rs_weight_window=_float_env("SMART_ASSIGNMENT_RS_WEIGHT_WINDOW", 0.20),
+            rs_weight_availability=_float_env("SMART_ASSIGNMENT_RS_WEIGHT_AVAILABILITY", 0.20),
+            slot_tier_harm_high=_float_env("SMART_ASSIGNMENT_SLOT_HARM_HIGH", 1.0),
+            slot_tier_harm_mid=_float_env("SMART_ASSIGNMENT_SLOT_HARM_MID", 0.6),
+            slot_tier_harm_low=_float_env("SMART_ASSIGNMENT_SLOT_HARM_LOW", 0.1),
+            slot_tier_harm_unknown=_float_env("SMART_ASSIGNMENT_SLOT_HARM_UNKNOWN", 0.4),
+            route_slot_score_threshold=_float_env(
+                "SMART_ASSIGNMENT_ROUTE_SLOT_SCORE_THRESHOLD", 0.55
             ),
             total_score_threshold=_float_env("SMART_ASSIGNMENT_TOTAL_SCORE_THRESHOLD", 0.60),
             use_grounded_judgment=_bool_env("SMART_ASSIGNMENT_USE_GROUNDED_JUDGMENT", False),

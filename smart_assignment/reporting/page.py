@@ -30,6 +30,7 @@ from smart_assignment.shared.config import (
     DEFAULT_CONFIG,
     FACTOR_CAPACITY_BUFFER,
     FACTOR_GEO_CLUSTERING,
+    FACTOR_SLOT_AVAILABILITY,
     FACTOR_WINDOW_MATCH,
     Config,
 )
@@ -47,6 +48,7 @@ FACTOR_LABEL = {
     FACTOR_GEO_CLUSTERING: "Geographic clustering",
     FACTOR_CAPACITY_BUFFER: "Capacity buffer",
     FACTOR_WINDOW_MATCH: "Slot match (day + time)",
+    FACTOR_SLOT_AVAILABILITY: "Slot availability (openness)",
 }
 DECISION_PILL = {
     Decision.RECOMMENDED: ("rec", "✔ Recommended"),
@@ -613,6 +615,25 @@ def _example_card(result: RecommendationResult, include_routes: bool = True) -> 
       </article>"""
 
 
+def _route_slot_score_lines(ranked_feasible) -> list[str]:
+    """Score & Rank narrative for the route-slot path: every candidate slot on
+    every feasible route, scored as its own (route, slot) option."""
+    lines = ["Each candidate SLOT on each feasible route is scored as its own (route, slot) option:"]
+    for e in ranked_feasible:
+        for ss in sorted(e.scored_slots, key=lambda s: s.total_score, reverse=True):
+            lines.append(
+                f"• <b>{_esc(e.route.route_id)} · {_esc(e.route.name)}</b> @ "
+                f"{_win(fmt_window(ss.slot.window))} → route-slot score <b>{ss.total_score:.2f}</b>"
+            )
+            parts = " · ".join(
+                f"{FACTOR_LABEL.get(fs.name, fs.name).split(' (')[0].lower()} {fs.value:.2f}"
+                f"<span style=\"color:var(--muted)\">×{fs.weight:.2f}</span>"
+                for fs in ss.factor_scores
+            )
+            lines.append(f'<span class="calc">↳ {parts}</span>')
+    return lines
+
+
 def _sim_steps(result: RecommendationResult, config: Config) -> list[dict]:
     c = result.customer
     rec = result.recommendation
@@ -659,7 +680,9 @@ def _sim_steps(result: RecommendationResult, config: Config) -> list[dict]:
                 f'• {_esc(e.route.route_id)}: <span class="no">INFEASIBLE</span> — failed {_esc(failed)}'
             )
 
-    if result.ranked_feasible:
+    if result.ranked_feasible and config.use_route_slot_scoring:
+        score = _route_slot_score_lines(result.ranked_feasible)
+    elif result.ranked_feasible:
         score = ["Each dimension is normalized to 0–1, then combined by weight:"]
         for e in result.ranked_feasible:
             ctx = build_context(c, e.route, config)
@@ -714,10 +737,13 @@ def _sim_steps(result: RecommendationResult, config: Config) -> list[dict]:
     else:
         score = ["No feasible routes survived the hard rules — nothing to score."]
 
+    rs = config.use_route_slot_scoring
+    bar = config.route_slot_score_threshold if rs else config.total_score_threshold
+    winner_label = "winning route-slot" if rs else "winning route"
     decide = [
         f"Decision: <b>{DECISION_SHORT[rec.decision]}</b>",
-        f"Total score for the winning route: <b>{rec.total_score:.0%}</b> "
-        f"(auto-assign bar {config.total_score_threshold:.0%})",
+        f"Total score for the {winner_label}: <b>{rec.total_score:.0%}</b> "
+        f"(auto-assign bar {bar:.0%})",
     ]
     if rec.recommended_route_id:
         decide.append(
@@ -745,18 +771,94 @@ def _sim_steps(result: RecommendationResult, config: Config) -> list[dict]:
         },
         {
             "title": "Score & Rank",
-            "action": "The agent scores each feasible route on the weighted factors (with the math) and ranks them.",
+            "action": (
+                "The agent scores each feasible (route, slot) pair on the weighted factors "
+                "— including slot availability — and ranks them."
+                if config.use_route_slot_scoring
+                else "The agent scores each feasible route on the weighted factors (with the math) "
+                "and ranks them."
+            ),
             "lines": score,
         },
         {
             "title": "Recommend / Decide",
-            "action": "The agent picks the best slot, checks its total score against the auto-assign bar, and decides.",
+            "action": (
+                "The agent picks the best route-slot, checks its total against the auto-assign "
+                "bar, and decides."
+                if config.use_route_slot_scoring
+                else "The agent picks the best slot, checks its total score against the auto-assign "
+                "bar, and decides."
+            ),
             "lines": decide,
         },
     ]
 
 
+def _scoring_section_route_slot(config: Config) -> str:
+    """The 'how the agent scores' explainer for the route-slot path: the unit is
+    a (route, slot) pair, geo/capacity are route-level, window_match and slot
+    availability are slot-level, and window_match is dropped without a preference."""
+    gw = config.rs_weight_geo
+    cw = config.rs_weight_capacity
+    ww = config.rs_weight_window
+    aw = config.rs_weight_availability
+    cref = config.cluster_reference_miles
+    thr = config.route_slot_score_threshold
+    ceiling = config.max_utilization_after_assignment
+    safe = ceiling - config.capacity_buffer_safety_margin
+    hi = config.slot_tier_harm_high
+    mid = config.slot_tier_harm_mid
+    lo = config.slot_tier_harm_low
+    unk = config.slot_tier_harm_unknown
+    return f"""
+    <span class="eyebrow">How the agent scores &amp; ranks</span>
+    <h2>Every route-<em>slot</em> is scored on its own</h2>
+    <p class="sub">The decision unit is the <b>(route, time-slot) pair</b>: each candidate slot on each
+      feasible route is scored separately, so a route's <em>slot availability</em> — not just its capacity and
+      location — decides which route wins. Two factors are <b>route-level</b> (shared by all of a route's
+      slots) and two are <b>slot-level</b>. Each is normalized to 0–1 and combined by weight; deterministic
+      Python, same inputs → same score.</p>
+    <div class="grid-2">
+      <div class="card"><div class="icon">🧭</div><h3>Geographic clustering · weight {gw:.2f} <span
+        style="font-size:11px;color:var(--muted)">route-level</span></h3>
+        <p>How tightly the customer sits within the route's existing cluster of stops. Closer = higher.</p>
+        <div class="formula">score = clamp( 1 − <b>avg_miles_to_stops</b> ÷ {cref:.0f} , 0, 1 )</div></div>
+      <div class="card"><div class="icon">🛡️</div><h3>Capacity buffer · weight {cw:.2f} <span
+        style="font-size:11px;color:var(--muted)">route-level</span></h3>
+        <p>How safely under the capacity ceiling the truck stays once this order is added. Flat while
+          comfortably safe (≤ {safe:.0%} full), decaying to 0 at the {ceiling:.0%} ceiling.</p></div>
+      <div class="card"><div class="icon">🎯</div><h3>Slot match (day + time) · weight {ww:.2f} <span
+        style="font-size:11px;color:var(--muted)">slot-level</span></h3>
+        <p>How much <b>this</b> slot covers the customer's preferred day + time window. The day is a gate;
+          then it's the overlap fraction. <b>Dropped entirely</b> when the prospect states no preference — the
+          score simply renormalizes over the other factors (no arbitrary neutral value).</p></div>
+      <div class="card"><div class="icon">🪟</div><h3>Slot availability · weight {aw:.2f} <span
+        style="font-size:11px;color:var(--muted)">slot-level</span></h3>
+        <p>How <b>open</b> this slot is — few / low-tier committed stops already in it. Weighted so we avoid
+          crowding the most valued customers.</p>
+        <div class="formula">openness = 1 ÷ ( 1 + <b>Σ harm(incumbent)</b> over stops sharing the window )</div>
+        <p style="margin-top:8px;font-size:12.5px">Harm per overlapping committed stop, by tier:
+          <b>5 / Perks {hi:.1f}</b> &gt; <b>4 {mid:.1f}</b> &gt; the prospect &gt; <b>Other {lo:.1f}</b>
+          (unknown {unk:.1f}). A window full of Other-tier stops still scores open; one shared by tier-5 /
+          Perks incumbents scores contended.</p></div>
+    </div>
+
+    <div style="height:16px"></div>
+    <div class="card">
+      <h3 style="margin-top:0">Best route-slot, then the auto-assign decision</h3>
+      <div class="formula">total = ( {gw:.2f}·clustering + {cw:.2f}·capacity + {ww:.2f}·window* + {aw:.2f}·availability ) ÷ Σ&nbsp;active&nbsp;weights</div>
+      <p style="margin-top:14px"><span style="font-size:11px;color:var(--muted)">*window only when a
+        preference is stated; otherwise it's absent and the remaining weights renormalize.</span> The agent
+        picks the highest-scoring route-slot across all feasible routes and <b>auto-assigns</b> when its own
+        total is ≥ {thr:.0%}; otherwise it <b>escalates</b>. When grounded reasoning is enabled an LLM makes
+        the pick from this same enumerated menu (constrained and fact-checked), with the deterministic best as
+        its reference and fallback; the auto-assign bar stays a deterministic threshold.</p>
+    </div>"""
+
+
 def _scoring_section(config: Config) -> str:
+    if config.use_route_slot_scoring:
+        return _scoring_section_route_slot(config)
     gw = config.factor_weights[FACTOR_GEO_CLUSTERING]
     cw = config.factor_weights[FACTOR_CAPACITY_BUFFER]
     ww = config.factor_weights[FACTOR_WINDOW_MATCH]
@@ -836,6 +938,36 @@ def _config_sources(config: Config, results: list[RecommendationResult]) -> str:
         return f'<li><span class="k">{k} <span class="src">— {src}</span></span><span class="v">{v}</span></li>'
 
     safe_utilization = config.max_utilization_after_assignment - config.capacity_buffer_safety_margin
+    if config.use_route_slot_scoring:
+        scoring_rows = [
+            row(
+                "Route-slot weights (geo/cap/win/avail)",
+                f"{config.rs_weight_geo:.2f} / {config.rs_weight_capacity:.2f} / "
+                f"{config.rs_weight_window:.2f} / {config.rs_weight_availability:.2f}",
+                "rs_weight_*",
+            ),
+            row(
+                "Slot-openness harm (5·Perks/4/Other/unknown)",
+                f"{config.slot_tier_harm_high:.1f} / {config.slot_tier_harm_mid:.1f} / "
+                f"{config.slot_tier_harm_low:.1f} / {config.slot_tier_harm_unknown:.1f}",
+                "slot_tier_harm_*",
+            ),
+            row(
+                "Route-slot auto-assign bar",
+                f"{config.route_slot_score_threshold:.0%}",
+                "route_slot_score_threshold",
+            ),
+        ]
+    else:
+        scoring_rows = [
+            row("No-window neutral score", f"{config.window_neutral_score:.2f}", "window_neutral_score"),
+            row("Scoring weights (geo/cap/win)", f"{gw:.2f} / {cw:.2f} / {ww:.2f}", "factor_weights"),
+            row(
+                "Total score threshold (auto-assign bar)",
+                f"{config.total_score_threshold:.0%}",
+                "total_score_threshold",
+            ),
+        ]
     cfg_rows = "".join(
         [
             row("Route capacity ceiling", f"{config.max_utilization_after_assignment:.0%}", "max_utilization_after_assignment"),
@@ -845,13 +977,7 @@ def _config_sources(config: Config, results: list[RecommendationResult]) -> str:
                 "capacity_buffer_safety_margin",
             ),
             row("Clustering reference (score→0)", f"{config.cluster_reference_miles:.0f} mi", "cluster_reference_miles"),
-            row("No-window neutral score", f"{config.window_neutral_score:.2f}", "window_neutral_score"),
-            row("Scoring weights (geo/cap/win)", f"{gw:.2f} / {cw:.2f} / {ww:.2f}", "factor_weights"),
-            row(
-                "Total score threshold (auto-assign bar)",
-                f"{config.total_score_threshold:.0%}",
-                "total_score_threshold",
-            ),
+            *scoring_rows,
             row("Serviceability hard cap", f"{config.max_service_distance_miles:.0f} mi", "max_service_distance_miles"),
             row("Candidates evaluated", f"Top-{config.top_n_candidate_routes}", "top_n_candidate_routes"),
         ]

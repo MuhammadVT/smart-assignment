@@ -377,16 +377,23 @@ def recommend_or_escalate(tool_context: ToolContext) -> dict:
     # over the evidence packet (see the `judgment` package). Either way the LLM
     # path transparently falls back to the deterministic trace/pick on any
     # error, so this stays safe when the model/credentials are unavailable.
-    judge = default_judge(DEFAULT_CONFIG, reasoner=LLMReasoner(DEFAULT_CONFIG))
-    rec = judge.decide(customer, evaluations, DEFAULT_CONFIG)
+    if DEFAULT_CONFIG.use_route_slot_scoring:
+        # The decision unit is the (route, slot) pair -- one grounded decision
+        # over route-slot options that absorbs the slot pick (see `routeslot`).
+        from smart_assignment.routeslot import decide_route_slot
 
-    # Optionally let an LLM pick the winning route's final slot from its
-    # candidate menu (see the `slotpick` package). No-op unless
-    # use_grounded_slot_selection is on; falls back to the deterministic slot.
-    if DEFAULT_CONFIG.use_grounded_slot_selection:
-        from smart_assignment.slotpick import refine_slot
+        rec = decide_route_slot(customer, evaluations, DEFAULT_CONFIG)
+    else:
+        judge = default_judge(DEFAULT_CONFIG, reasoner=LLMReasoner(DEFAULT_CONFIG))
+        rec = judge.decide(customer, evaluations, DEFAULT_CONFIG)
 
-        refine_slot(rec, evaluations, customer, DEFAULT_CONFIG)
+        # Optionally let an LLM pick the winning route's final slot from its
+        # candidate menu (see the `slotpick` package). No-op unless
+        # use_grounded_slot_selection is on; falls back to the deterministic slot.
+        if DEFAULT_CONFIG.use_grounded_slot_selection:
+            from smart_assignment.slotpick import refine_slot
+
+            refine_slot(rec, evaluations, customer, DEFAULT_CONFIG)
 
     result = {
         "ok": True,
