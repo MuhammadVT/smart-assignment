@@ -695,11 +695,18 @@ def _route_rows(candidates: list[CandidateEvaluation]) -> str:
     return "".join(rows)
 
 
-def _reason_block(rec: SlotRecommendation, reason_label: str) -> str:
-    """The 'why' panel. When a grounded route-slot pick populated the structured
-    fields, render them as distinct sections (summary · reasons · trade-off ·
-    runner-up · vs-default); otherwise fall back to the flat reasoning line -- so
-    the deterministic/escalation path is unchanged."""
+def _reason_block(
+    rec: SlotRecommendation, reason_label: str, reasoning_override: Optional[str] = None
+) -> str:
+    """The 'why' panel. When ``reasoning_override`` is given (the live agent's own
+    recommendation narration), render exactly that text -- so the panel shows the
+    same words the chat box did, instead of a separately-rendered version. When a
+    grounded route-slot pick populated the structured fields, render them as
+    distinct sections (summary · reasons · trade-off · runner-up · vs-default);
+    otherwise fall back to the flat reasoning line."""
+    if reasoning_override and reasoning_override.strip():
+        body = _esc(reasoning_override.strip()).replace("\n", "<br>")
+        return f'<div class="reason"><span class="lbl">{reason_label}</span>{body}</div>'
     if not rec.decision_summary:
         return f'<div class="reason"><span class="lbl">{reason_label}</span>{_esc(rec.reasoning)}</div>'
 
@@ -723,7 +730,11 @@ def _reason_block(rec: SlotRecommendation, reason_label: str) -> str:
     return f'<div class="reason">{"".join(parts)}</div>'
 
 
-def _example_card(result: RecommendationResult, include_routes: bool = True) -> str:
+def _example_card(
+    result: RecommendationResult,
+    include_routes: bool = True,
+    reasoning_override: Optional[str] = None,
+) -> str:
     c = result.customer
     rec = result.recommendation
     pill_cls, pill_text = DECISION_PILL[rec.decision]
@@ -792,7 +803,7 @@ def _example_card(result: RecommendationResult, include_routes: bool = True) -> 
           <div class="score">{score_bar}</div>
           {slot_html}
           {factors_html}
-          {_reason_block(rec, reason_label)}
+          {_reason_block(rec, reason_label, reasoning_override)}
           {routes_html}
         </div>
       </article>"""
@@ -1592,7 +1603,11 @@ def build_map_data(result: RecommendationResult) -> Optional[dict]:
     }
 
 
-def build_workflow_payload(result: RecommendationResult, config: Config) -> dict:
+def build_workflow_payload(
+    result: RecommendationResult,
+    config: Config,
+    reasoning_override: Optional[str] = None,
+) -> dict:
     """The visualization payload for one workflow run: the animated step cards,
     the final result card, and the proximity-map data.
 
@@ -1600,6 +1615,10 @@ def build_workflow_payload(result: RecommendationResult, config: Config) -> dict
     static page generator (``build_page``) and the live web app
     (``smart_assignment.webapp``) so the interactive UI can never drift from the
     published examples — both render the exact same structure.
+
+    ``reasoning_override`` lets the live LLM chat pass the agent's own
+    recommendation narration, so the result card's "Why the agent chose this"
+    shows the same text the chat box did instead of a separately-rendered version.
     """
     return {
         "name": _esc(result.customer.name),
@@ -1608,7 +1627,7 @@ def build_workflow_payload(result: RecommendationResult, config: Config) -> dict
         # The recommended-route card, without its embedded routes list -- the full
         # evaluated-routes breakdown is `routesHtml`, rendered separately (below
         # the map in the web app) so it can be a rich, default-open section.
-        "resultHtml": _example_card(result, include_routes=False),
+        "resultHtml": _example_card(result, include_routes=False, reasoning_override=reasoning_override),
         "routesHtml": _route_cards(result, config),
         "map": build_map_data(result),
         # UI banners (e.g. grounded reasoning fell back to deterministic). Empty
