@@ -77,6 +77,22 @@ def test_intake_customer_merges_partial_updates_without_losing_prior_fields():
     assert profile["preferred_day"] == "TUE"  # normalized to upper case
 
 
+def test_intake_customer_persists_fields_from_an_incomplete_first_call():
+    # Conversational intake often arrives one field at a time: the address this
+    # turn, the order quantity the next. The first call is incomplete and returns
+    # an error, but the field it carried must survive so the customer is not asked
+    # to repeat it (regression: partial intake used to be discarded on the error).
+    ctx = _FakeToolContext()
+    first = intake_customer(address="1200 McKinney St, Houston", tool_context=ctx)
+    assert first["ok"] is False  # still needs the order quantity
+    assert ctx.state["sa_profile"]["address"] == "1200 McKinney St, Houston"
+
+    second = intake_customer(order_quantity_cases=90, tool_context=ctx)
+    assert second["ok"] is True  # the earlier address is still on file
+    assert second["profile"]["address"] == "1200 McKinney St, Houston"
+    assert second["profile"]["order_quantity_cases"] == 90
+
+
 def test_intake_customer_rejects_half_specified_slot():
     ctx = _FakeToolContext()
     result = intake_customer(
