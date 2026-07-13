@@ -7,7 +7,7 @@ from smart_assignment.routeslot import decide_route_slot
 from smart_assignment.shared.config import Config
 from smart_assignment.shared.models import Decision
 
-from .conftest import AFTERNOON, MORNING, customer, scored_eval, scored_slot
+from .conftest import AFTERNOON, MORNING, choice_dict, customer, scored_eval, scored_slot
 
 
 def _evals():
@@ -24,6 +24,9 @@ def test_deterministic_picks_the_highest_total_route_slot():
     assert rec.decision is Decision.RECOMMENDED
     assert rec.recommended_route_id == "RTE-A"
     assert rec.total_score == 0.80
+    # Flag off -> no grounded narrative; the flat reasoning line is unchanged.
+    assert rec.decision_summary is None and not rec.primary_reasons
+    assert "strongest route-slot overall" in rec.reasoning
 
 
 def test_escalates_when_best_route_slot_is_below_threshold():
@@ -46,16 +49,22 @@ def test_grounded_pick_diverges_to_a_more_open_slot():
     # Options are sorted by descending total: idx0=RTE-A morning (0.80),
     # idx1=RTE-B morning (0.66, openness 0.90), idx2=RTE-A afternoon (0.60).
     def stub(config, prompt):
-        return {
-            "chosen_index": 1,
-            "rationale": "RTE-B's slot is far more open (0.90), protecting valued incumbents.",
-            "citations": [{"index": 1, "field": "slot_availability", "value": 0.90}],
-        }
+        return choice_dict(
+            1,  # diverges from the deterministic default (idx0)
+            runner_up_index=0,
+            primary_reasons=["RTE-B's slot is far more open (0.90), protecting incumbents."],
+            citations=[{"index": 1, "field": "slot_availability", "value": 0.90}],
+        )
 
     rec = decide_route_slot(customer(), _evals(), cfg, choice_fn=stub)
     assert rec.recommended_route_id == "RTE-B"
-    assert "more open" in rec.recommended_window_rationale
     assert rec.decision is Decision.RECOMMENDED       # 0.66 >= 0.55
+    # The structured explanation is surfaced, and folded into reasoning/rationale.
+    assert rec.decision_summary and rec.key_tradeoff
+    assert rec.primary_reasons and "more open" in rec.primary_reasons[0]
+    assert "more open" in rec.recommended_window_rationale
+    assert "Diverged" in rec.default_comparison
+    assert rec.runner_up and "Alpha" in rec.runner_up  # runner-up rendered with its route name
 
 
 def test_grounded_falls_back_to_deterministic_on_backend_error():
@@ -74,12 +83,16 @@ def test_grounded_falls_back_on_persistently_ungrounded_choice():
     cfg = Config(use_route_slot_scoring=True, use_grounded_judgment=True)
 
     def liar(config, prompt):
-        return {"chosen_index": 1, "rationale": "x",
-                "citations": [{"index": 1, "field": "slot_availability", "value": 0.99}]}
+        # Well-formed shape, but a fabricated citation (idx1 openness is 0.90).
+        return choice_dict(
+            1, runner_up_index=0,
+            citations=[{"index": 1, "field": "slot_availability", "value": 0.99}],
+        )
 
     rec = decide_route_slot(customer(), _evals(), cfg, choice_fn=liar)
     assert rec.recommended_route_id == "RTE-A"        # fell back
     assert rec.grounded_fallback is True
+    assert rec.decision_summary is None               # no grounded narrative on fallback
 
 
 def test_llm_menu_excludes_below_threshold_route_slots():
@@ -95,8 +108,11 @@ def test_llm_menu_excludes_below_threshold_route_slots():
 
     def capture(config, prompt):
         seen["prompt"] = prompt
-        return {"chosen_index": 0, "rationale": "the open morning slot",
-                "citations": [{"index": 0, "field": "reference_weighted_score", "value": 0.80}]}
+        # Only one option clears the bar -> a single-option menu, so no runner_up.
+        return choice_dict(
+            0, runner_up=None, key_tradeoff="",
+            citations=[{"index": 0, "field": "reference_weighted_score", "value": 0.80}],
+        )
 
     rec = decide_route_slot(customer(), evals, cfg, choice_fn=capture)
     assert rec.decision is Decision.RECOMMENDED

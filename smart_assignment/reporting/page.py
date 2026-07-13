@@ -39,6 +39,7 @@ from smart_assignment.shared.models import (
     CandidateEvaluation,
     Decision,
     RecommendationResult,
+    SlotRecommendation,
 )
 from smart_assignment.shared.timeutils import duration_minutes, fmt_time, fmt_window
 
@@ -224,6 +225,13 @@ _STYLE = """
     border-radius: 8px; padding: 12px 14px; font-size: 13.5px; color: #22364f; }
   .reason .lbl { font-weight: 700; color: var(--blue); font-size: 11px; letter-spacing: .06em;
     text-transform: uppercase; display: block; margin-bottom: 4px; }
+  .reason .summary { font-weight: 600; display: block; margin-bottom: 6px; }
+  .reason ul.reasons { margin: 4px 0 0; padding-left: 18px; }
+  .reason ul.reasons li { margin: 2px 0; }
+  .reason .sub { margin-top: 8px; }
+  .reason .sub .k { font-weight: 700; color: var(--blue); font-size: 10.5px;
+    letter-spacing: .05em; text-transform: uppercase; display: block; }
+  .reason .vs { margin-top: 8px; font-size: 12px; color: var(--muted); font-style: italic; }
   details.routes { margin-top: 14px; border-top: 1px dashed var(--line); padding-top: 10px; }
   details.routes summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--blue); }
   .routelist { margin-top: 10px; display: grid; gap: 8px; }
@@ -657,6 +665,34 @@ def _route_rows(candidates: list[CandidateEvaluation]) -> str:
     return "".join(rows)
 
 
+def _reason_block(rec: SlotRecommendation, reason_label: str) -> str:
+    """The 'why' panel. When a grounded route-slot pick populated the structured
+    fields, render them as distinct sections (summary · reasons · trade-off ·
+    runner-up · vs-default); otherwise fall back to the flat reasoning line -- so
+    the deterministic/escalation path is unchanged."""
+    if not rec.decision_summary:
+        return f'<div class="reason"><span class="lbl">{reason_label}</span>{_esc(rec.reasoning)}</div>'
+
+    parts = [
+        f'<span class="lbl">{reason_label}</span>',
+        f'<span class="summary">{_esc(rec.decision_summary)}</span>',
+    ]
+    if rec.primary_reasons:
+        items = "".join(f"<li>{_esc(r)}</li>" for r in rec.primary_reasons)
+        parts.append(f'<ul class="reasons">{items}</ul>')
+    if rec.key_tradeoff:
+        parts.append(
+            f'<div class="sub"><span class="k">Trade-off</span>{_esc(rec.key_tradeoff)}</div>'
+        )
+    if rec.runner_up:
+        parts.append(
+            f'<div class="sub"><span class="k">Runner-up</span>{_esc(rec.runner_up)}</div>'
+        )
+    if rec.default_comparison:
+        parts.append(f'<div class="vs">{_esc(rec.default_comparison)}</div>')
+    return f'<div class="reason">{"".join(parts)}</div>'
+
+
 def _example_card(result: RecommendationResult, include_routes: bool = True) -> str:
     c = result.customer
     rec = result.recommendation
@@ -726,7 +762,7 @@ def _example_card(result: RecommendationResult, include_routes: bool = True) -> 
           <div class="score">{score_bar}</div>
           {slot_html}
           {factors_html}
-          <div class="reason"><span class="lbl">{reason_label}</span>{_esc(rec.reasoning)}</div>
+          {_reason_block(rec, reason_label)}
           {routes_html}
         </div>
       </article>"""

@@ -122,3 +122,27 @@ def scored_eval(route_id, name, scored_slots, feasible=True) -> CandidateEvaluat
 # Two convenience windows.
 MORNING = (time(8, 30), time(11, 30))
 AFTERNOON = (time(12, 30), time(15, 30))
+
+
+def choice_dict(index, *, default_index=0, runner_up_index=None, citations=None, **overrides):
+    """A valid new-shape route-slot choice dict for the grounded-path tests.
+    Verdict is derived to stay consistent with the pick vs. the deterministic
+    default; individual fields can be overridden (e.g. runner_up=None for a
+    single-option menu, or a fabricated citation to exercise the verifier)."""
+    diverges = index != default_index
+    if runner_up_index is None:
+        runner_up_index = default_index if diverges else index + 1
+    d = {
+        "chosen_index": index,
+        "decision_summary": f"Assign option {index}.",
+        "primary_reasons": ["Strong overall route-slot fit."],
+        "key_tradeoff": "Gives up a little clustering for a more open slot.",
+        "runner_up": {"index": runner_up_index, "why_not": "Slightly weaker slot."},
+        "vs_deterministic_default": {
+            "verdict": "DIVERGE" if diverges else "AGREE",
+            "note": "The open slot protects valued incumbents." if diverges else "",
+        },
+        "citations": citations if citations is not None else [],
+    }
+    d.update(overrides)
+    return d

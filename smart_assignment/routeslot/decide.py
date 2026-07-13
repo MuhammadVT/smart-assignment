@@ -34,7 +34,11 @@ from smart_assignment.routeslot.prompts import (
     build_route_slot_prompt,
     build_route_slot_retry_prompt,
 )
-from smart_assignment.routeslot.schema import parse_route_slot_choice
+from smart_assignment.routeslot.schema import (
+    VERDICT_AGREE,
+    RouteSlotChoice,
+    parse_route_slot_choice,
+)
 from smart_assignment.routeslot.verifier import verify_choice
 from smart_assignment.shared.config import Config
 from smart_assignment.shared.constraints import CONSTRAINT_LABEL
@@ -81,17 +85,17 @@ def decide_route_slot(
     # >= 1 route-slot is auto-assignable. The LLM reasons over ONLY these.
     packet = build_route_slot_packet(customer, evaluations, config, min_score=threshold)
     index = 0  # deterministic best (packet is sorted by descending total)
-    grounded_rationale: Optional[str] = None
+    grounded_choice: Optional[RouteSlotChoice] = None
     grounded_fallback_reason: Optional[str] = None
     if config.use_grounded_judgment:
-        picked, rationale, reason = _grounded_index(packet, config, choice_fn)
+        picked, choice, reason = _grounded_index(packet, config, choice_fn)
         if picked is not None:
-            index, grounded_rationale = picked, rationale
+            index, grounded_choice = picked, choice
         else:
             grounded_fallback_reason = reason
 
     chosen = packet.option_at(index)
-    rec = _recommend(customer, chosen, all_pairs, evaluations, grounded_rationale)
+    rec = _recommend(customer, chosen, all_pairs, evaluations, packet, grounded_choice)
     if grounded_fallback_reason is not None:
         rec.grounded_fallback = True
         rec.grounded_fallback_reason = grounded_fallback_reason
@@ -115,7 +119,7 @@ def _all_route_slots(evaluations: list[CandidateEvaluation]) -> list[RouteSlotOp
 def _grounded_index(
     packet: RouteSlotPacket, config: Config, choice_fn: Optional[ChoiceFn]
 ):
-    """Return (index, rationale, None) on a verified grounded pick, or
+    """Return (index, choice, None) on a verified grounded pick, or
     (None, None, reason) to signal a deterministic fallback."""
     fn = choice_fn or generate_route_slot_choice
     try:
@@ -146,7 +150,7 @@ def _grounded_index(
             "Grounded route-slot reasoning could not be verified; showing the "
             "deterministic best route-slot."
         )
-    return choice.chosen_index, choice.rationale, None
+    return choice.chosen_index, choice, None
 
 
 # --- recommendation + escalations --------------------------------------------
@@ -157,29 +161,72 @@ def _recommend(
     chosen: RouteSlotOption,
     all_pairs: list[RouteSlotOption],
     evaluations: list[CandidateEvaluation],
-    grounded_rationale: Optional[str],
+    packet: RouteSlotPacket,
+    choice: Optional[RouteSlotChoice],
 ) -> SlotRecommendation:
     ev = chosen.evaluation
     route = ev.route
     scored = chosen.scored
-    reasoning = grounded_rationale or _deterministic_reasoning(chosen)
-    return SlotRecommendation(
+
+    rec = SlotRecommendation(
         customer_number=customer.customer_number,
         customer_address=customer.address,
         customer_name=customer.name,
         decision=Decision.RECOMMENDED,
         total_score=round(scored.total_score, 2),
-        reasoning=reasoning,
+        reasoning=_deterministic_reasoning(chosen),
         recommended_route_id=route.route_id,
         recommended_route_name=route.name,
         recommended_day=route.day.value,
         recommended_window=fmt_window(scored.slot.window),
         recommended_window_basis=scored.slot.basis or None,
-        recommended_window_rationale=grounded_rationale,
         factor_breakdown=scored.factor_scores,
         rejected_alternatives=_rejected(all_pairs, _key(chosen), evaluations),
         review_reason=None,
     )
+    if choice is not None:
+        _apply_grounded_narrative(rec, choice, packet)
+    return rec
+
+
+def _apply_grounded_narrative(
+    rec: SlotRecommendation, choice: RouteSlotChoice, packet: RouteSlotPacket
+) -> None:
+    """Fold the verified grounded choice's structured explanation onto the
+    recommendation, and compose the flat `reasoning` string from it so existing
+    consumers keep working. Only reached on a successful grounded pick."""
+    rec.decision_summary = choice.decision_summary
+    rec.primary_reasons = list(choice.primary_reasons)
+    rec.key_tradeoff = choice.key_tradeoff or None
+    rec.runner_up = _render_runner_up(choice, packet)
+    rec.default_comparison = _render_default_comparison(choice)
+
+    parts = [choice.decision_summary, *choice.primary_reasons]
+    if choice.key_tradeoff:
+        parts.append(f"Trade-off: {choice.key_tradeoff}")
+    reasoning = " ".join(p.strip() for p in parts if p and p.strip())
+    rec.reasoning = reasoning
+    rec.recommended_window_rationale = reasoning
+
+
+def _render_runner_up(choice: RouteSlotChoice, packet: RouteSlotPacket) -> Optional[str]:
+    ru = choice.runner_up
+    if ru is None:
+        return None
+    opt = packet.options[ru.index] if 0 <= ru.index < packet.n else None
+    if opt is None:
+        return ru.why_not
+    return f"{opt['route_name']} ({opt['day']}) {opt['window']} — {ru.why_not}"
+
+
+def _render_default_comparison(choice: RouteSlotChoice) -> Optional[str]:
+    cmp = choice.vs_deterministic_default
+    if cmp is None:
+        return None
+    if cmp.verdict == VERDICT_AGREE:
+        return "Agreed with the weighted-heuristic default."
+    note = f" — {cmp.note}" if cmp.note else ""
+    return f"Diverged from the weighted-heuristic default{note}"
 
 
 def _escalate_low_score(
