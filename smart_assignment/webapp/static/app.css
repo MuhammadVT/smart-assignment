@@ -377,37 +377,40 @@
 .tw-swatch.tw-open { background: var(--green-soft); border: 1px solid #bcd9c4; }
 .tw-swatch.tw-busy-swatch { background: #64748b; }
 
-/* Recommended-slot reason chip in the route header (A). */
-.tw-rec {
-  font-size: 11px;
-  font-weight: 600;
-  margin-left: 8px;
-  white-space: nowrap;
-}
-
-/* A route's rows (stops + availability), wrapped so the recommended-window
-   guide lines can span them, aligned to the shared time axis. */
+/* A route's rows (committed stops + availability + candidate slots). */
 .tw-route-block { position: relative; }
-/* Overlay starts where the track does: past the 96px label gutter + 10px gap. */
-.tw-guides {
-  position: absolute;
-  left: 106px;
-  right: 0;
-  top: 0;
-  bottom: 0;
-  pointer-events: none;
-  z-index: 4;
+
+/* Candidate (route, slot) rows: a small heading, then one outlined window bar
+   per scored slot (left label = its route-slot score). The overall recommended
+   slot is filled with the route colour and starred. */
+.tw-slots-head { height: 16px; margin-top: 9px; }
+.tw-slots-head .tw-label {
+  font-weight: 700;
+  color: var(--ink);
+  text-align: left;
+  font-family: inherit;
 }
-/* Two dashed verticals marking the recommended window's start and end -- colour
-   set inline to the route's colour. */
-.tw-guide {
+.tw-slot-row { height: 18px; }
+.tw-slot-row .tw-label { color: var(--muted); }
+.tw-slot-rec .tw-label { color: var(--ink); font-weight: 700; }
+.tw-slot-bar {
   position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 0;
-  border-left: 1.5px dashed currentColor;
-  opacity: 0.9;
+  top: 1px;
+  bottom: 1px;
+  border: 1.5px solid;
+  border-radius: 4px;
+  background: var(--card);
+  font-size: 9.5px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  overflow: hidden;
+  white-space: nowrap;
+  min-width: 2px;
 }
+.tw-slot-rec .tw-slot-bar { color: #fff; font-weight: 700; }
 
 /* Map hover label tying a stop point to its timeline bar (customer number). */
 .stop-tip.leaflet-tooltip {

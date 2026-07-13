@@ -300,6 +300,47 @@ def test_route_cards_show_bars_for_feasible_and_checks_for_infeasible():
     assert html.count("data-route-id=") == len(katy.candidates_considered)
 
 
+def test_route_slot_cards_and_payload_are_slot_level():
+    """With route-slot scoring on, the evaluated section renders one card per
+    (route, slot), the map payload carries each route's scored slots, and Step 4
+    shows each factor's formula so the math is checkable."""
+    from smart_assignment.reporting.page import (
+        _route_cards,
+        _sim_steps,
+        build_map_data,
+    )
+
+    config = Config(use_route_slot_scoring=True)
+    bayou = _results(config)[0]  # a clean recommend with feasible routes + slots
+    feasible = [e for e in bayou.candidates_considered if e.feasible]
+    infeasible = [e for e in bayou.candidates_considered if not e.feasible]
+    assert feasible and any(e.scored_slots for e in feasible)
+
+    html = _route_cards(bayou, config)
+    n_slot_cards = sum(len(e.scored_slots) for e in feasible) + len(infeasible)
+    assert "Route-slots the agent evaluated" in html
+    assert html.count('class="route routecard"') == n_slot_cards
+    assert "★ recommended" in html  # exactly the winning (route, slot) is flagged
+
+    # Map payload: each feasible route carries its scored slots (score-ranked),
+    # with exactly one recommended slot overall.
+    routes = build_map_data(bayou)["routes"]
+    assert all("slots" in r for r in routes)
+    feasible_routes = [r for r in routes if r["feasible"]]
+    assert all(r["slots"] for r in feasible_routes)
+    for r in feasible_routes:
+        scores = [s["score"] for s in r["slots"]]
+        assert scores == sorted(scores, reverse=True)  # highest score first
+    assert sum(1 for r in routes for s in r["slots"] if s["recommended"]) == 1
+
+    # Step 4 exposes the per-factor math (a formula + the cited inputs).
+    score_step = next(s for s in _sim_steps(bayou, config) if s["title"] == "Score & Rank")
+    joined = " ".join(score_step["lines"])
+    assert "clamp(1 − avg_mi" in joined  # geo formula
+    assert "1 ÷ (1 + Σ tier-harm" in joined  # slot-availability formula
+    assert "total = (" in joined  # weighted-sum breakdown
+
+
 def test_page_embeds_map_data_in_workflow_json():
     config = Config()
     html = build_page(_results(config), config)
