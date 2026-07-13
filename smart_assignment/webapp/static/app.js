@@ -73,11 +73,13 @@
   var routeFeasible = {};   // route_id -> bool
   // Distinct, saturated hues so two routes are never the same colour. Feasibility
   // is shown by FILL (solid = feasible, hollow ring = infeasible), not by hue --
-  // so several feasible routes stay distinguishable. None is near-black, so the
-  // prospect's dark star can't be mistaken for a route.
+  // so several feasible routes stay distinguishable. Deliberately NO green and NO
+  // red/orange in this palette: those read as the "feasible ✓ / infeasible ✗"
+  // status, so a route tinted green or red would contradict its own badge (a
+  // feasible route must never look red, an infeasible one must never look green).
   var ROUTE_PALETTE = [
-    '#1257a6', '#1a7f37', '#c2410c', '#7b2fb0',
-    '#0e7c7b', '#b8860b', '#9d174d'
+    '#1257a6', '#7b2fb0', '#0e7c7b', '#b8860b',
+    '#4338ca', '#0891b2', '#475569'
   ];
   var PROSPECT_COLOR = '#111827';  // near-black -- distinct from every route hue
 
@@ -315,15 +317,6 @@
     var h = Math.floor(m / 60), mm = m % 60;
     return (h ? h + 'h' : '') + (h && mm ? ' ' : '') + (mm ? mm + 'm' : (h ? '' : '0m'));
   }
-  // Plain-language reason the recommended slot won, from the pipeline's
-  // window_basis (see shared/slot_selection.py).
-  function basisLabel(b) {
-    return b === 'between_adjacent_stops' ? 'nearest stops'
-      : b === 'preference_accommodated' ? 'matches request'
-      : b === 'least_contended' ? 'least crowded'
-      : '';
-  }
-
   function renderWindows() {
     if (!windowsChart) { return; }
     var panel = document.getElementById('windows-panel');
@@ -396,34 +389,12 @@
         return toMin(a.window.open) - toMin(b.window.open);
       });
 
-      // A route only carries a recommended slot when it's feasible; show it as a
-      // reason chip in the header (A) and as two dashed guide lines (below).
-      var rec = (r.feasible && r.chosen_window) ? r.chosen_window : null;
-      var recBasis = rec ? basisLabel(r.window_basis) : '';
-      var recChip = rec
-        ? '<span class="tw-rec" style="color:' + color + '">◆ recommend '
-          + rec.open + '–' + rec.close + (recBasis ? ' · ' + recBasis : '') + '</span>'
-        : '';
-
       html += '<div class="tw-route">'
         + '<span class="tw-dot" style="background:' + color + '"></span>'
         + '<b>' + r.route_id + '</b> · ' + r.name + ' <span class="tw-day">(' + r.day + ')</span>'
-        + recChip
         + ' <span class="tw-count">' + stops.length + ' stops</span></div>';
 
-      // Rows (stops + availability) wrapped so the recommended-window guide lines
-      // can span all of them, aligned to the shared time axis.
       html += '<div class="tw-route-block">';
-      if (rec) {
-        var gOpen = pct(toMin(rec.open)), gClose = pct(toMin(rec.close));
-        var gTitle = 'recommended ' + rec.open + '–' + rec.close
-          + (recBasis ? ' · ' + recBasis : '');
-        html += '<div class="tw-guides">'
-          + '<span class="tw-guide" style="left:' + gOpen + '%;border-color:' + color
-          + '" title="' + gTitle + '"></span>'
-          + '<span class="tw-guide" style="left:' + gClose + '%;border-color:' + color
-          + '" title="' + gTitle + '"></span></div>';
-      }
 
       stops.forEach(function (s) {
         var o = toMin(s.window.open), c = toMin(s.window.close);
@@ -475,6 +446,29 @@
       }).join('');
       html += '<div class="tw-row tw-lane-row"><span class="tw-label">availability</span>'
         + '<span class="tw-track tw-lane">' + ribbon + '</span></div>';
+
+      // Candidate (route, slot) options: one row per scored slot, drawn on the
+      // shared axis as an outlined window with its own route-slot score. The
+      // overall recommended slot is filled + starred. This is what makes the
+      // panel route-slot level (each slot is shown and scored on its own).
+      if (r.slots && r.slots.length) {
+        html += '<div class="tw-row tw-slots-head"><span class="tw-label">candidate slots</span>'
+          + '<span class="tw-track"></span></div>';
+        r.slots.forEach(function (sl) {
+          var o = toMin(sl.open), c = toMin(sl.close);
+          var scoreTxt = (sl.score != null) ? sl.score.toFixed(2) : '';
+          var lbl = (sl.recommended ? '★ ' : '') + scoreTxt;
+          var title = 'slot ' + sl.open + '–' + sl.close
+            + (sl.score != null ? ' · score ' + scoreTxt : '')
+            + (sl.recommended ? ' · recommended' : '');
+          var barStyle = 'left:' + pct(o) + '%;width:' + (pct(c) - pct(o))
+            + '%;border-color:' + color + (sl.recommended ? ';background:' + color : '');
+          html += '<div class="tw-row tw-slot-row' + (sl.recommended ? ' tw-slot-rec' : '') + '">'
+            + '<span class="tw-label" title="' + title + '">' + lbl + '</span>'
+            + '<span class="tw-track"><span class="tw-slot-bar" title="' + title
+            + '" style="' + barStyle + '">' + sl.open + '–' + sl.close + '</span></span></div>';
+        });
+      }
       html += '</div>';  // .tw-route-block
     });
 

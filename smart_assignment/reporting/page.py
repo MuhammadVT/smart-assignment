@@ -485,46 +485,98 @@ def _route_checks(cand: CandidateEvaluation) -> str:
     return "".join(checks)
 
 
+def _infeasible_card(cand: CandidateEvaluation) -> str:
+    """A routecard for an infeasible route (no score/slots -- just why it failed)."""
+    r = cand.route
+    title = f"{_esc(r.route_id)} · {_esc(r.name)} · {r.day.value} · {cand.distance_miles:.1f} mi"
+    return (
+        f'<div class="route routecard" data-route-id="{_esc(r.route_id)}"><div class="rtitle">'
+        f"<span>{title}</span><span class=\"status bad\">INFEASIBLE</span></div>"
+        f'<ul class="checks">{_route_checks(cand)}</ul></div>'
+    )
+
+
+def _feasible_route_card(cand: CandidateEvaluation, winner_id, threshold) -> str:
+    """A routecard for a feasible route scored at the ROUTE level (route-slot
+    scoring off): score bar + the route's weighted-factor bars."""
+    r = cand.route
+    title = f"{_esc(r.route_id)} · {_esc(r.name)} · {r.day.value} · {cand.distance_miles:.1f} mi"
+    rec_tag = ' <span class="rectag">★ recommended</span>' if r.route_id == winner_id else ""
+    status = f'<span class="status ok">FEASIBLE · {cand.total_score:.2f}</span>'
+    score_cls = "g" if cand.total_score >= threshold else "a"
+    pct = round(cand.total_score * 100)
+    body = (
+        f'<div class="score"><div class="bar">'
+        f'<span class="{score_cls}" style="width:{pct}%"></span></div></div>'
+        f'<div class="factors">{_factor_bars(cand.factor_scores)}</div>'
+    )
+    return (
+        f'<div class="route routecard" data-route-id="{_esc(r.route_id)}"><div class="rtitle">'
+        f"<span>{title}{rec_tag}</span>{status}</div>"
+        f'{body}<ul class="checks">{_route_checks(cand)}</ul></div>'
+    )
+
+
+def _route_slot_card(cand: CandidateEvaluation, ss, winner_id, threshold) -> str:
+    """A routecard for one (route, slot) option (route-slot scoring on): the
+    slot's own window in the title, its own route-slot score bar, and its own
+    per-slot factor bars (geo/capacity route-level, window/availability slot-level)."""
+    r = cand.route
+    win = _win(fmt_window(ss.slot.window))
+    title = (
+        f"{_esc(r.route_id)} · {_esc(r.name)} · {r.day.value} · "
+        f"<b>{win}</b> · {cand.distance_miles:.1f} mi"
+    )
+    is_rec = r.route_id == winner_id and ss.slot.window == cand.chosen_window
+    rec_tag = ' <span class="rectag">★ recommended</span>' if is_rec else ""
+    status = f'<span class="status ok">FEASIBLE · {ss.total_score:.2f}</span>'
+    score_cls = "g" if ss.total_score >= threshold else "a"
+    pct = round(ss.total_score * 100)
+    body = (
+        f'<div class="score"><div class="bar">'
+        f'<span class="{score_cls}" style="width:{pct}%"></span></div></div>'
+        f'<div class="factors">{_factor_bars(ss.factor_scores)}</div>'
+    )
+    return (
+        f'<div class="route routecard" data-route-id="{_esc(r.route_id)}"><div class="rtitle">'
+        f"<span>{title}{rec_tag}</span>{status}</div>"
+        f'{body}<ul class="checks">{_route_checks(cand)}</ul></div>'
+    )
+
+
 def _route_cards(result: RecommendationResult, config: Config) -> str:
-    """The "Routes the agent evaluated" section: one rich card per candidate --
-    feasible routes get the same score bar + weighted-factor bars the recommended
-    route shows, infeasible routes show why they failed. Open by default (the
-    ``<summary>`` still collapses it). Ranked-feasible first (so the recommended
-    route leads), then the infeasible ones. Each card carries ``data-route-id``
-    so the web app can tint it to match the route's colour on the map."""
+    """The "Routes the agent evaluated" section. Open by default (the
+    ``<summary>`` still collapses it). Each card carries ``data-route-id`` so the
+    web app can tint it to match the route's colour on the map.
+
+    On the route-slot path it renders one card per **(route, slot)** option,
+    ranked by route-slot score across all feasible routes, then the infeasible
+    routes. Off that path it keeps one card per route (feasible ranked first)."""
     rec = result.recommendation
     winner_id = rec.recommended_route_id
-    threshold = config.total_score_threshold
-    ordered = list(result.ranked_feasible) + [
-        e for e in result.candidates_considered if not e.feasible
-    ]
-    n = len(result.candidates_considered)
+    feasible = list(result.ranked_feasible)
+    infeasible = [e for e in result.candidates_considered if not e.feasible]
+    route_slot_mode = any(e.scored_slots for e in feasible)
 
     cards = []
-    for cand in ordered:
-        r = cand.route
-        title = f"{_esc(r.route_id)} · {_esc(r.name)} · {r.day.value} · {cand.distance_miles:.1f} mi"
-        rec_tag = ' <span class="rectag">★ recommended</span>' if r.route_id == winner_id else ""
-        if cand.feasible:
-            status = f'<span class="status ok">FEASIBLE · {cand.total_score:.2f}</span>'
-            score_cls = "g" if cand.total_score >= threshold else "a"
-            pct = round(cand.total_score * 100)
-            body = (
-                f'<div class="score"><div class="bar">'
-                f'<span class="{score_cls}" style="width:{pct}%"></span></div></div>'
-                f'<div class="factors">{_factor_bars(cand.factor_scores)}</div>'
-            )
-        else:
-            status = '<span class="status bad">INFEASIBLE</span>'
-            body = ""
-        cards.append(
-            f'<div class="route routecard" data-route-id="{_esc(r.route_id)}"><div class="rtitle">'
-            f"<span>{title}{rec_tag}</span>{status}</div>"
-            f'{body}<ul class="checks">{_route_checks(cand)}</ul></div>'
-        )
+    if route_slot_mode:
+        threshold = config.route_slot_score_threshold
+        # One card per (route, slot), ranked by the slot's own score across routes.
+        pairs = [(e, ss) for e in feasible for ss in e.scored_slots]
+        pairs.sort(key=lambda t: t[1].total_score, reverse=True)
+        cards.extend(_route_slot_card(e, ss, winner_id, threshold) for e, ss in pairs)
+        cards.extend(_infeasible_card(e) for e in infeasible)
+        n = len(pairs) + len(infeasible)
+        summary = f"Route-slots the agent evaluated ({n})"
+    else:
+        threshold = config.total_score_threshold
+        cards.extend(_feasible_route_card(e, winner_id, threshold) for e in feasible)
+        cards.extend(_infeasible_card(e) for e in infeasible)
+        n = len(result.candidates_considered)
+        summary = f"Routes the agent evaluated ({n})"
 
     return (
-        f'<details class="routes" open><summary>Routes the agent evaluated ({n})</summary>'
+        f'<details class="routes" open><summary>{summary}</summary>'
         f'<div class="routelist">{"".join(cards)}</div></details>'
     )
 
@@ -615,22 +667,55 @@ def _example_card(result: RecommendationResult, include_routes: bool = True) -> 
       </article>"""
 
 
-def _route_slot_score_lines(ranked_feasible) -> list[str]:
+def _rs_factor_formula(name: str, config: Config) -> str:
+    """The math skeleton for one route-slot factor, with the config constants
+    plugged in -- so a reader can reproduce the value from the cited inputs."""
+    cref = config.cluster_reference_miles
+    ceiling = config.max_utilization_after_assignment
+    margin = config.capacity_buffer_safety_margin
+    safe = ceiling - margin
+    if name == FACTOR_GEO_CLUSTERING:
+        return f"clamp(1 − avg_mi ÷ {cref:.0f})"
+    if name == FACTOR_CAPACITY_BUFFER:
+        return f"1.00 if util ≤ {safe:.0%}, else clamp(({ceiling:.0%} − util) ÷ {margin:.0%})"
+    if name == FACTOR_WINDOW_MATCH:
+        return "overlap-min ÷ preferred-min (0 on wrong day)"
+    if name == FACTOR_SLOT_AVAILABILITY:
+        return "1 ÷ (1 + Σ tier-harm over overlapping stops)"
+    return ""
+
+
+def _route_slot_score_lines(ranked_feasible, config: Config) -> list[str]:
     """Score & Rank narrative for the route-slot path: every candidate slot on
-    every feasible route, scored as its own (route, slot) option."""
-    lines = ["Each candidate SLOT on each feasible route is scored as its own (route, slot) option:"]
+    every feasible route, scored as its own (route, slot) option -- with each
+    factor's formula, the concrete inputs it cited, and the weighted total, so a
+    user can validate the math by hand."""
+    lines = [
+        "Each candidate SLOT on each feasible route is scored as its own (route, slot) option. "
+        "Every factor shows its formula, the numbers it used, and its weight — so the math is checkable:"
+    ]
     for e in ranked_feasible:
         for ss in sorted(e.scored_slots, key=lambda s: s.total_score, reverse=True):
             lines.append(
                 f"• <b>{_esc(e.route.route_id)} · {_esc(e.route.name)}</b> @ "
                 f"{_win(fmt_window(ss.slot.window))} → route-slot score <b>{ss.total_score:.2f}</b>"
             )
-            parts = " · ".join(
-                f"{FACTOR_LABEL.get(fs.name, fs.name).split(' (')[0].lower()} {fs.value:.2f}"
-                f"<span style=\"color:var(--muted)\">×{fs.weight:.2f}</span>"
-                for fs in ss.factor_scores
+            weight_sum = 0.0
+            terms = []
+            for fs in ss.factor_scores:
+                label = FACTOR_LABEL.get(fs.name, fs.name)
+                formula = _rs_factor_formula(fs.name, config)
+                lines.append(
+                    f'<span class="calc">↳ {_esc(label)} = {formula} = <b>{fs.value:.2f}</b> '
+                    f"× weight {fs.weight:.2f} "
+                    f'<span style="color:var(--muted)">— {_esc(fs.detail)}</span></span>'
+                )
+                weight_sum += fs.weight
+                terms.append(f"{fs.weight:.2f}×{fs.value:.2f}")
+            lines.append(
+                f'<span class="calc">↳ total = ({" + ".join(terms)}) ÷ {weight_sum:.2f} = '
+                f"<b>{ss.total_score:.2f}</b></span>"
             )
-            lines.append(f'<span class="calc">↳ {parts}</span>')
     return lines
 
 
@@ -681,7 +766,7 @@ def _sim_steps(result: RecommendationResult, config: Config) -> list[dict]:
             )
 
     if result.ranked_feasible and config.use_route_slot_scoring:
-        score = _route_slot_score_lines(result.ranked_feasible)
+        score = _route_slot_score_lines(result.ranked_feasible, config)
     elif result.ranked_feasible:
         score = ["Each dimension is normalized to 0–1, then combined by weight:"]
         for e in result.ranked_feasible:
@@ -1038,10 +1123,42 @@ def build_map_data(result: RecommendationResult) -> Optional[dict]:
         c.route.route_id for c in result.candidates_considered if not c.feasible
     ]
     rank_by_id = {rid: i for i, rid in enumerate(ranked_order)}
+    winner_id = result.recommendation.recommended_route_id
     routes = []
     for cand in result.candidates_considered:
         r = cand.route
         center = r.service_center
+        # Candidate slots for the route-slot delivery panels: each scored slot,
+        # highest score first, with the overall recommended one flagged. Falls
+        # back to the single chosen window when route-slot scoring is off. Only
+        # feasible routes offer real slots -- an infeasible route has none.
+        if not cand.feasible:
+            slots = []
+        elif cand.scored_slots:
+            slots = [
+                {
+                    "open": fmt_time(ss.slot.window[0]),
+                    "close": fmt_time(ss.slot.window[1]),
+                    "score": round(ss.total_score, 2),
+                    "recommended": (
+                        r.route_id == winner_id and ss.slot.window == cand.chosen_window
+                    ),
+                }
+                for ss in sorted(
+                    cand.scored_slots, key=lambda s: s.total_score, reverse=True
+                )
+            ]
+        elif cand.chosen_window:
+            slots = [
+                {
+                    "open": fmt_time(cand.chosen_window[0]),
+                    "close": fmt_time(cand.chosen_window[1]),
+                    "score": round(cand.total_score, 2),
+                    "recommended": r.route_id == winner_id,
+                }
+            ]
+        else:
+            slots = []
         routes.append(
             {
                 "route_id": _esc(r.route_id),
@@ -1065,6 +1182,9 @@ def build_map_data(result: RecommendationResult) -> Optional[dict]:
                     else None
                 ),
                 "window_basis": cand.window_basis or None,
+                # Route-slot candidates (each with its own score) for the
+                # per-(route, slot) delivery-window panels.
+                "slots": slots,
                 "stops": [
                     {
                         "lat": s.location.latitude,
