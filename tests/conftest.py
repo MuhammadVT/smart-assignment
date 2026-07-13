@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
-from datetime import time
+import os
 
-import pytest
+# Pin offline, deterministic providers for the whole test session BEFORE any
+# smart_assignment import below resolves them. The code defaults are now live
+# (census geocoder; cache/live data source), so without this a test that uses
+# the default geocoder would make a network call. Setting these here also makes
+# the suite independent of any .env the package loads on import.
+os.environ["SMART_ASSIGNMENT_GEOCODER"] = "mock"
+os.environ["SMART_ASSIGNMENT_DATA_SOURCE"] = "mock"
 
-from smart_assignment.shared.config import Config
-from smart_assignment.shared.models import (
+from datetime import time  # noqa: E402
+
+import pytest  # noqa: E402
+
+from smart_assignment.shared.config import Config  # noqa: E402
+from smart_assignment.shared.models import (  # noqa: E402
     CustomerProfile,
     DayOfWeek,
     GeoPoint,
