@@ -9,8 +9,14 @@
 # this package but never called it) pick up the exact same .env instead of
 # silently ignoring it. load_dotenv() does not override variables already exported
 # in the shell, and is a no-op when no .env file exists.
+from pathlib import Path as _Path
+
 from dotenv import load_dotenv as _load_dotenv
 
+# Load the repo-root .env by an absolute, package-relative path first (so it is
+# found regardless of the process's working directory), then a CWD search as a
+# fallback. load_dotenv does not override variables already in the environment.
+_load_dotenv(_Path(__file__).resolve().parent.parent / ".env")
 _load_dotenv()
 
 from smart_assignment import agent  # noqa: E402  (must follow load_dotenv above)

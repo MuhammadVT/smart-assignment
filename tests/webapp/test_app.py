@@ -162,6 +162,11 @@ def test_chat_falls_back_to_deterministic_on_llm_error(monkeypatch):
     viz = [f for f in frames if f["type"] == "visualization"]
     assert viz and len(viz[0]["payload"]["steps"]) == 5
     assert frames[-1] == {"type": "done"}
+    # The agent error is surfaced (not silently swallowed) so a downgrade never
+    # masquerades as agent parity: a notice naming the failure precedes the
+    # deterministic frames.
+    messages = [f["text"] for f in frames if f["type"] == "message"]
+    assert any("agent errored" in m and "RuntimeError" in m for m in messages)
 
 
 def test_chat_fallback_asks_for_missing_fields(monkeypatch):
