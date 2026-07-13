@@ -256,7 +256,8 @@ def test_build_map_data_carries_slot_rationale():
     # Slot-level factors, each with the concrete figure behind its score.
     assert "Slot availability (openness)" in html
     assert 'class="why-factor-detail"' in html
-    # Openness calculation: the exact 1 / (1 + Σ harm) roll-up ...
+    # Openness calculation: contention named explicitly, then the 1 / (1 + contention) roll-up.
+    assert "contention = Σ harm" in html
     assert "openness = 1 ÷" in html
     # ... and each contending committed stop is listed with its tier + harm.
     overlapping = [
