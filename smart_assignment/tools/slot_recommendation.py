@@ -230,6 +230,14 @@ def intake_customer(
         if preferred_window_end is not None:
             profile["preferred_window_end"] = preferred_window_end
 
+    # Persist the accumulated fields NOW, before the validation checks below.
+    # Intake is conversational and often arrives one field at a time (address this
+    # turn, order quantity the next); if we only saved on full success, a partial
+    # call would be thrown away on its required-field error and the customer would
+    # be asked to repeat what they already gave. On success this raw dict is
+    # replaced by the normalized profile below.
+    tool_context.state[_STATE_PROFILE_KEY] = profile
+
     slot_fields = (
         profile.get("preferred_day"),
         profile.get("preferred_window_start"),
