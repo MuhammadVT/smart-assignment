@@ -17,7 +17,15 @@ For a real geocoder, see `integrations/census_geocoder.py`'s
 
 from __future__ import annotations
 
+import logging
+import os
+
+from smart_assignment.shared.geo import Geocoder
 from smart_assignment.shared.models import GeoPoint
+
+logger = logging.getLogger(__name__)
+
+_GEOCODER_ENV = "SMART_ASSIGNMENT_GEOCODER"
 
 # Curated coordinates for the demo customer addresses (Houston metro).
 _KNOWN_ADDRESSES: dict[str, GeoPoint] = {
@@ -43,3 +51,31 @@ class MockGeocoder:
         lat = _HOUSTON_CENTER.latitude + ((seed % 20) - 10) / 100.0
         lng = _HOUSTON_CENTER.longitude + ((seed % 17) - 8) / 100.0
         return GeoPoint(round(lat, 4), round(lng, 4))
+
+
+def resolve_geocoder() -> Geocoder:
+    """The geocoder every surface should use, chosen by SMART_ASSIGNMENT_GEOCODER:
+
+      - "mock"   → the deterministic offline `MockGeocoder` (default). Same
+                   address → same coordinates on every call and in every process,
+                   so `adk web` and the web app agree — the right choice for
+                   development and demos.
+      - "census" → the live `CensusGeocoder` (real geocoding). Accurate, but a
+                   network call whose result can vary across processes/runs, so
+                   two surfaces may disagree. Use it for real deployments.
+
+    Resolving the geocoder in ONE place means the conversational tools, the
+    deterministic web-app path, and `run_slot_recommendation` all pick the same
+    provider instead of quietly diverging.
+    """
+    choice = os.environ.get(_GEOCODER_ENV, "mock").strip().lower()
+    if choice in ("census", "live", "real"):
+        # Imported lazily so a mock/offline run never pulls the HTTP client.
+        from smart_assignment.integrations.census_geocoder import CensusGeocoder
+
+        return CensusGeocoder()
+    if choice not in ("mock", "offline"):
+        logger.warning(
+            "Unknown %s=%r; using the deterministic mock geocoder.", _GEOCODER_ENV, choice
+        )
+    return MockGeocoder()

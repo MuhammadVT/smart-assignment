@@ -36,7 +36,7 @@ from typing import Optional
 
 from google.adk.tools import ToolContext
 
-from smart_assignment.integrations.census_geocoder import CensusGeocoder
+from smart_assignment.integrations.geocoding_client import resolve_geocoder
 from smart_assignment.integrations.route_capacity_client import fetch_candidate_routes
 from smart_assignment.shared.config import DEFAULT_CONFIG
 from smart_assignment.shared.constraints import CONSTRAINT_LABEL, build_context
@@ -57,10 +57,10 @@ from smart_assignment.reasoning import LLMReasoner
 _STATE_PROFILE_KEY = "sa_profile"
 _STATE_LAST_RECOMMENDATION_KEY = "sa_last_recommendation"
 
-# Real geocoder for the conversational path (pipeline.run_slot_recommendation's
-# own default stays MockGeocoder -- see geocoding_client.py's docstring -- so
-# the offline demo, GitHub Pages generator, and test suite are unaffected).
-_GEOCODER = CensusGeocoder()
+# Geocoder for the conversational path, chosen by SMART_ASSIGNMENT_GEOCODER
+# (mock | census; default mock -- see geocoding_client.resolve_geocoder). Every
+# surface resolves through the same factory, so adk web and the web app agree.
+_GEOCODER = resolve_geocoder()
 
 
 def _error(message: str) -> dict:
