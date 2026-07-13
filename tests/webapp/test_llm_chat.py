@@ -79,9 +79,11 @@ class _FakeRunner:
     def __init__(self, batches):
         self._batches = [list(b) for b in batches]
         self.messages = []
+        self.run_configs = []
 
     async def run_async(self, *, user_id, session_id, new_message, run_config=None):
         self.messages.append(new_message)
+        self.run_configs.append(run_config)
         batch = self._batches.pop(0) if self._batches else []
         for event in batch:
             yield event
@@ -183,6 +185,24 @@ async def test_stream_turn_maps_tools_and_renders_visualization():
     assert len(viz) == 1
     assert len(viz[0]["payload"]["steps"]) == 5
     assert frames[-1] == {"type": "done"}
+
+
+async def test_stream_turn_requests_non_streaming_mode():
+    """The service must run the model in NON-streaming mode (StreamingMode.NONE),
+    exactly like ``adk web``'s default. Forcing token streaming (SSE) tripped a
+    LiteLLM async-streaming bug on some backends ("'coroutine' object is not an
+    iterator") that made every turn fail and fall back to the deterministic brain.
+    The browser SSE stream is emitted by ``stream_turn`` itself and does not need
+    model token streaming, so NONE loses nothing."""
+    from google.adk.agents.run_config import StreamingMode
+
+    runner = _FakeRunner([[_FakeEvent(text="ok")]])
+    service = LlmChatService(
+        runner=runner, session_service=_FakeSessionService({}), geocoder=MockGeocoder()
+    )
+    await _collect(service.stream_turn("s1", "hello"))
+    assert runner.run_configs and runner.run_configs[0] is not None
+    assert runner.run_configs[0].streaming_mode == StreamingMode.NONE
 
 
 async def test_stream_turn_partial_text_is_not_emitted():
