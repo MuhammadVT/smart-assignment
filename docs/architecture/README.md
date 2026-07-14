@@ -8,6 +8,9 @@ that talks to the user and calls one tool per step, in order:
 ```
 intake_customer            (code — validate/merge address, cases, preferred slot)
 find_candidate_routes      (code — geocode + Top-N nearest routes)
+  -> address not found? -> agent calls resolve_address (grounded pick among the
+                           geocoder's candidate matches) -> user confirms ->
+                           intake_customer(confirmed) -> retry  [opt-in, default on]
 evaluate_and_score_routes  (code — HARD constraints, then weighted scoring)
 recommend_or_escalate      (code — rank + total-score gate -> decision + reasoning)
   -> requires_human_review? -> agent calls request_input (ADK built-in, human input)
@@ -286,6 +289,50 @@ Built lazily inside `root_agent`'s construction (`agent.py`), so importing the
 package stays credential-free; the sub-agent resolves the LLM backend only when
 `root_agent` itself is built.
 
+## Grounded address resolution (`address_resolve/` package)
+
+When the geocoder can't resolve a prospect's address (a typo, or an ambiguous
+one), the agent shouldn't dead-end — and it must **not invent** a corrected
+address (an actionable value). This layer applies the same constrained-option,
+grounded-reasoning pattern to address correction:
+
+```
+Geocoder.suggest(address)   provider-agnostic capability (shared/geo.py): return
+ (integrations/*)           a ranked SET of real AddressCandidate matches, or []
+                            (MockGeocoder ranks the demo addresses by token
+                            overlap; CensusGeocoder maps its addressMatches).
+build_address_packet        enumerate the candidates + a deterministic token-
+ (address_resolve/          overlap `similarity` per candidate; the highest is the
+  evidence.py)              `deterministic_choice_index` — the demoted heuristic,
+                            offered as a reference AND used as the fallback.
+resolve_address             the LLM picks a candidate BY INDEX with a cited
+ (address_resolve/          rationale; a verifier (verifier.py) checks the index
+  resolver.py)              is in the set and every citation matches a real fact;
+                            one retry, then fall back to the deterministic pick.
+```
+
+`resolve_address` is a **`FunctionTool`** (not a sub-agent): the choice is a
+constrained, verifiable, index-based selection whose output is checked
+deterministically, so it belongs in the grounded-function family
+(`judgment`/`slotpick`/`routeslot`), not the `AgentTool` family (which is for the
+free-form triage brief). The tool only ever returns a **suggestion**: on a hit it
+returns `needs_confirmation` with the suggested address + alternatives, and the
+instruction (`prompts.py`, `ADDRESS_RESOLUTION_GUIDANCE`) requires the agent to
+get the **user's confirmation** — an intake-level pause — before adopting it via
+`intake_customer`. The human is the verification step.
+
+Guarantees preserved: the LLM selects from the geocoder's enumerated set and
+never free-generates an address; the deterministic highest-similarity candidate
+is the fallback on any LLM/verify failure; and when there are **no** candidates
+at all, it falls back to today's "ask the customer to double-check it." Gated by
+`Config.use_address_resolution` — **default on** (ops asked for it), and turning
+it off reproduces the prior no-correction behavior exactly (the tool isn't even
+registered, and the instruction doesn't mention it). The `suggest` capability is
+feature-detected (`supports_suggestions`), so a provider without it simply yields
+the double-check fallback — Census surfaces alternatives mainly for
+*ambiguous-but-valid* input, while genuine-typo suggestions want a suggest-capable
+provider (Google Places, Mapbox) behind the same protocol seam.
+
 ## Per-role model selection
 
 Every LLM-using surface resolves its model through one place — `Config.for_role(role)`
@@ -299,6 +346,7 @@ without changing any call site's logic. Roles and their env overrides:
 | `judgment` | the grounded recommend/escalate decision | `SMART_ASSIGNMENT_MODEL_JUDGMENT` |
 | `reasoning` | the LLM-narrated reasoning trace (`LLMReasoner`) | `SMART_ASSIGNMENT_MODEL_REASONING` |
 | `slotpick` | the grounded delivery-slot pick (`slotpick/` package) | `SMART_ASSIGNMENT_MODEL_SLOTPICK` |
+| `address_resolve` | the grounded address-candidate pick (`address_resolve/` package) | `SMART_ASSIGNMENT_MODEL_ADDRESS_RESOLVE` |
 
 `for_role` returns a copy of the config with the *active* model field overridden
 (`sage_model` under the sage backend, `model` otherwise); a role with no override
