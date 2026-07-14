@@ -416,12 +416,12 @@ _ARCH_SVG = """
 
   <rect x="690" y="300" width="266" height="80" rx="12" fill="#efeafb" stroke="#cfc2f0"/>
   <text x="823" y="332" text-anchor="middle" font-size="12.5" font-weight="700" fill="#5b3fb0">🧠 LLM decision &amp; reasoning</text>
-  <text x="823" y="351" text-anchor="middle" font-size="10.5" fill="#6b5aa0">grounded pick (opt-in) · writes the rationale</text>
+  <text x="823" y="351" text-anchor="middle" font-size="10.5" fill="#6b5aa0">grounded recommend/escalate + pick · writes the rationale</text>
   <line x1="690" y1="340" x2="648" y2="340" stroke="#7c8aa0" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arwd)"/>
 
   <rect x="690" y="452" width="266" height="86" rx="12" fill="#e6ecfb" stroke="#a9bbe8"/>
   <text x="823" y="482" text-anchor="middle" font-size="12.5" font-weight="700" fill="#274bbd">🤝 Escalation-triage sub-agent</text>
-  <text x="823" y="501" text-anchor="middle" font-size="10.5" fill="#3a52a8">a 2nd LlmAgent, exposed as an ADK AgentTool</text>
+  <text x="823" y="501" text-anchor="middle" font-size="10.5" fill="#3a52a8">an LlmAgent, exposed as an ADK AgentTool</text>
   <text x="823" y="518" text-anchor="middle" font-size="10.5" fill="#3a52a8">consulted only on escalation · composes the brief</text>
   <path d="M640,585 C690,585 690,520 688,510" fill="none" stroke="#274bbd" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arw)"/>
 
@@ -1172,12 +1172,14 @@ def _scoring_section_route_slot(config: Config) -> str:
       <h3 style="margin-top:0">Best route-slot, then the auto-assign decision</h3>
       <div class="formula">total = ( {gw:.2f}·clustering + {cw:.2f}·capacity + {ww:.2f}·window* + {aw:.2f}·availability ) ÷ Σ&nbsp;active&nbsp;weights</div>
       <p style="margin-top:14px"><span style="font-size:11px;color:var(--muted)">*window only when a
-        preference is stated; otherwise it's absent and the remaining weights renormalize.</span> The agent
-        picks the highest-scoring route-slot across all feasible routes and <b>auto-assigns</b> when its own
-        total is ≥ {thr:.0%}; otherwise it <b>escalates</b>. When grounded reasoning is enabled an LLM makes
-        the pick — but only from the route-slots that already clear the {thr:.0%} bar, so its choice is always
-        auto-assignable and the escalate boundary stays a deterministic threshold. The deterministic best is
-        its reference and fallback.</p>
+        preference is stated; otherwise it's absent and the remaining weights renormalize.</span> This
+        weighted total ranks the route-slots; the {thr:.0%} bar is the deterministic reference. With the
+        backend configured, an <b>LLM reasons over all feasible route-slots and makes the
+        recommend-vs-escalate call itself</b> — a confident recommend ships on one verified call, while an
+        escalate (or low-confidence recommend) is resampled and cleared by consensus before it may
+        auto-assign. It picks the winning route-slot by index from the feasible set and cites the facts;
+        every choice is verified in code, and on any failure it falls back to the deterministic
+        {thr:.0%}-bar decision — the reproducible floor.</p>
     </div>"""
 
 
@@ -1534,16 +1536,20 @@ def _touchpoint_card(
 
 def _llm_touchpoints_section(config: Config) -> str:
     """Enumerate every place a model is in the loop — the conversational agent,
-    the escalation-triage sub-agent (an ADK AgentTool), and the opt-in grounded
-    decision/selection calls — so the reader can see exactly where an LLM acts,
-    what it's allowed to do, and how the deterministic pipeline stays the floor.
+    the escalation-triage sub-agent (an ADK AgentTool), the grounded address
+    resolver, and the grounded decision/selection calls — so the reader can see
+    exactly where an LLM acts, what it's allowed to do, and how the deterministic
+    pipeline stays the floor.
 
     Sourced from the code (roles + flags in ``shared/config.py``), so it can't
-    drift: thresholds and the sample count come from the live ``Config``."""
+    drift: thresholds, the sample count, and each flag's default come from the
+    live ``Config``."""
     k = config.judgment_sample_count
     rs_bar = f"{config.route_slot_score_threshold:.0%}"
     ro_bar = f"{config.total_score_threshold:.0%}"
     triage_on = config.use_escalation_triage
+    addr_on = config.use_address_resolution
+    rse_on = config.use_grounded_route_slot_escalation
 
     cards = [
         _touchpoint_card(
@@ -1553,20 +1559,39 @@ def _llm_touchpoints_section(config: Config) -> str:
             "agent.py · root_agent · ADK LlmAgent · role root_agent",
             "The one agent that drives the whole run. It talks to the user across turns and "
             "<b>decides when to call which tool</b> — Intake → Geo-Lookup → Constraint Check → "
-            "Score &amp; Rank → Recommend/Decide — then narrates the result.",
-            "It never computes a distance, constraint, score, or decision itself — every number "
-            "comes back from the deterministic tools (<span class=\"where\">tools/slot_recommendation.py</span>). "
-            "The conversation is LLM-driven; the outcome is not.",
+            "Score &amp; Rank → Recommend/Decide — then narrates the grounded result in its own words.",
+            "It never computes a distance, constraint, or score itself, and it never overrides the "
+            "decision — every number and verdict comes back from the tools "
+            "(<span class=\"where\">tools/slot_recommendation.py</span>). The conversation is LLM-driven; "
+            "the numbers are not.",
             "SMART_ASSIGNMENT_MODEL_ROOT_AGENT",
             "always",
             "Always on (conversational path)",
         ),
         _touchpoint_card(
+            "call",
+            "LLM call · FunctionTool",
+            "Grounded address resolution",
+            "address_resolve/ · resolve_address FunctionTool on root_agent · role address_resolve",
+            "When an address won't geocode, instead of a dead-end the agent calls this tool: an LLM "
+            "<b>picks the closest of the geocoder's own real candidate matches — by index</b> — as a "
+            "<em>confirmable suggestion</em> for the user. It corrects a typo or ambiguity; it never "
+            "writes a new address.",
+            "The valid options are fixed upstream (the geocoder's candidates, "
+            "<span class=\"where\">Geocoder.suggest</span>); the LLM picks one by index and must cite the "
+            "candidates' own facts, verified in code (<span class=\"where\">address_resolve/verifier.py</span>). "
+            "Any failure falls back to the deterministic highest-similarity candidate, and a human confirms "
+            "the pick before anything acts on it.",
+            "SMART_ASSIGNMENT_USE_ADDRESS_RESOLUTION",
+            "on" if addr_on else "off",
+            "On by default" if addr_on else "Off by default",
+        ),
+        _touchpoint_card(
             "sub",
             "Sub-agent · AgentTool",
             "Escalation-triage sub-agent",
-            "triage/ · a 2nd LlmAgent via google.adk.tools.AgentTool · role triage",
-            "The first real multi-agent split. On an escalation, root_agent <b>consults a second "
+            "triage/ · an LlmAgent via google.adk.tools.AgentTool · role triage",
+            "The first real multi-agent split. On an escalation, root_agent <b>consults a dedicated "
             "LlmAgent</b> (exposed as an ADK <em>AgentTool</em>, consult-and-return) to compose the "
             "specialist handoff brief: root cause, concrete remediation options, and the question to ask.",
             "Read-only — it only reads session state and runs strictly downstream of the deterministic "
@@ -1597,16 +1622,20 @@ def _llm_touchpoints_section(config: Config) -> str:
         _touchpoint_card(
             "call",
             "LLM call",
-            "Grounded route-slot pick",
+            "Grounded route-slot decision",
             "routeslot/ · role judgment",
-            "When route-slot scoring is on, the decision unit is the <b>(route, slot) pair</b>. Recommend vs. "
-            f"escalate stays a deterministic threshold ({rs_bar}); on a recommend, an LLM <b>picks among only "
-            "the above-bar route-slots — by index</b> — and returns a structured trade-off explanation "
-            "(summary, reasons, key trade-off, runner-up, agree/diverge vs. the weighted default).",
-            "Because its menu is pre-filtered to above-threshold options, its pick is always auto-assignable — "
-            "it can never cause an escalation. Citations plus a tolerant prose scan are verified "
-            "(<span class=\"where\">routeslot/verifier.py</span>), one retry, then the deterministic best "
-            "route-slot as reference and fallback. Absorbs the slot-pick pass.",
+            "When route-slot scoring is on, the decision unit is the <b>(route, slot) pair</b>, and an LLM "
+            "<b>makes the recommend-vs-escalate call itself</b> over all feasible route-slots — not a fixed "
+            "threshold. A confident recommend ships on one verified call; an escalate (or low-confidence "
+            f"recommend) is resampled up to k={k} and combined by consensus before it may auto-assign. It "
+            "picks the winning route-slot by index and returns a structured trade-off explanation (summary, "
+            "reasons, key trade-off, runner-up, agree/diverge vs. the weighted default).",
+            "The LLM chooses only among deterministically feasible, scored route-slots; its pick and every "
+            "cited figure are verified in code (<span class=\"where\">routeslot/verifier.py</span>), with one "
+            f"corrective retry. On any failure it falls back to the deterministic {rs_bar}-threshold decision "
+            "— the reproducible floor. Whether the LLM decides escalation is itself gated by "
+            "<span class=\"where\">USE_GROUNDED_ROUTE_SLOT_ESCALATION</span> "
+            f"({'on' if rse_on else 'off'} by default). Absorbs the slot-pick pass.",
             "SMART_ASSIGNMENT_USE_ROUTE_SLOT_SCORING",
             "off",
             "Off in code · on in .env.example",
@@ -1618,8 +1647,8 @@ def _llm_touchpoints_section(config: Config) -> str:
             "slotpick/ · role slotpick",
             "After a route is chosen, an LLM <b>picks the final delivery window</b> from that route's "
             "deterministically enumerated candidate menu — by index only, reasoning over each candidate's "
-            "facts. It reasons and selects; it never generates a window. (Superseded by the route-slot pick "
-            "above when route-slot scoring is on.)",
+            "facts. It reasons and selects; it never generates a window. (The route-slot decision above "
+            "folds this pick into its own grounded call when it runs.)",
             "Constrained to the enumerated candidates and verified against the packet "
             "(<span class=\"where\">slotpick/verifier.py</span>); it <b>only re-orders that route's slots</b>, "
             "never the route, score, or decision. The hand-tuned deterministic blend is demoted to reference "
@@ -1648,11 +1677,16 @@ def _llm_touchpoints_section(config: Config) -> str:
     return f"""
     <span class="eyebrow">LLM &amp; agent touchpoints</span>
     <h2>Every place a model is in the loop — and its leash</h2>
-    <p class="sub">The default path is deterministic Python end-to-end, with a conversational agent on top.
-      Beyond that, several <b>opt-in</b> layers let an LLM reason over the real facts — each gated by a
-      <span style="font-family:var(--mono)">Config.use_*</span> flag. This is every one of them, called out:
-      what kind of model call it is, what it may touch, and the deterministic guardrail that keeps it honest.
-      Each LLM surface resolves its model per-role via <span style="font-family:var(--mono)">Config.for_role</span>,
+    <p class="sub">The deterministic pipeline — geocoding, the hard-constraint filter, and the weighted
+      scoring math — always runs and is the auditable floor. On top of it, several layers put an
+      <b>LLM in the decision loop</b>, each gated by a <span style="font-family:var(--mono)">Config.use_*</span>
+      flag. Three are <b>on by default</b> (grounded address resolution, the recommend-vs-escalate route-slot
+      decision, and the escalation-triage sub-agent); the rest are turned on by the shipped
+      <span style="font-family:var(--mono)">.env</span> — so with real backend credentials the
+      recommend/escalate call, the route &amp; slot pick, and the address correction are <b>made by an LLM
+      reasoning over the verified facts</b>, not by a fixed threshold. Here is every one, called out: what
+      kind of model call it is, what it may touch, and the deterministic guardrail that keeps it honest. Each
+      LLM surface resolves its model per-role via <span style="font-family:var(--mono)">Config.for_role</span>,
       so roles can run different model tiers while the backend stays global.</p>
     <div class="tp">{"".join(cards)}</div>
     <div class="guarantee">🛡️ <b>The invariant across all of them.</b> The deterministic pipeline always
@@ -1865,12 +1899,14 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
     <h1>Smart Assignment</h1>
     <p class="lead">An <strong>AI agent</strong> that autonomously recommends the best delivery day &amp;
       time slot for a <strong>new customer</strong> — running every step end-to-end, enforcing hard
-      operational rules in code, ranking options on weighted business factors, and escalating to a
-      human whenever the best option's own score falls short.</p>
+      operational rules in code and scoring options with deterministic math, then having an
+      <strong>LLM reason over those verified facts</strong> to make the recommend-or-escalate call and pick
+      the slot — handing off to a human (with a triage sub-agent drafting the brief) whenever the best
+      option falls short.</p>
     <div class="meta">
-      <span class="chip">🤖 Fully agent-automated</span>
-      <span class="chip">✅ Deterministic, auditable decisions</span>
-      <span class="chip">🧠 LLM-written reasoning</span>
+      <span class="chip">🤖 Agent-orchestrated end to end</span>
+      <span class="chip">🧠 LLM-grounded, verified decisions</span>
+      <span class="chip">✅ Deterministic rules, scoring &amp; fallback</span>
       <span class="chip">🧪 Running on mock data</span>
     </div>
   </div>
@@ -1904,16 +1940,17 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
       <h2>Five steps, executed autonomously by the agent</h2>
       <div class="agent-banner"><span class="big">🤖</span>
         <div><b>A single AI agent performs all five stages below in one end-to-end run</b> — these are
-        phases of the same agent's workflow, not five separate agents. On an escalation it consults one
-        <em>sub-agent</em> (the escalation-triage AgentTool) to write the handoff brief; otherwise a person
-        is involved only if the agent decides to escalate at the final stage. See the <b>Architecture</b> tab
-        for every agent and LLM touchpoint.</div></div>
+        phases of the same agent's workflow, not five separate agents. The hard rules and scoring are
+        deterministic code, but the stage-5 recommend-or-escalate <em>decision</em> is an LLM reasoning over
+        those verified facts. On an escalation it consults one <em>sub-agent</em> (the escalation-triage
+        AgentTool) to write the handoff brief; otherwise a person is involved only if the agent decides to
+        escalate. See the <b>Architecture</b> tab for every agent, sub-agent, and LLM call.</div></div>
       <div class="flow">
         <div class="step"><div class="num">1</div><h3>Intake</h3><p>Capture the customer's address, order quantity (cases), and preferred slot (day + time).</p><p class="action">Validate the intake profile &amp; build it.</p></div>
         <div class="step"><div class="num">2</div><h3>Geo-Lookup</h3><p>Geocode the address and find the nearest candidate routes.</p><p class="action">Geocode &amp; pick the Top-{top_n} nearest.</p></div>
         <div class="step"><div class="num">3</div><h3>Constraint Check</h3><p>Drop any route that fails a hard rule.</p><p class="action">Enforce serviceability &amp; capacity.</p></div>
         <div class="step"><div class="num">4</div><h3>Score &amp; Rank</h3><p>Rank survivors on weighted business factors.</p><p class="action">Score &amp; order the options.</p></div>
-        <div class="step"><div class="num">5</div><h3>Recommend</h3><p>Return the top slot with a reasoning trace — or escalate.</p><p class="action">Check the total score &amp; decide.</p></div>
+        <div class="step"><div class="num">5</div><h3>Recommend</h3><p>An LLM reasons over the verified facts to recommend the top slot — or escalate.</p><p class="action">Grounded recommend-or-escalate call.</p></div>
       </div>
     </div>
   </section>
@@ -1941,8 +1978,9 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
     <div class="wrap">
       <span class="eyebrow">The outcome</span>
       <h2>Three possible agent decisions</h2>
-      <p class="sub">Every run ends in one of three states. Anything whose own total score falls below
-        {threshold}, or with no valid slot at all, the agent hands to a human — with full context attached.</p>
+      <p class="sub">Every run ends in one of three states. When the agent judges the best option too weak
+        to auto-assign (the {threshold} bar is its reference and deterministic fallback), or there's no valid
+        slot at all, it hands the case to a human — with full context attached.</p>
       <div class="legend">
         <div class="card"><span class="pill rec">✔ Recommended</span><p style="margin-top:12px">A clear winner whose own total score clears the bar — the agent auto-assigns.</p></div>
         <div class="card"><span class="pill low">⚠ Low score</span><p style="margin-top:12px">A slot is proposed, but its own total score falls short — the agent asks a specialist to confirm.</p></div>
@@ -1958,18 +1996,19 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
       <span class="eyebrow">Architecture</span>
       <h2>The agentic workflow, end to end</h2>
       <p class="sub">The agent is a Google ADK <em>LlmAgent</em> that talks to the user and calls a tool for
-        each of the five steps — it decides <em>when</em> to call which tool and narrates the result, but
-        every distance, constraint check, and score comes back from the tool itself, so the decision stays
-        reproducible and auditable. On an escalation it consults a second LlmAgent — the escalation-triage
-        <em>AgentTool</em> — to write the handoff brief. Beyond that, several opt-in LLM layers can reason
-        over the real facts; the <b>LLM &amp; agent touchpoints</b> below list every one.</p>
+        each of the five steps — it decides <em>when</em> to call which tool and narrates the result. Every
+        distance, constraint check, and score comes back from deterministic code, but the recommend/escalate
+        <em>decision</em> and the route &amp; slot <em>pick</em> are made by an LLM reasoning over those
+        verified facts — constrained to the feasible options, cited, checked in code, with a deterministic
+        fallback. On an escalation it consults a dedicated LlmAgent — the escalation-triage <em>AgentTool</em>
+        — to write the handoff brief. The <b>LLM &amp; agent touchpoints</b> below list every model in the loop.</p>
       <div class="arch">
         {_ARCH_SVG}
         <div class="arch-legend">
           <div class="card"><div class="icon">🤖</div><h4>Agent orchestrator</h4><p>An ADK LlmAgent drives all five steps via tool calls, conversationally.</p></div>
           <div class="card"><div class="icon">🧭</div><h4>Deterministic tools</h4><p>Geo, hard constraints, and weighted scoring — plain code the agent calls.</p></div>
-          <div class="card"><div class="icon">🤝</div><h4>One sub-agent</h4><p>On escalation, a 2nd LlmAgent (an ADK AgentTool) composes the specialist brief — read-only, it never changes the decision.</p></div>
-          <div class="card"><div class="icon">🎯</div><h4>Selects, never invents</h4><p>Where an LLM decides, it picks from a deterministically enumerated set and cites facts — verified in code, with a deterministic fallback.</p></div>
+          <div class="card"><div class="icon">🤝</div><h4>A triage sub-agent</h4><p>On escalation, a dedicated LlmAgent (an ADK AgentTool) composes the specialist brief — read-only, it never changes the decision.</p></div>
+          <div class="card"><div class="icon">🎯</div><h4>Selects, never invents</h4><p>The recommend/escalate call and the route &amp; slot pick are an LLM's — but only from a deterministically enumerated, feasible set, with every cited fact verified in code and a deterministic fallback.</p></div>
         </div>
       </div>
     </div>
@@ -1987,8 +2026,8 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
       <h2>What makes it trustworthy</h2>
       <div class="grid-2">
         <div class="card"><h4>🤖 One agent, five steps</h4><p>A single ADK LlmAgent calls one tool per step — Intake → Geo-Lookup → Constraint Check → Score &amp; Rank → Decide — and pauses to escalate when needed.</p></div>
-        <div class="card"><h4>✅ Decisions are code, not vibes</h4><p>Hard constraints and scoring are deterministic Python, so identical inputs always yield the identical recommendation — and the deterministic result is always the floor.</p></div>
-        <div class="card"><h4>🎯 An LLM selects, it never invents</h4><p>By default the agent just narrates the deterministic trace. Where an opt-in layer lets a model decide, it picks from a deterministically enumerated set and cites facts that are verified in code — it never free-generates a route, window, or score.</p></div>
+        <div class="card"><h4>🧭 Hard rules &amp; scoring are code, not vibes</h4><p>The feasibility filter (serviceability, capacity) and the factor scoring are deterministic Python — identical inputs always yield identical facts, and that deterministic result is always the floor and the fallback.</p></div>
+        <div class="card"><h4>🎯 The decision is an LLM's — but grounded &amp; verified</h4><p>With the backend configured, an LLM makes the recommend/escalate call and picks the route &amp; slot. It only ever chooses from a deterministically enumerated, feasible set and cites facts that are checked in code — it never free-generates a route, window, or score, and falls back to the deterministic result on any failure.</p></div>
         <div class="card"><h4>🙋 Human-in-the-loop on escalation</h4><p>The agent pauses and waits for a specialist's reply (via ADK's request_input tool) when it finds no feasible slot, or the best option's own total score falls short of the auto-assign bar — after the triage sub-agent has drafted the brief.</p></div>
       </div>
     </div>
@@ -2062,8 +2101,9 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
     Smart Assignment · an AI agent for delivery slot recommendation ·
     built on Google's Agent Development Kit (ADK).<br />
     Source &amp; docs on <a href="https://github.com/MuhammadVT/smart-assignment">GitHub</a>.
-    Hard decisions are deterministic and auditable; where an LLM reasons — the conversational agent, the
-    triage sub-agent, and the opt-in grounded picks — it selects from a verified set with a deterministic fallback.
+    Hard rules and scoring are deterministic and auditable; the recommend/escalate call, the route &amp; slot
+    pick, and the address correction are an LLM's — grounded in verified facts, constrained to feasible
+    options, with a deterministic fallback. See the Architecture tab for every agent, sub-agent, and LLM call.
   </div>
 </footer>
 
