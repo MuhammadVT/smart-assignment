@@ -387,6 +387,17 @@ The two functions that actually talk to a backend (`shared/llm.get_llm` and
 `generate_text`) are unchanged — each caller simply hands them
 `config.for_role(<its role>)`.
 
+`generate_text` is a **synchronous** API, but the sage backend it fronts is async
+under the hood. It is reached both from the CLI pipeline (no event loop) and from
+the web app's `async` `/api/chat` handler, where the ADK agent runs the pipeline
+tools on the server's loop thread. A bare `asyncio.run()` there raises
+`RuntimeError: asyncio.run() cannot be called from a running event loop`, which the
+grounded layers catch and fall back on — silently dropping the LLM decision in the
+web app. `generate_text` therefore drives the sage coroutine through
+`_run_coro_blocking`, which uses `asyncio.run()` when no loop is running and a
+one-shot worker thread (its own loop) when one is, so the grounded path holds in
+both worlds.
+
 ### Brief groundedness verification
 
 The triage brief is free text, so — unlike the grounded-judgment layer, which

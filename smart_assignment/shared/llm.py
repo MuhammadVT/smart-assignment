@@ -29,8 +29,9 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Coroutine
 
 if TYPE_CHECKING:
     from smart_assignment.shared.config import Config
@@ -129,6 +130,33 @@ async def _generate_via_sage_async(llm: Any, prompt: str) -> str:
     return "".join(chunks)
 
 
+def _run_coro_blocking(coro: "Coroutine[Any, Any, str]") -> str:
+    """Drive an async coroutine to completion from *synchronous* code, whether or
+    not an event loop is already running on the calling thread.
+
+    ``generate_text`` is a synchronous API reached from the deterministic
+    pipeline. In a plain CLI run no loop exists, so ``asyncio.run`` is correct.
+    But the same synchronous call is also reached from *inside* a running event
+    loop -- the web app's ``/api/chat`` handler is ``async`` and the ADK agent
+    invokes the pipeline tools on the server's loop thread -- where ``asyncio.run``
+    raises ``RuntimeError: asyncio.run() cannot be called from a running event
+    loop`` (leaving the coroutine un-awaited). When a loop is already running we
+    therefore run the coroutine to completion on a dedicated worker thread with
+    its own loop and block for the result, so the synchronous contract holds in
+    both worlds and the grounded path is no longer silently dropped under the web
+    app.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        # No loop on this thread (the CLI/offline case) -- the simple path.
+        return asyncio.run(coro)
+    # A loop is already running here; hand the coroutine to a fresh loop on a
+    # worker thread and wait for it (this thread is blocked in sync code anyway).
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, coro).result()
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -170,14 +198,15 @@ def generate_text(config: "Config", prompt: str) -> str:
 
     Raises on failure; callers should guard with ``except Exception``.
 
-    Note: the sage path uses ``asyncio.run()``, which requires no running event
-    loop.  LLMReasoner is called from the synchronous pipeline so this is safe;
-    if the pipeline is ever made async, replace with an ``await`` call instead.
+    Note: the sage path is async under the hood. ``_run_coro_blocking`` drives it
+    to completion whether or not a loop is already running, so this stays a safe
+    synchronous call both from the CLI pipeline and from the web app's async
+    request handlers (where a bare ``asyncio.run`` would raise).
     """
     if config.llm_backend == "sage":
         _check_sage_env_vars()
         llm = _load_sage_registry().get_llm(config.sage_model)
-        return asyncio.run(_generate_via_sage_async(llm, prompt))
+        return _run_coro_blocking(_generate_via_sage_async(llm, prompt))
 
     if _is_litellm_model(config.model):
         import litellm  # requires the `litellm` extra

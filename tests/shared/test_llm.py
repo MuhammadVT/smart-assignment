@@ -10,10 +10,11 @@ offline suite.
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import MagicMock, patch
 
 from smart_assignment.shared.config import Config
-from smart_assignment.shared.llm import generate_text, get_llm
+from smart_assignment.shared.llm import _run_coro_blocking, generate_text, get_llm
 
 
 def _litellm_config(**overrides) -> Config:
@@ -50,3 +51,33 @@ def test_generate_text_strips_whitespace(mock_completion):
         choices=[MagicMock(message=MagicMock(content="  padded  \n"))]
     )
     assert generate_text(_litellm_config(), "prompt") == "padded"
+
+
+# --- _run_coro_blocking: the sage path must survive a running event loop -------
+#
+# Regression for the web-app bug: generate_text() is synchronous but is reached
+# from inside the async /api/chat handler (an ADK tool runs on the server's loop
+# thread), where a bare asyncio.run() raises "cannot be called from a running
+# event loop" and the coroutine is never awaited. _run_coro_blocking must return
+# the result in both the loop-present and loop-absent cases.
+
+
+async def _answer() -> str:
+    return "grounded reply"
+
+
+def test_run_coro_blocking_without_a_running_loop():
+    # The CLI/offline case: no loop on this thread -> the asyncio.run path.
+    assert _run_coro_blocking(_answer()) == "grounded reply"
+
+
+def test_run_coro_blocking_inside_a_running_loop():
+    # The web-app case: a loop is already running on this thread. The pre-fix code
+    # raised RuntimeError here; the fix must run the coroutine on a worker thread
+    # and return its result.
+    async def driver() -> str:
+        # A synchronous call made from within a running loop (mirrors an ADK tool
+        # calling generate_text on the server's loop thread).
+        return _run_coro_blocking(_answer())
+
+    assert asyncio.run(driver()) == "grounded reply"
