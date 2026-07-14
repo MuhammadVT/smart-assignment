@@ -27,14 +27,55 @@ generate_text(config, prompt)
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Coroutine
+from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional, TypeVar
 
 if TYPE_CHECKING:
+    from asyncio import AbstractEventLoop
+
     from smart_assignment.shared.config import Config
+
+_T = TypeVar("_T")
+
+# The web app serves each turn on an event loop (uvicorn's), and drives the ADK
+# agent + the synchronous pipeline on it. The sage backend is async and its
+# aiohttp ``ClientSession`` (inside the Sage SDK's process-global litellm handler)
+# is bound to the FIRST event loop that touches it -- the server loop. So a
+# synchronous grounded call (``generate_text`` -> sage) MUST run its coroutine on
+# that same loop, or aiohttp raises "loop <...> is not the running loop".
+#
+# A tool cannot both block the server loop (running synchronous pipeline code) and
+# run a coroutine on it. The fix: tools offload their blocking body to a worker
+# thread (freeing the loop), and record the server loop here so the nested sage
+# call can submit its coroutine back to it via ``run_coroutine_threadsafe``. A
+# ContextVar is the channel because ``asyncio.to_thread`` copies the context into
+# the worker thread. ``None`` (the default) means "no host loop" -- the CLI/offline
+# case, where ``asyncio.run`` is correct.
+_HOST_EVENT_LOOP: "contextvars.ContextVar[Optional[AbstractEventLoop]]" = (
+    contextvars.ContextVar("smart_assignment_host_event_loop", default=None)
+)
+
+
+async def offload_to_worker_thread(
+    func: Callable[..., _T], /, *args: Any, **kwargs: Any
+) -> _T:
+    """Run a blocking, synchronous callable off the current event loop.
+
+    Use this to wrap synchronous pipeline work (an ADK tool body, a
+    re-run-for-visualization) that is invoked from async web-app code. It records
+    the running loop as the *host loop* so a nested synchronous sage call
+    (``generate_text``) can hand its coroutine back to that loop -- keeping the
+    sage aiohttp session on the one loop it is bound to -- then runs the callable
+    in a worker thread so the host loop stays free to service that coroutine.
+    ``asyncio.to_thread`` copies the context, so the recorded loop is visible in
+    the worker thread.
+    """
+    _HOST_EVENT_LOOP.set(asyncio.get_running_loop())
+    return await asyncio.to_thread(func, *args, **kwargs)
 
 # ---------------------------------------------------------------------------
 # Internal: Sage SDK bootstrap (lazy, cached, runs once per process)
@@ -131,28 +172,40 @@ async def _generate_via_sage_async(llm: Any, prompt: str) -> str:
 
 
 def _run_coro_blocking(coro: "Coroutine[Any, Any, str]") -> str:
-    """Drive an async coroutine to completion from *synchronous* code, whether or
-    not an event loop is already running on the calling thread.
+    """Drive an async coroutine to completion from *synchronous* code, choosing
+    the right loop for wherever the caller happens to be running.
 
-    ``generate_text`` is a synchronous API reached from the deterministic
-    pipeline. In a plain CLI run no loop exists, so ``asyncio.run`` is correct.
-    But the same synchronous call is also reached from *inside* a running event
-    loop -- the web app's ``/api/chat`` handler is ``async`` and the ADK agent
-    invokes the pipeline tools on the server's loop thread -- where ``asyncio.run``
-    raises ``RuntimeError: asyncio.run() cannot be called from a running event
-    loop`` (leaving the coroutine un-awaited). When a loop is already running we
-    therefore run the coroutine to completion on a dedicated worker thread with
-    its own loop and block for the result, so the synchronous contract holds in
-    both worlds and the grounded path is no longer silently dropped under the web
-    app.
+    ``generate_text`` is a synchronous API. It is reached from three contexts:
+
+    1. **The CLI / offline pipeline** -- no event loop on this thread. Just
+       ``asyncio.run``.
+    2. **A web-app tool offloaded to a worker thread** -- a host loop is recorded
+       (see ``offload_to_worker_thread``) and running on another thread. The sage
+       aiohttp session is bound to that host loop, so we submit the coroutine to
+       it via ``run_coroutine_threadsafe`` and block for the result. Running it on
+       any other loop raises "loop <...> is not the running loop"; a fresh
+       ``asyncio.run`` loop would be closed after the call and break the next one.
+    3. **Directly on a running loop's thread with no host loop recorded** -- a
+       last-resort worker loop. Correct for loop-agnostic backends (litellm /
+       genai) and strictly better than raising; the sage backend is kept out of
+       this case by offloading its call sites.
     """
     try:
-        asyncio.get_running_loop()
+        running = asyncio.get_running_loop()
     except RuntimeError:
-        # No loop on this thread (the CLI/offline case) -- the simple path.
+        running = None
+
+    host = _HOST_EVENT_LOOP.get()
+    if host is not None and host.is_running() and host is not running:
+        # Case 2: run on the host loop (where the sage session lives), from here.
+        return asyncio.run_coroutine_threadsafe(coro, host).result()
+
+    if running is None:
+        # Case 1: no loop on this thread.
         return asyncio.run(coro)
-    # A loop is already running here; hand the coroutine to a fresh loop on a
-    # worker thread and wait for it (this thread is blocked in sync code anyway).
+
+    # Case 3: a loop runs on THIS thread and there's no usable host loop; run the
+    # coroutine on a throwaway loop in a worker thread so we don't nest asyncio.run.
     with ThreadPoolExecutor(max_workers=1) as pool:
         return pool.submit(asyncio.run, coro).result()
 

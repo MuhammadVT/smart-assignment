@@ -14,7 +14,12 @@ import asyncio
 from unittest.mock import MagicMock, patch
 
 from smart_assignment.shared.config import Config
-from smart_assignment.shared.llm import _run_coro_blocking, generate_text, get_llm
+from smart_assignment.shared.llm import (
+    _run_coro_blocking,
+    generate_text,
+    get_llm,
+    offload_to_worker_thread,
+)
 
 
 def _litellm_config(**overrides) -> Config:
@@ -72,12 +77,106 @@ def test_run_coro_blocking_without_a_running_loop():
 
 
 def test_run_coro_blocking_inside_a_running_loop():
-    # The web-app case: a loop is already running on this thread. The pre-fix code
-    # raised RuntimeError here; the fix must run the coroutine on a worker thread
-    # and return its result.
+    # A loop is running on this thread and NO host loop is recorded (the last-resort
+    # case). The pre-fix code raised RuntimeError; the fix runs the coroutine on a
+    # worker loop and returns its result.
     async def driver() -> str:
-        # A synchronous call made from within a running loop (mirrors an ADK tool
-        # calling generate_text on the server's loop thread).
         return _run_coro_blocking(_answer())
 
     assert asyncio.run(driver()) == "grounded reply"
+
+
+def test_offloaded_call_runs_coroutine_on_the_host_loop():
+    """The real web-app path. A tool body offloaded to a worker thread reaches a
+    synchronous sage call (``_run_coro_blocking``); its coroutine MUST execute on
+    the server's event loop -- the one the sage aiohttp session is bound to -- not
+    on a throwaway worker loop. Pre-fix this ran on a worker loop and aiohttp
+    raised "loop <...> is not the running loop"."""
+    captured = {}
+
+    async def capture_running_loop() -> str:
+        captured["loop"] = asyncio.get_running_loop()
+        return "grounded reply"
+
+    async def server_turn():
+        host_loop = asyncio.get_running_loop()
+
+        def sync_tool_body() -> str:
+            # Mirrors generate_text's sage branch running inside an offloaded tool.
+            return _run_coro_blocking(capture_running_loop())
+
+        result = await offload_to_worker_thread(sync_tool_body)
+        return host_loop, result
+
+    host_loop, result = asyncio.run(server_turn())
+    assert result == "grounded reply"
+    assert captured["loop"] is host_loop
+
+
+def test_offloaded_call_survives_a_loop_bound_resource():
+    """Reproduces the aiohttp failure directly: a resource bound to the loop that
+    first touched it (the server loop), which raises if used from any other loop --
+    exactly how the Sage SDK's cached aiohttp ClientSession behaves. The grounded
+    call, offloaded to a worker thread, must still reach that resource successfully
+    because its coroutine is run back on the host loop."""
+
+    class LoopBoundResource:
+        def __init__(self, bound_loop):
+            self._bound_loop = bound_loop
+
+        async def use(self) -> str:
+            running = asyncio.get_running_loop()
+            if running is not self._bound_loop:
+                # The exact aiohttp failure my first fix hit.
+                raise RuntimeError(f"loop {self._bound_loop!r} is not the running loop")
+            return "grounded reply"
+
+    async def server_turn():
+        host_loop = asyncio.get_running_loop()
+        # The session binds to the server loop the first time it's touched there,
+        # just like the agent's own turn binds the shared sage session to L0.
+        resource = LoopBoundResource(bound_loop=host_loop)
+
+        def sync_tool_body() -> str:
+            return _run_coro_blocking(resource.use())
+
+        return await offload_to_worker_thread(sync_tool_body)
+
+    assert asyncio.run(server_turn()) == "grounded reply"
+
+
+def test_generate_text_sage_end_to_end_from_offloaded_tool(monkeypatch):
+    """End-to-end over the REAL generate_text sage branch: patch only the SDK
+    boundary (env check, registry, the async driver) so the sage driver behaves
+    like the loop-bound aiohttp session, then reach generate_text exactly as the
+    web app does -- from a tool body offloaded off the server loop. The grounded
+    text comes back instead of an exception forcing the deterministic fallback."""
+    from smart_assignment.shared import llm as llm_mod
+
+    monkeypatch.setattr(llm_mod, "_check_sage_env_vars", lambda: None)
+    monkeypatch.setattr(
+        llm_mod, "_load_sage_registry", lambda: MagicMock(get_llm=lambda model: object())
+    )
+
+    host = {}
+
+    async def fake_generate_via_sage_async(llm, prompt):
+        # Like the Sage SDK's cached aiohttp session: only usable on the loop it
+        # was bound to (the server loop).
+        if asyncio.get_running_loop() is not host["loop"]:
+            raise RuntimeError(f"loop {host['loop']!r} is not the running loop")
+        return "grounded reply"
+
+    monkeypatch.setattr(llm_mod, "_generate_via_sage_async", fake_generate_via_sage_async)
+
+    config = Config(llm_backend="sage", sage_model="sage-gemini-2.5-flash")
+
+    async def server_turn() -> str:
+        host["loop"] = asyncio.get_running_loop()
+
+        def sync_tool_body() -> str:
+            return generate_text(config, "some prompt")
+
+        return await offload_to_worker_thread(sync_tool_body)
+
+    assert asyncio.run(server_turn()) == "grounded reply"
