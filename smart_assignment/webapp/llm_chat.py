@@ -32,6 +32,7 @@ from smart_assignment.reasoning import DeterministicReasoner
 from smart_assignment.reporting.page import build_workflow_payload
 from smart_assignment.shared.config import DEFAULT_CONFIG, Config
 from smart_assignment.shared.geo import Geocoder
+from smart_assignment.triage.formatting import normalize_brief
 from smart_assignment.tools.slot_recommendation import (
     _GEOCODER,
     _STATE_PROFILE_KEY,
@@ -255,7 +256,11 @@ class LlmChatService:
                         prompt = (fc.args or {}).get("message") or (
                             "A routing specialist needs to confirm this before it's final."
                         )
-                        yield {"type": "await_input", "message": prompt}
+                        # The escalation message is the triage brief. Normalize its
+                        # layout at the display surface too, so the specialist always
+                        # sees the same scannable structure even if an intervening
+                        # agent reflowed it into a run-on line.
+                        yield {"type": "await_input", "message": normalize_brief(prompt)}
                 continue
 
             calls = event.get_function_calls()
