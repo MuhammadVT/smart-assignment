@@ -73,6 +73,9 @@ Rules (STRICT):
   cite -- and a figure YOU computed (a sum, difference, average, or projection over
   option facts) counts as a number you cannot cite: state the option's own numbers
   instead. Days and time windows must be quoted verbatim from the options.
+- Whenever you name a route (in decision_summary, key_tradeoff, or anywhere),
+  write it as "<route_id> - <route_name>" using that option's own route_id and
+  route_name -- always both together, never one alone.
 - Citable fact keys are exactly: {fields}.
 """.format(fields=", ".join(NUMERIC_FACT_KEYS))
 

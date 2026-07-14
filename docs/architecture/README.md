@@ -221,6 +221,14 @@ one-sentence verdict.
 Because this rides on `use_route_slot_scoring` (opt-in, default off), the flag-off
 route-only path never populates these fields and its output is unchanged.
 
+**Naming routes.** Everywhere a route is named to the user — the deterministic
+narrative (`decision_summary`, `runner_up`, `reasoning`, the rejected/infeasible
+lines via `_route_label`), the grounded route-slot prose, the `root_agent`
+conversation, and the triage brief — it is written as `<route id> - <route name>`
+(e.g. `RTE-4100 - Central Houston`), so the stable id and the human-readable name
+always travel together. The deterministic sites enforce it; the prompts instruct
+the LLM-authored ones.
+
 The verifier (`routeslot/verifier.py`) gains two checks beyond the structured
 citations: it rejects a **dishonest self-assessment** (verdict must match whether
 the pick actually equals the deterministic default; a DIVERGE needs a note; the
