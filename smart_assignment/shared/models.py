@@ -170,10 +170,33 @@ class SlotOption:
     (shared/slot_selection.py); the recommendation step picks among these.
     """
 
-    window: Window
-    fit_score: float  # 0.0-1.0 inverse-distance-weighted support from nearby committed stops
+    window: Window  # the recommended (fixed-length, centered) window
+    fit_score: float  # 0.0-1.0 proximity-weight share of this candidate's stop cluster
     committed_overlap: int  # how many committed stops' windows overlap this one (contention)
     basis: str  # why this option exists: "between_adjacent_stops" | "least_contended"
+    anchor_time: Optional[time] = None  # the interpolated time the window is centered on
+
+
+@dataclass
+class ScoredSlot:
+    """One candidate slot scored as its own (route, slot) option, for the
+    route-slot scoring path (see shared/scoring.score_route_slot). `total_score`
+    is this slot's weighted total; `factor_scores` its per-slot breakdown
+    (geo/capacity shared from the route, window_match/availability slot-specific).
+    Only populated when `Config.use_route_slot_scoring` is on.
+    """
+
+    slot: SlotOption
+    factor_scores: list[FactorScore]
+    total_score: float
+
+    @property
+    def window(self) -> Window:
+        return self.slot.window
+
+    @property
+    def basis(self) -> str:
+        return self.slot.basis
 
 
 @dataclass
@@ -186,6 +209,11 @@ class CandidateEvaluation:
     `chosen_window` is the single recommended slot; `available_slots` is the
     full menu that was considered (with fit + contention), and `window_basis`
     records why `chosen_window` won.
+
+    `scored_slots` is populated only on the route-slot path: each candidate slot
+    scored as its own option. On that path `total_score`, `chosen_window` and
+    `factor_scores` mirror the route's BEST scored slot, so route-level ranking
+    reflects the best obtainable route-slot.
     """
 
     route: Route
@@ -198,6 +226,7 @@ class CandidateEvaluation:
     total_score: float = 0.0
     window_basis: str = ""
     available_slots: list[SlotOption] = field(default_factory=list)
+    scored_slots: list[ScoredSlot] = field(default_factory=list)
 
     @property
     def feasible(self) -> bool:
@@ -246,9 +275,35 @@ class SlotRecommendation:
     recommended_day: Optional[str] = None
     recommended_window: Optional[str] = None
     recommended_window_basis: Optional[str] = None  # why this slot was chosen (audit trail)
+    # Set only when the grounded slot selector (see the `slotpick` package)
+    # picked the recommended slot from the route's candidate menu -- its
+    # grounded rationale. None on the deterministic path.
+    recommended_window_rationale: Optional[str] = None
+    # Structured, grounded explanation of a RECOMMENDED route-slot pick, populated
+    # only when the grounded route-slot decision (see the `routeslot` package)
+    # succeeded. Each field maps to its own UI section so the ops manager sees the
+    # rationale AND the trade-off, not a one-liner. All None/empty on the
+    # deterministic path, so flag-off output is unchanged. `reasoning` is still set
+    # (composed from these) so existing consumers keep working.
+    decision_summary: Optional[str] = None  # one action line
+    primary_reasons: list[str] = field(default_factory=list)  # the decisive factors
+    key_tradeoff: Optional[str] = None  # what the winner gives up, and why it's acceptable
+    runner_up: Optional[str] = None  # the next-best option and why it lost
+    default_comparison: Optional[str] = None  # agreed-with / diverged-from the weighted default
     factor_breakdown: list[FactorScore] = field(default_factory=list)
     rejected_alternatives: list[str] = field(default_factory=list)
     review_reason: Optional[str] = None
+    # Populated only by the grounded-judgment path (see the `judgment` package)
+    # when an escalation-side case was resampled: each entry is one independent
+    # sample's reasoned take, surfaced to the specialist so they see where the
+    # model agreed or was split. Empty for the default weighted-sum path.
+    alternative_takes: list[str] = field(default_factory=list)
+    # Set by GroundedJudge when grounded judgment was requested but the LLM path
+    # failed (no backend/credentials, unparseable/ungrounded reply) and it fell
+    # back to the deterministic weighted result. Lets the UI tell the user the
+    # reasoning shown is the deterministic fallback, not grounded output.
+    grounded_fallback: bool = False
+    grounded_fallback_reason: Optional[str] = None
 
     @property
     def requires_human_review(self) -> bool:

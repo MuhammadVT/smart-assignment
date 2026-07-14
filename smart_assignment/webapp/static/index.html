@@ -58,10 +58,10 @@
           </div>
           <span class="map-legend">
             <span class="legend-item"><span class="glyph-star">★</span>Prospect</span>
-            <span class="legend-item"><span class="glyph-diamond solid"></span>Feasible route</span>
-            <span class="legend-item"><span class="glyph-diamond hollow"></span>Infeasible route</span>
+            <span class="legend-item"><span class="glyph-diamond solid" style="background:#1a7f37"></span>Recommended</span>
+            <span class="legend-item"><span class="glyph-diamond solid"></span>Other feasible (own colour)</span>
+            <span class="legend-item"><span class="glyph-diamond hollow" style="border-color:#b42318"></span>Infeasible route</span>
             <span class="legend-item"><span class="dash-swatch"></span>Stop path</span>
-            <span class="legend-item">each route = its own colour (see Routes)</span>
           </span>
         </div>
         <div id="map"></div>
@@ -76,6 +76,7 @@
           </span>
         </div>
         <div id="windows-chart" class="windows-chart"></div>
+        <div id="windows-rationale" class="windows-rationale" aria-label="Why this slot was chosen"></div>
       </div>
       <div id="routes-panel" class="routes-panel" aria-label="Evaluated routes"></div>
       <div id="viz-empty" class="viz-empty">

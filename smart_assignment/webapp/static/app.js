@@ -24,6 +24,7 @@
   var filterBtn = document.getElementById('route-filter-btn');
   var filterMenu = document.getElementById('route-filter-menu');
   var windowsChart = document.getElementById('windows-chart');
+  var windowsRationale = document.getElementById('windows-rationale');
 
   var MODE = 'deterministic';
   var SESSION_ID = (window.crypto && window.crypto.randomUUID)
@@ -73,13 +74,24 @@
   var routeFeasible = {};   // route_id -> bool
   // Distinct, saturated hues so two routes are never the same colour. Feasibility
   // is shown by FILL (solid = feasible, hollow ring = infeasible), not by hue --
-  // so several feasible routes stay distinguishable. None is near-black, so the
-  // prospect's dark star can't be mistaken for a route.
+  // so several feasible routes stay distinguishable. Deliberately NO green and NO
+  // red/orange in this palette: those read as the "feasible ✓ / infeasible ✗"
+  // status, so a route tinted green or red would contradict its own badge (a
+  // feasible route must never look red, an infeasible one must never look green).
   var ROUTE_PALETTE = [
-    '#1257a6', '#1a7f37', '#c2410c', '#7b2fb0',
-    '#0e7c7b', '#b8860b', '#9d174d'
+    '#1257a6', '#7b2fb0', '#0e7c7b', '#b8860b',
+    '#4338ca', '#0891b2', '#475569'
   ];
   var PROSPECT_COLOR = '#111827';  // near-black -- distinct from every route hue
+  // Infeasible routes are always drawn in red (an unfilled/ring marker), so a
+  // ruled-out route reads the same everywhere: map, filter, evaluated cards, and
+  // the delivery-window panels. Feasible routes keep their distinct palette hue.
+  var INFEASIBLE_COLOR = '#b42318';
+  // The recommended route is always drawn green ("go"); other feasible routes use
+  // the palette above (no green, no red) so their hue can't be mistaken for the
+  // recommended route or an infeasible one.
+  var RECOMMENDED_COLOR = '#1a7f37';
+  function routeColor(r) { return r.feasible ? routeColors[r.route_id] : INFEASIBLE_COLOR; }
 
   // The prospect is a STAR (its own shape + its own colour) so it never reads as
   // a route point; service centers are DIAMONDS; stops stay small circles.
@@ -160,7 +172,7 @@
 
     currentMapData.routes.forEach(function (r) {
       if (!selectedRoutes[r.route_id]) { return; }
-      var color = routeColors[r.route_id];
+      var color = routeColor(r);  // red (ring) for infeasible, palette hue otherwise
       var centerLatLng = [r.service_center.lat, r.service_center.lng];
       bounds.push(centerLatLng);
 
@@ -210,7 +222,9 @@
     setTimeout(function () { mapInstance.invalidateSize(); }, 60);
   }
 
-  // Apply a route's colour to a swatch element (solid if feasible, ring if not).
+  // Apply a route's colour to a swatch element: a solid dot in the route's hue
+  // when feasible, a red unfilled ring when infeasible (so "ruled out" reads red
+  // and the same everywhere).
   function paintSwatch(el, color, feasible) {
     el.className = 'route-swatch';
     if (feasible) {
@@ -218,7 +232,7 @@
       el.style.border = '2px solid ' + color;
     } else {
       el.style.background = 'transparent';
-      el.style.border = '2px solid ' + color;
+      el.style.border = '2px solid ' + INFEASIBLE_COLOR;
     }
   }
 
@@ -274,8 +288,15 @@
     routeFeasible = {};
     mapData.routes.forEach(function (r, i) {
       selectedRoutes[r.route_id] = true;  // all on by default
-      routeColors[r.route_id] = ROUTE_PALETTE[i % ROUTE_PALETTE.length];
       routeFeasible[r.route_id] = r.feasible;
+      // The recommended route is always green; every other feasible route gets a
+      // distinct palette hue (the palette has no green or red, so a feasible
+      // route never reads as "recommended" or "infeasible"). Infeasible routes
+      // fall through to red at draw time via routeColor().
+      var isRec = r.slots && r.slots.some(function (s) { return s.recommended; });
+      routeColors[r.route_id] = isRec
+        ? RECOMMENDED_COLOR
+        : ROUTE_PALETTE[i % ROUTE_PALETTE.length];
     });
     ensureMap();
     buildFilterMenu();
@@ -315,15 +336,6 @@
     var h = Math.floor(m / 60), mm = m % 60;
     return (h ? h + 'h' : '') + (h && mm ? ' ' : '') + (mm ? mm + 'm' : (h ? '' : '0m'));
   }
-  // Plain-language reason the recommended slot won, from the pipeline's
-  // window_basis (see shared/slot_selection.py).
-  function basisLabel(b) {
-    return b === 'between_adjacent_stops' ? 'nearest stops'
-      : b === 'preference_accommodated' ? 'matches request'
-      : b === 'least_contended' ? 'least crowded'
-      : '';
-  }
-
   function renderWindows() {
     if (!windowsChart) { return; }
     var panel = document.getElementById('windows-panel');
@@ -339,9 +351,12 @@
     if (!routes.length) {
       if (panel) { panel.style.display = 'none'; }
       windowsChart.innerHTML = '';
+      if (windowsRationale) { windowsRationale.innerHTML = ''; }
       return;
     }
     if (panel) { panel.style.display = ''; }
+    // "Why this slot" rationale for the recommended route-slot, under the chart.
+    if (windowsRationale) { windowsRationale.innerHTML = currentMapData.rationaleHtml || ''; }
 
     // Shared time domain across all selected routes, snapped to the hour.
     var lo = Infinity, hi = -Infinity;
@@ -391,37 +406,32 @@
       + '<span class="tw-track">' + ticks + '</span></div>';
 
     routes.forEach(function (r) {
-      var color = routeColors[r.route_id];
+      var color = routeColor(r);  // red for infeasible, palette hue otherwise
       var stops = r.stops.filter(function (s) { return s.window; }).slice().sort(function (a, b) {
         return toMin(a.window.open) - toMin(b.window.open);
       });
 
-      // A route only carries a recommended slot when it's feasible; show it as a
-      // reason chip in the header (A) and as two dashed guide lines (below).
-      var rec = (r.feasible && r.chosen_window) ? r.chosen_window : null;
-      var recBasis = rec ? basisLabel(r.window_basis) : '';
-      var recChip = rec
-        ? '<span class="tw-rec" style="color:' + color + '">◆ recommend '
-          + rec.open + '–' + rec.close + (recBasis ? ' · ' + recBasis : '') + '</span>'
-        : '';
-
+      // Route dot: a filled hue dot when feasible, a red unfilled ring when not.
+      var dotStyle = r.feasible
+        ? 'background:' + color
+        : 'background:transparent;border:2px solid ' + INFEASIBLE_COLOR;
       html += '<div class="tw-route">'
-        + '<span class="tw-dot" style="background:' + color + '"></span>'
+        + '<span class="tw-dot" style="' + dotStyle + '"></span>'
         + '<b>' + r.route_id + '</b> · ' + r.name + ' <span class="tw-day">(' + r.day + ')</span>'
-        + recChip
         + ' <span class="tw-count">' + stops.length + ' stops</span></div>';
 
-      // Rows (stops + availability) wrapped so the recommended-window guide lines
-      // can span all of them, aligned to the shared time axis.
       html += '<div class="tw-route-block">';
-      if (rec) {
-        var gOpen = pct(toMin(rec.open)), gClose = pct(toMin(rec.close));
-        var gTitle = 'recommended ' + rec.open + '–' + rec.close
-          + (recBasis ? ' · ' + recBasis : '');
+
+      // Two dashed verticals marking the RECOMMENDED slot's start + end, spanning
+      // the whole block (stops + availability + candidate slots) on the shared axis.
+      var recSlot = (r.slots || []).filter(function (s) { return s.recommended; })[0];
+      if (recSlot) {
+        var gO = pct(toMin(recSlot.open)), gC = pct(toMin(recSlot.close));
+        var gTitle = 'recommended slot ' + recSlot.open + '–' + recSlot.close;
         html += '<div class="tw-guides">'
-          + '<span class="tw-guide" style="left:' + gOpen + '%;border-color:' + color
+          + '<span class="tw-guide" style="left:' + gO + '%;border-color:' + color
           + '" title="' + gTitle + '"></span>'
-          + '<span class="tw-guide" style="left:' + gClose + '%;border-color:' + color
+          + '<span class="tw-guide" style="left:' + gC + '%;border-color:' + color
           + '" title="' + gTitle + '"></span></div>';
       }
 
@@ -475,6 +485,29 @@
       }).join('');
       html += '<div class="tw-row tw-lane-row"><span class="tw-label">availability</span>'
         + '<span class="tw-track tw-lane">' + ribbon + '</span></div>';
+
+      // Candidate (route, slot) options: one row per scored slot, drawn on the
+      // shared axis as an outlined window with its own route-slot score. The
+      // overall recommended slot is filled + starred. This is what makes the
+      // panel route-slot level (each slot is shown and scored on its own).
+      if (r.slots && r.slots.length) {
+        html += '<div class="tw-row tw-slots-head"><span class="tw-label">candidate slots</span>'
+          + '<span class="tw-track"></span></div>';
+        r.slots.forEach(function (sl) {
+          var o = toMin(sl.open), c = toMin(sl.close);
+          var scoreTxt = (sl.score != null) ? sl.score.toFixed(2) : '';
+          var lbl = (sl.recommended ? '★ ' : '') + scoreTxt;
+          var title = 'slot ' + sl.open + '–' + sl.close
+            + (sl.score != null ? ' · score ' + scoreTxt : '')
+            + (sl.recommended ? ' · recommended' : '');
+          var barStyle = 'left:' + pct(o) + '%;width:' + (pct(c) - pct(o))
+            + '%;border-color:' + color + (sl.recommended ? ';background:' + color : '');
+          html += '<div class="tw-row tw-slot-row' + (sl.recommended ? ' tw-slot-rec' : '') + '">'
+            + '<span class="tw-label" title="' + title + '">' + lbl + '</span>'
+            + '<span class="tw-track"><span class="tw-slot-bar" title="' + title
+            + '" style="' + barStyle + '">' + sl.open + '–' + sl.close + '</span></span></div>';
+        });
+      }
       html += '</div>';  // .tw-route-block
     });
 
@@ -526,7 +559,13 @@
       await sleep(260);
     }
     await sleep(180);
-    outEl.innerHTML = d.resultHtml;
+    var noticeHtml = '';
+    if (d.notices && d.notices.length) {
+      noticeHtml = d.notices.map(function (n) {
+        return '<div class="sim-notice ' + (n.kind || 'info') + '">' + n.text + '</div>';
+      }).join('');
+    }
+    outEl.innerHTML = noticeHtml + d.resultHtml;
     viz.classList.remove('running');
     viz.classList.add('has-result');
     routesPanel.innerHTML = d.routesHtml || '';
@@ -612,8 +651,10 @@
     sendBtn.disabled = true;
     input.disabled = true;
     try {
-      if (MODE === 'llm') { await sendLlm(message); }
-      else { await sendDeterministic(message); }
+      // Always stream through /api/chat: it drives the ADK agent in llm mode and
+      // the session-aware deterministic brain otherwise, so the conversation
+      // stays multi-turn (remembers context, accepts revisions) in every mode.
+      await sendLlm(message);
     } finally {
       sendBtn.disabled = false;
       input.disabled = false;
@@ -640,9 +681,9 @@
           'the prospect in your own words — address, order size, any preferred day/time — ' +
           'and I’ll walk through it. You can also pick a sample below.');
       } else {
-        bubble('agent', 'Hi! I assign delivery slots for new Sysco prospects. Give me an ' +
-          'address and an order size in cases (a preferred day + time is optional), or pick ' +
-          'a sample below.');
+        bubble('agent', 'Hi! I assign delivery slots for new Sysco prospects. Tell me the ' +
+          'address and order size in cases (a preferred day + time is optional) — you can ' +
+          'add or change details as we go, like “try 20 cases”. Or pick a sample below.');
         if (m && m.reason) { bubble('agent', 'ℹ️ ' + m.reason, 'thinking'); }
       }
     });

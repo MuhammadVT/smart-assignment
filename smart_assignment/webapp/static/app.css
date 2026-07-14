@@ -258,6 +258,68 @@
 
 .windows-chart { margin-top: 2px; }
 
+/* "Why this slot" rationale under the delivery-window chart: the recommended
+   route-slot, its per-factor breakdown, the plain-language reason, and the
+   auto-assign / escalate verdict. (.factors / .reason come from the shared
+   Simulator CSS, so the bars match the evaluated cards.) */
+.windows-rationale:not(:empty) { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+.slot-why {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--green);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+/* Summary is the click target: keep the native disclosure triangle (no flex,
+   which would strip the marker), like "Routes the agent evaluated". */
+.slot-why-head { cursor: pointer; }
+.slot-why-head::-webkit-details-marker { color: var(--green); }
+.slot-why-title {
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  color: var(--green);
+  margin-right: 6px;
+}
+.slot-why-slot { font-size: 13px; color: var(--ink); }
+.slot-why-slot b { color: var(--navy); font-family: var(--mono); }
+.slot-why-body { margin-top: 12px; }
+.slot-why-body > :first-child { margin-top: 0; }
+.slot-why-basis { margin-top: 10px; font-size: 13px; color: var(--ink); line-height: 1.5; }
+.slot-why-sub { font-size: 11.5px; color: var(--muted); margin: 11px 0 0; }
+/* One factor in the rationale: the shared score bar, then the concrete figure it
+   cited on its own line, indented under the bar (past the 150px label gutter). */
+.why-factor-detail { font-size: 11px; color: var(--muted); margin: 3px 0 0 160px; line-height: 1.45; }
+@media (max-width: 860px) { .why-factor-detail { margin-left: 130px; } }
+
+/* Openness / proximity breakdown lists: one committed-stop row each, showing
+   its customer number, tier, and the figure it contributes (harm or distance). */
+.why-calc { margin-top: 15px; }
+.why-calc-head { font-size: 11.5px; font-weight: 700; color: var(--ink); margin-bottom: 7px; }
+.why-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.why-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 4px 10px;
+}
+.why-cust { font-family: var(--mono); color: var(--navy); font-weight: 600; }
+.why-num { color: var(--ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.why-calc-sum {
+  margin-top: 8px;
+  font-size: 12.5px;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.why-calc-sum b { color: var(--navy); }
+
 /* Tier legend (dynamic -- only the tiers present among the shown stops). */
 .tw-tier-legend {
   display: flex;
@@ -311,7 +373,8 @@
   margin: 12px 0 5px;
 }
 .tw-route b { color: var(--navy); }
-.tw-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: none; }
+/* box-sizing so an infeasible route's 2px ring stays 9px, matching the filled dot. */
+.tw-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: none; box-sizing: border-box; }
 .tw-day { color: var(--muted); }
 .tw-count { color: var(--muted); margin-left: auto; font-size: 11.5px; }
 
@@ -377,18 +440,12 @@
 .tw-swatch.tw-open { background: var(--green-soft); border: 1px solid #bcd9c4; }
 .tw-swatch.tw-busy-swatch { background: #64748b; }
 
-/* Recommended-slot reason chip in the route header (A). */
-.tw-rec {
-  font-size: 11px;
-  font-weight: 600;
-  margin-left: 8px;
-  white-space: nowrap;
-}
-
-/* A route's rows (stops + availability), wrapped so the recommended-window
-   guide lines can span them, aligned to the shared time axis. */
+/* A route's rows (committed stops + availability + candidate slots). */
 .tw-route-block { position: relative; }
-/* Overlay starts where the track does: past the 96px label gutter + 10px gap. */
+
+/* Two dashed verticals marking the recommended slot's start + end, overlaid on
+   the block and aligned to the shared time axis (the track starts past the 96px
+   label gutter + 10px gap). Colour set inline to the route's colour. */
 .tw-guides {
   position: absolute;
   left: 106px;
@@ -398,16 +455,46 @@
   pointer-events: none;
   z-index: 4;
 }
-/* Two dashed verticals marking the recommended window's start and end -- colour
-   set inline to the route's colour. */
 .tw-guide {
   position: absolute;
   top: 0;
   bottom: 0;
   width: 0;
   border-left: 1.5px dashed currentColor;
-  opacity: 0.9;
+  opacity: 0.85;
 }
+
+/* Candidate (route, slot) rows: a small heading, then one outlined window bar
+   per scored slot (left label = its route-slot score). The overall recommended
+   slot is filled with the route colour and starred. */
+.tw-slots-head { height: 16px; margin-top: 9px; }
+.tw-slots-head .tw-label {
+  font-weight: 700;
+  color: var(--ink);
+  text-align: left;
+  font-family: inherit;
+}
+.tw-slot-row { height: 18px; }
+.tw-slot-row .tw-label { color: var(--muted); }
+.tw-slot-rec .tw-label { color: var(--ink); font-weight: 700; }
+.tw-slot-bar {
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  border: 1.5px solid;
+  border-radius: 4px;
+  background: var(--card);
+  font-size: 9.5px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  overflow: hidden;
+  white-space: nowrap;
+  min-width: 2px;
+}
+.tw-slot-rec .tw-slot-bar { color: #fff; font-weight: 700; }
 
 /* Map hover label tying a stop point to its timeline bar (customer number). */
 .stop-tip.leaflet-tooltip {
@@ -429,3 +516,23 @@
   .tw-axis,
   .tw-row { grid-template-columns: 68px minmax(0, 1fr); }
 }
+
+/* Fallback / status banner shown above the result card (e.g. grounded LLM
+ * reasoning was unavailable and the deterministic result is shown instead). */
+.sim-notice {
+  margin: 0 0 12px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.45;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--ink);
+}
+.sim-notice::before { margin-right: 6px; }
+.sim-notice.warning {
+  border-color: var(--amber, #b7791f);
+  background: color-mix(in srgb, var(--amber, #b7791f) 12%, var(--card));
+}
+.sim-notice.warning::before { content: "⚠"; }
+.sim-notice.info::before { content: "ℹ️"; }

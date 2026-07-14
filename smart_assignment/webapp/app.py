@@ -30,15 +30,19 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
 
-# Load .env (if present) before any smart_assignment import below, so a backend
-# choice or credentials set there are in os.environ before Config.from_env()
-# resolves DEFAULT_CONFIG at import time. Covers running this module directly
-# (e.g. `uvicorn smart_assignment.webapp.app:app`) without scripts/run_web.py.
+# Load .env before any smart_assignment import below, so a backend choice or
+# credentials set there are in os.environ before Config.from_env() resolves
+# DEFAULT_CONFIG at import time. Load the repo-root .env by an ABSOLUTE,
+# package-relative path first (so it's found no matter which directory the app
+# was launched from -- a CWD-only search silently misses it and the agent then
+# runs with no credentials), then fall back to a CWD search.
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 load_dotenv()
 
 from fastapi import FastAPI
@@ -51,8 +55,11 @@ from smart_assignment.pipeline import run_slot_recommendation
 from smart_assignment.reasoning import DeterministicReasoner
 from smart_assignment.reporting.page import _STYLE, build_workflow_payload
 from smart_assignment.shared.config import DEFAULT_CONFIG
+from smart_assignment.webapp.deterministic_chat import DeterministicChatService
 from smart_assignment.webapp.llm_chat import LlmChatService, resolve_mode
 from smart_assignment.webapp.parse import describe_slot, parse_intake
+
+logger = logging.getLogger(__name__)
 
 _STATIC_DIR = Path(__file__).parent / "static"
 
@@ -65,6 +72,10 @@ app = FastAPI(
 # a client-supplied session_id. Only builds an ADK Runner when llm mode is
 # actually used (lazy), so the deterministic path stays import-light and offline.
 _chat_service = LlmChatService()
+# The offline brain: session-aware, so the chat stays conversational (remembers
+# the address, accepts revisions like "try 20 cases") when the LLM path isn't
+# available -- either because deterministic mode is configured or the LLM errored.
+_det_chat_service = DeterministicChatService()
 
 
 class RecommendRequest(BaseModel):
@@ -141,39 +152,44 @@ def mode() -> dict:
     return resolve_mode(DEFAULT_CONFIG)
 
 
-def _fallback_frames(message: str):
-    """Deterministic frames for when the LLM path is unavailable or errors mid
-    turn — parse the message and either ask for missing info or visualize."""
-    parsed = parse_intake(message)
-    if parsed.profile is None:
-        yield {"type": "message", "text": parsed.clarify}
-        yield {"type": "done"}
-        return
-    try:
-        result = run_slot_recommendation(
-            parsed.profile, config=DEFAULT_CONFIG, reasoner=DeterministicReasoner()
-        )
-    except ValueError as exc:
-        yield {"type": "message", "text": str(exc)}
-        yield {"type": "done"}
-        return
-    yield {"type": "visualization", "payload": build_workflow_payload(result, DEFAULT_CONFIG)}
-    yield {"type": "done"}
-
-
 @app.post("/api/chat")
 async def chat(req: ChatRequest) -> StreamingResponse:
-    """Stream one conversational turn of the real ADK agent as Server-Sent
-    Events. On any failure (no credentials, model/network error) it degrades to
-    a deterministic result so the chat never dead-ends."""
+    """Stream one conversational turn as Server-Sent Events.
+
+    In ``llm`` mode this drives the real ADK agent; on any failure (no
+    credentials, model/network error) it degrades to the **session-aware**
+    deterministic brain so the chat stays conversational and never dead-ends. In
+    ``deterministic`` mode it uses that same session-aware brain directly (no
+    wasted ADK-runner build). Either way the chat remembers the conversation and
+    accepts revisions like "try 20 cases" — matching ``adk web``."""
 
     async def event_stream():
-        try:
-            async for frame in _chat_service.stream_turn(req.session_id, req.message):
-                yield f"data: {json.dumps(frame)}\n\n"
-        except Exception:  # noqa: BLE001 - any LLM/runtime failure -> deterministic
-            for frame in _fallback_frames(req.message):
-                yield f"data: {json.dumps(frame)}\n\n"
+        mode = resolve_mode(DEFAULT_CONFIG).get("mode")
+        if mode == "llm":
+            try:
+                async for frame in _chat_service.stream_turn(req.session_id, req.message):
+                    yield f"data: {json.dumps(frame)}\n\n"
+                return
+            except Exception as exc:  # noqa: BLE001 - any LLM/runtime failure -> deterministic
+                # Don't swallow it: log the full traceback so the real cause
+                # (missing credentials, model/network error, ADK mismatch) is
+                # diagnosable, and tell the user this is the deterministic
+                # fallback -- not the agent -- so a silent downgrade never again
+                # masquerades as "adk web parity".
+                logger.exception(
+                    "LLM chat turn failed for session %s; falling back to the "
+                    "deterministic brain.",
+                    req.session_id,
+                )
+                notice = (
+                    f"⚠️ The conversational agent errored on this turn "
+                    f"({type(exc).__name__}: {exc}). Showing a deterministic result "
+                    f"instead. Check the server logs and the LLM backend/credentials "
+                    f"(SMART_ASSIGNMENT_LLM_BACKEND)."
+                )
+                yield f"data: {json.dumps({'type': 'message', 'text': notice})}\n\n"
+        async for frame in _det_chat_service.stream_turn(req.session_id, req.message):
+            yield f"data: {json.dumps(frame)}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 

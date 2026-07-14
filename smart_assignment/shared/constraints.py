@@ -31,6 +31,7 @@ from smart_assignment.shared.slot_selection import (
     SLOT_BASIS_NONE,
     identify_available_slots,
     recommend_slot,
+    select_candidate_slots,
 )
 
 # Canonical names of the two hard constraints, and a natural-language label
@@ -79,10 +80,12 @@ def build_context(
     remaining_after = route.vehicle_capacity_cases - committed - customer.order_quantity_cases
     utilization_after = (committed + customer.order_quantity_cases) / route.vehicle_capacity_cases
 
-    # Step 1: identify the route's available slots (location-aware, no preference).
-    # Step 2: recommend one, now considering the customer's preferred window.
+    # Step 1: identify the route's candidate slots (clustered, location-aware).
+    # Step 2: keep the top-N menu (always including any preference-overlapping
+    #         candidate). Step 3: recommend one from that menu.
     preferred_window = customer.preferred_slot.window if customer.preferred_slot else None
-    slots = identify_available_slots(customer.location, route, config)
+    all_slots = identify_available_slots(customer.location, route, config)
+    slots = select_candidate_slots(all_slots, preferred_window, config)
     selection = recommend_slot(slots, preferred_window, config)
 
     return EvalContext(

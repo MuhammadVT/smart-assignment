@@ -17,7 +17,15 @@ For a real geocoder, see `integrations/census_geocoder.py`'s
 
 from __future__ import annotations
 
+import logging
+import os
+
+from smart_assignment.shared.geo import Geocoder
 from smart_assignment.shared.models import GeoPoint
+
+logger = logging.getLogger(__name__)
+
+_GEOCODER_ENV = "SMART_ASSIGNMENT_GEOCODER"
 
 # Curated coordinates for the demo customer addresses (Houston metro).
 _KNOWN_ADDRESSES: dict[str, GeoPoint] = {
@@ -43,3 +51,28 @@ class MockGeocoder:
         lat = _HOUSTON_CENTER.latitude + ((seed % 20) - 10) / 100.0
         lng = _HOUSTON_CENTER.longitude + ((seed % 17) - 8) / 100.0
         return GeoPoint(round(lat, 4), round(lng, 4))
+
+
+def resolve_geocoder() -> Geocoder:
+    """The geocoder every surface should use, chosen by SMART_ASSIGNMENT_GEOCODER:
+
+      - "census" → the live US Census geocoder (real, accurate coordinates).
+                   **Default.**
+      - "mock"   → the deterministic offline `MockGeocoder` (curated coords for
+                   the demo addresses; a stable pseudo-point otherwise), for fully
+                   offline runs and tests.
+
+    Resolving in ONE place means the conversational tools, the deterministic
+    web-app path, and `run_slot_recommendation` all pick the same provider from
+    the same config instead of quietly diverging -- so `adk web` and the web app
+    (which now load the same .env; see smart_assignment/__init__.py) agree.
+    """
+    choice = os.environ.get(_GEOCODER_ENV, "census").strip().lower()
+    if choice in ("mock", "offline"):
+        return MockGeocoder()
+    if choice not in ("census", "live", "real"):
+        logger.warning("Unknown %s=%r; using the live census geocoder.", _GEOCODER_ENV, choice)
+    # Imported lazily so an offline/mock run never pulls the HTTP client.
+    from smart_assignment.integrations.census_geocoder import CensusGeocoder
+
+    return CensusGeocoder()

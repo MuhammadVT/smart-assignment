@@ -233,6 +233,50 @@ def test_build_map_data_stops_carry_id_window_and_tier():
     assert any(s["tier"] for s in stops)
 
 
+def test_build_map_data_carries_slot_rationale():
+    """The map payload includes a "why this time slot" rationale for the
+    recommended slot: how the window was placed (its basis) and the SLOT-level
+    factors that pick it (slot match + availability, each with its figure). The
+    route-level factors (geography, capacity) are excluded -- they explain the
+    route, not the slot."""
+    from smart_assignment.shared.timeutils import overlap_minutes as _overlap
+
+    config = Config(use_route_slot_scoring=True)
+    result = _results(config)[0]  # a clean recommend
+    rec = result.recommendation
+    winner = next(
+        c
+        for c in result.candidates_considered
+        if c.route.route_id == rec.recommended_route_id
+    )
+    html = build_map_data(result, config)["rationaleHtml"]
+
+    # Collapsible via a <details>/<summary> (triangle), collapsed by default.
+    assert html and '<details class="slot-why">' in html
+    assert '<summary class="slot-why-head">' in html
+    assert "<details open" not in html  # hidden by default
+    assert rec.recommended_route_id in html  # small route context
+    # Slot-level factors, each with the concrete figure behind its score.
+    assert "Slot availability (openness)" in html
+    assert 'class="why-factor-detail"' in html
+    # Openness calculation: contention named explicitly, then the 1 / (1 + contention) roll-up.
+    assert "contention = Σ harm" in html
+    assert "openness = 1 ÷" in html
+    # ... and each contending committed stop is listed with its tier + harm.
+    overlapping = [
+        s for s in winner.route.committed_stops
+        if s.delivery_time_window
+        and _overlap(winner.chosen_window, s.delivery_time_window) > 0
+    ]
+    assert overlapping and all(s.customer_number in html for s in overlapping)
+    assert "harm" in html
+    # Proximity: the nearest committed stops the window was clustered around.
+    assert "Proximity" in html and " mi" in html
+    # Route-level factors are NOT in the slot rationale.
+    assert "Geographic clustering" not in html
+    assert "Capacity buffer" not in html
+
+
 def test_build_map_data_routes_carry_ranked_order():
     """Every route carries a `rank` giving the agent's scored order (feasible
     recommended-first, then infeasible) -- the ranks are a 0..n-1 permutation and
@@ -300,6 +344,76 @@ def test_route_cards_show_bars_for_feasible_and_checks_for_infeasible():
     assert html.count("data-route-id=") == len(katy.candidates_considered)
 
 
+def test_route_slot_cards_and_payload_are_slot_level():
+    """With route-slot scoring on, the evaluated section renders one card per
+    ROUTE with its candidate slots listed inside (route info not repeated), the
+    map payload carries each route's scored slots, and Step 4 shows each factor's
+    formula so the math is checkable."""
+    from smart_assignment.reporting.page import (
+        _route_cards,
+        _sim_steps,
+        build_map_data,
+    )
+
+    config = Config(use_route_slot_scoring=True)
+    bayou = _results(config)[0]  # a clean recommend with feasible routes + slots
+    feasible = [e for e in bayou.candidates_considered if e.feasible]
+    assert feasible and any(e.scored_slots for e in feasible)
+
+    html = _route_cards(bayou, config)
+    # One card per ROUTE (feasible + infeasible), not one per slot; each feasible
+    # route's slots are listed inside (one .slot-head per candidate slot).
+    assert "Routes the agent evaluated" in html
+    assert html.count('class="route routecard"') == len(bayou.candidates_considered)
+    assert html.count('class="slot-head"') == sum(len(e.scored_slots) for e in feasible)
+    assert "★ recommended" in html  # exactly the winning (route, slot) is flagged
+
+    # Map payload: each feasible route carries its scored slots (score-ranked),
+    # with exactly one recommended slot overall.
+    routes = build_map_data(bayou)["routes"]
+    assert all("slots" in r for r in routes)
+    feasible_routes = [r for r in routes if r["feasible"]]
+    assert all(r["slots"] for r in feasible_routes)
+    for r in feasible_routes:
+        scores = [s["score"] for s in r["slots"]]
+        assert scores == sorted(scores, reverse=True)  # highest score first
+    assert sum(1 for r in routes for s in r["slots"] if s["recommended"]) == 1
+
+    # Step 4 exposes the per-factor math (a formula + the cited inputs).
+    score_step = next(s for s in _sim_steps(bayou, config) if s["title"] == "Score & Rank")
+    joined = " ".join(score_step["lines"])
+    assert "clamp(1 − avg_mi" in joined  # geo formula
+    assert "1 ÷ (1 + Σ tier-harm" in joined  # slot-availability formula
+    assert "total = (" in joined  # weighted-sum breakdown
+
+
+def test_route_slot_card_shows_unscored_slot_match_without_preference():
+    """When the prospect states no preferred slot, slot-match is dropped from the
+    route-slot total -- but the card still LISTS the factor, marked 'not scored',
+    so the user knows it exists and why it wasn't scored."""
+    from smart_assignment.reporting.page import _example_card, _route_cards
+
+    config = Config(use_route_slot_scoring=True)
+    # Galleria: a sample with preferred_slot=None but a feasible route to score.
+    galleria = _results(config)[1]
+    assert galleria.customer.preferred_slot is None
+    feasible = [e for e in galleria.candidates_considered if e.feasible]
+    assert feasible and feasible[0].scored_slots
+    # The dropped factor really is absent from the scored breakdown.
+    names = {f.name for f in feasible[0].scored_slots[0].factor_scores}
+    assert "window_match" not in names
+
+    html = _route_cards(galleria, config)
+    assert "Slot match (day + time)" in html  # still listed
+    assert "not scored" in html and "no preferred slot" in html
+    assert 'class="factor na"' in html
+
+    # The recommendation card's own factor bars carry the same "not scored" pill.
+    rec_card = _example_card(galleria, include_routes=False)
+    assert 'class="factor na"' in rec_card
+    assert "Slot match (day + time)" in rec_card and "not scored" in rec_card
+
+
 def test_page_embeds_map_data_in_workflow_json():
     config = Config()
     html = build_page(_results(config), config)
@@ -318,3 +432,19 @@ def test_generate_writes_file(tmp_path):
     text = out.read_text(encoding="utf-8")
     assert "Smart Assignment" in text
     assert "GENERATED by scripts/generate_page.py" in text
+
+
+def test_route_slot_page_renders_availability_and_new_threshold():
+    """With route-slot scoring on, the page explains the (route, slot) unit, the
+    availability factor, and the route-slot auto-assign bar -- not the stale
+    route-only narrative."""
+    config = Config(use_route_slot_scoring=True)
+    html = build_page(_results(config), config)
+    assert html.startswith("<!DOCTYPE html>")
+    # The route-slot explainer and factor are present...
+    assert "Slot availability" in html
+    assert "(route, slot)" in html or "route-slot" in html
+    # ...the auto-assign bar reflects route_slot_score_threshold (0.55 default)...
+    assert f"{config.route_slot_score_threshold:.0%}" in html
+    # ...and the stale route-only "three dimensions" narrative is gone.
+    assert "three dimensions" not in html

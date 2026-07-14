@@ -22,20 +22,22 @@ attribute access (``smart_assignment.agent.root_agent`` /
 construction with the configured backend -- identical behavior to before for
 ``adk run`` / ``adk web`` / ``adk deploy``.
 
-Currently one agent calling its tools in strict sequence -- there is no
-multi-agent split yet. If a step later needs to become its own sub-agent
-(e.g. a richer intake agent, or a separate Q&A agent over past
-recommendations), wrap that tool's function in its own `LlmAgent` and
-expose it here via `google.adk.tools.AgentTool` -- the tool functions
-themselves don't need to change, since each is already independent and
-keyed only through session state (see tools/slot_recommendation.py).
+The first multi-agent split is the **escalation-triage** sub-agent (see the
+`triage` package), wired in below when `Config.use_escalation_triage` is on:
+an `LlmAgent` exposed via `google.adk.tools.AgentTool` that root_agent consults
+on an escalation to compose a specialist brief. It runs downstream of the
+deterministic decision and only reads session state, so it never changes a
+number or the decision. The same pattern (wrap a function in its own `LlmAgent`,
+expose it via `AgentTool`) applies to any future sub-agent (a richer intake
+agent, a Q&A agent over past recommendations), since each tool is already
+independent and keyed only through session state (see tools/slot_recommendation.py).
 """
 
 from google.adk.agents import LlmAgent
 from google.adk.tools import FunctionTool, request_input
 
-from smart_assignment.prompts import INSTRUCTION
-from smart_assignment.shared.config import DEFAULT_CONFIG
+from smart_assignment.prompts import build_instruction
+from smart_assignment.shared.config import DEFAULT_CONFIG, ROLE_ROOT_AGENT
 from smart_assignment.shared.llm import get_llm
 from smart_assignment.tools import (
     evaluate_and_score_routes,
@@ -52,21 +54,32 @@ def _build_root_agent() -> LlmAgent:
     """Construct the conversational agent. Resolves the LLM backend (``get_llm``),
     so this needs credentials for the configured backend -- called only on first
     access to ``root_agent``, never at import."""
+    triage_enabled = DEFAULT_CONFIG.use_escalation_triage
+
+    tools = [
+        FunctionTool(intake_customer),
+        FunctionTool(find_candidate_routes),
+        FunctionTool(evaluate_and_score_routes),
+        FunctionTool(recommend_or_escalate),
+        request_input,
+    ]
+    if triage_enabled:
+        # Imported lazily so the package import stays credential-free -- this
+        # runs only while root_agent is being built, which already resolves the
+        # backend via get_llm above.
+        from smart_assignment.triage import build_triage_tool
+
+        tools.append(build_triage_tool(DEFAULT_CONFIG))
+
     return LlmAgent(
         name="smart_assignment_agent",
-        model=get_llm(DEFAULT_CONFIG),
+        model=get_llm(DEFAULT_CONFIG.for_role(ROLE_ROOT_AGENT)),
         description=(
             "Collects a new prospect customer's delivery details conversationally "
             "and recommends -- or escalates -- a delivery route and slot."
         ),
-        instruction=INSTRUCTION,
-        tools=[
-            FunctionTool(intake_customer),
-            FunctionTool(find_candidate_routes),
-            FunctionTool(evaluate_and_score_routes),
-            FunctionTool(recommend_or_escalate),
-            request_input,
-        ],
+        instruction=build_instruction(include_triage=triage_enabled),
+        tools=tools,
     )
 
 

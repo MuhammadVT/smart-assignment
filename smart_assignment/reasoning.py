@@ -242,9 +242,12 @@ class LLMReasoner:
         facts = self._fallback.explain(customer, ranked, infeasible, total_score, config)
         try:
             from smart_assignment.reasoning_prompts import build_reasoning_prompt
+            from smart_assignment.shared.config import ROLE_REASONING
             from smart_assignment.shared.llm import generate_text
 
-            text = generate_text(config, build_reasoning_prompt(facts)).strip()
+            text = generate_text(
+                config.for_role(ROLE_REASONING), build_reasoning_prompt(facts)
+            ).strip()
             return text or facts
         except Exception:
             # No credentials, no network, or SDK unavailable -> deterministic trace still works.

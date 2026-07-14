@@ -79,9 +79,11 @@ class _FakeRunner:
     def __init__(self, batches):
         self._batches = [list(b) for b in batches]
         self.messages = []
+        self.run_configs = []
 
     async def run_async(self, *, user_id, session_id, new_message, run_config=None):
         self.messages.append(new_message)
+        self.run_configs.append(run_config)
         batch = self._batches.pop(0) if self._batches else []
         for event in batch:
             yield event
@@ -132,15 +134,18 @@ def test_llm_credentials_available_sage(monkeypatch):
     assert llm_credentials_available(cfg) is False
 
 
-def test_resolve_mode_downgrades_without_credentials(monkeypatch):
+def test_resolve_mode_stays_llm_without_a_credential_pre_check(monkeypatch):
+    # The web app drives the real agent (like adk web) rather than pre-guessing
+    # credentials and downgrading to the parser -- that heuristic gave false
+    # negatives and stranded the chat on Phase 1. Genuine no-credential failures
+    # are handled at runtime by the /api/chat deterministic fallback instead.
     monkeypatch.setenv("SMART_ASSIGNMENT_WEBAPP_MODE", "llm")
     cfg = Config(llm_backend="standard", model="gemini-2.5-flash")
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
     res = resolve_mode(cfg)
-    assert res["mode"] == "deterministic"
+    assert res["mode"] == "llm"
     assert res["configured"] == "llm"
-    assert "reason" in res
 
 
 def test_resolve_mode_llm_when_available(monkeypatch):
@@ -182,6 +187,24 @@ async def test_stream_turn_maps_tools_and_renders_visualization():
     assert frames[-1] == {"type": "done"}
 
 
+async def test_stream_turn_requests_non_streaming_mode():
+    """The service must run the model in NON-streaming mode (StreamingMode.NONE),
+    exactly like ``adk web``'s default. Forcing token streaming (SSE) tripped a
+    LiteLLM async-streaming bug on some backends ("'coroutine' object is not an
+    iterator") that made every turn fail and fall back to the deterministic brain.
+    The browser SSE stream is emitted by ``stream_turn`` itself and does not need
+    model token streaming, so NONE loses nothing."""
+    from google.adk.agents.run_config import StreamingMode
+
+    runner = _FakeRunner([[_FakeEvent(text="ok")]])
+    service = LlmChatService(
+        runner=runner, session_service=_FakeSessionService({}), geocoder=MockGeocoder()
+    )
+    await _collect(service.stream_turn("s1", "hello"))
+    assert runner.run_configs and runner.run_configs[0] is not None
+    assert runner.run_configs[0].streaming_mode == StreamingMode.NONE
+
+
 async def test_stream_turn_partial_text_is_not_emitted():
     events = [_FakeEvent(text="partial chunk", partial=True), _FakeEvent(text="final answer")]
     service = LlmChatService(
@@ -216,6 +239,32 @@ async def test_stream_turn_human_in_the_loop_then_resume():
     assert fr.response == {"result": "Yes, go ahead"}
     assert "s1" not in service._pending_input
     assert any(f["type"] == "message" for f in frames2)
+
+
+async def test_recommendation_narration_shown_in_visualization():
+    """The agent's own recommendation narration (what it says AFTER calling
+    recommend_or_escalate) is rendered in the result card's 'Why the agent chose
+    this', so the panel matches the chat box word-for-word. Text emitted BEFORE
+    the recommendation (e.g. a Score & Rank summary) must not leak into it."""
+    events = [
+        _FakeEvent(calls=[_FakeCall("evaluate_and_score_routes")]),
+        _FakeEvent(text="All three routes look feasible with this order."),
+        _FakeEvent(calls=[_FakeCall("recommend_or_escalate")]),
+        _FakeEvent(text="I recommend RTE-A on TUE, 07:20-10:20 — tight fit and an open slot."),
+    ]
+    service = LlmChatService(
+        runner=_FakeRunner([events]),
+        session_service=_FakeSessionService(_SAMPLE_STATE),
+        geocoder=MockGeocoder(),
+    )
+    frames = await _collect(service.stream_turn("s1", "what is your rec"))
+    viz = [f for f in frames if f["type"] == "visualization"]
+    assert len(viz) == 1
+    html = viz[0]["payload"]["resultHtml"]
+    # The exact narration the chat box showed is what the panel shows.
+    assert "I recommend RTE-A on TUE, 07:20-10:20" in html
+    # A pre-recommendation summary is NOT captured as the recommendation reasoning.
+    assert "All three routes look feasible" not in html
 
 
 async def test_visualization_none_when_profile_incomplete():

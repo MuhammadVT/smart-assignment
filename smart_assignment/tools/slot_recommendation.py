@@ -36,7 +36,7 @@ from typing import Optional
 
 from google.adk.tools import ToolContext
 
-from smart_assignment.integrations.census_geocoder import CensusGeocoder
+from smart_assignment.integrations.geocoding_client import resolve_geocoder
 from smart_assignment.integrations.route_capacity_client import fetch_candidate_routes
 from smart_assignment.shared.config import DEFAULT_CONFIG
 from smart_assignment.shared.constraints import CONSTRAINT_LABEL, build_context
@@ -49,17 +49,19 @@ from smart_assignment.shared.models import (
     Route,
 )
 from smart_assignment.shared.timeutils import fmt_time, fmt_window, parse_time
-from smart_assignment.pipeline import decide, evaluate_candidates, geo_lookup, intake
+from smart_assignment.judgment import default_judge
+from smart_assignment.pipeline import evaluate_candidates, geo_lookup, intake
 from smart_assignment.reasoning import LLMReasoner
 
 # Namespaced so this doesn't collide with other state a larger app might keep.
 _STATE_PROFILE_KEY = "sa_profile"
 _STATE_LAST_RECOMMENDATION_KEY = "sa_last_recommendation"
 
-# Real geocoder for the conversational path (pipeline.run_slot_recommendation's
-# own default stays MockGeocoder -- see geocoding_client.py's docstring -- so
-# the offline demo, GitHub Pages generator, and test suite are unaffected).
-_GEOCODER = CensusGeocoder()
+# Geocoder for the conversational path, chosen by SMART_ASSIGNMENT_GEOCODER
+# (census | mock; default census -- see geocoding_client.resolve_geocoder).
+# Every surface resolves through the same factory and both load the same .env,
+# so adk web and the web app use the same geocoder.
+_GEOCODER = resolve_geocoder()
 
 
 def _error(message: str) -> dict:
@@ -121,6 +123,7 @@ def _serialize_evaluation(e: CandidateEvaluation) -> dict:
     out["available_slots"] = [
         {
             "window": fmt_window(s.window),
+            "anchor_time": fmt_time(s.anchor_time) if s.anchor_time else None,
             "fit_score": round(s.fit_score, 4),
             "committed_overlap": s.committed_overlap,
             "basis": s.basis,
@@ -228,6 +231,14 @@ def intake_customer(
         if preferred_window_end is not None:
             profile["preferred_window_end"] = preferred_window_end
 
+    # Persist the accumulated fields NOW, before the validation checks below.
+    # Intake is conversational and often arrives one field at a time (address this
+    # turn, order quantity the next); if we only saved on full success, a partial
+    # call would be thrown away on its required-field error and the customer would
+    # be asked to repeat what they already gave. On success this raw dict is
+    # replaced by the normalized profile below.
+    tool_context.state[_STATE_PROFILE_KEY] = profile
+
     slot_fields = (
         profile.get("preferred_day"),
         profile.get("preferred_window_start"),
@@ -243,9 +254,7 @@ def intake_customer(
     if not profile.get("address"):
         return _error("I still need the customer's address before I can do anything else.")
     if not profile.get("order_quantity_cases"):
-        return _error(
-            "I still need the order quantity, in cases, before I can do anything else."
-        )
+        return _error("I still need the order quantity, in cases, before I can do anything else.")
 
     try:
         customer = _profile_from_state_dict(profile)
@@ -359,7 +368,10 @@ def recommend_or_escalate(tool_context: ToolContext) -> dict:
       {"ok": true, "decision", "requires_human_review", "total_score",
        "recommended_route_id", "recommended_route_name", "recommended_day",
        "recommended_window", "recommended_window_basis" (why that slot was
-       chosen), "reasoning", "rejected_alternatives", "review_reason"}
+       chosen), "reasoning", "rejected_alternatives", "review_reason", and -- on a
+       route-slot RECOMMENDED pick -- the structured explanation the agent should
+       present: "decision_summary", "primary_reasons", "key_tradeoff",
+       "runner_up", "default_comparison"}
       or {"ok": false, "error": "..."}.
     """
     profile = tool_context.state.get(_STATE_PROFILE_KEY)
@@ -371,11 +383,29 @@ def recommend_or_escalate(tool_context: ToolContext) -> dict:
     except GeocodingError as exc:
         return _geocoding_error_result(exc)
     evaluations = evaluate_candidates(customer, candidates, DEFAULT_CONFIG)
-    # LLM-backed reasoning by default (LLMReasoner), for a more fluent
-    # narrative; it transparently falls back to the deterministic trace on
-    # any error (no credentials, no network, SDK issue), so this is safe
-    # even when the model/credentials are unavailable.
-    rec = decide(customer, evaluations, LLMReasoner(DEFAULT_CONFIG), DEFAULT_CONFIG)
+    # Step-5 strategy comes from config: with SMART_ASSIGNMENT_USE_GROUNDED_JUDGMENT
+    # off (the default) this is the existing weighted-sum pick narrated by the
+    # LLM-backed reasoner; with it on, an LLM makes the recommend/escalate call
+    # over the evidence packet (see the `judgment` package). Either way the LLM
+    # path transparently falls back to the deterministic trace/pick on any
+    # error, so this stays safe when the model/credentials are unavailable.
+    if DEFAULT_CONFIG.use_route_slot_scoring:
+        # The decision unit is the (route, slot) pair -- one grounded decision
+        # over route-slot options that absorbs the slot pick (see `routeslot`).
+        from smart_assignment.routeslot import decide_route_slot
+
+        rec = decide_route_slot(customer, evaluations, DEFAULT_CONFIG)
+    else:
+        judge = default_judge(DEFAULT_CONFIG, reasoner=LLMReasoner(DEFAULT_CONFIG))
+        rec = judge.decide(customer, evaluations, DEFAULT_CONFIG)
+
+        # Optionally let an LLM pick the winning route's final slot from its
+        # candidate menu (see the `slotpick` package). No-op unless
+        # use_grounded_slot_selection is on; falls back to the deterministic slot.
+        if DEFAULT_CONFIG.use_grounded_slot_selection:
+            from smart_assignment.slotpick import refine_slot
+
+            refine_slot(rec, evaluations, customer, DEFAULT_CONFIG)
 
     result = {
         "ok": True,
@@ -387,9 +417,21 @@ def recommend_or_escalate(tool_context: ToolContext) -> dict:
         "recommended_day": rec.recommended_day,
         "recommended_window": rec.recommended_window,
         "recommended_window_basis": rec.recommended_window_basis,
+        "recommended_window_rationale": rec.recommended_window_rationale,
         "reasoning": rec.reasoning,
+        # Structured grounded explanation of a route-slot pick (see the `routeslot`
+        # package). None/empty unless the grounded route-slot decision succeeded.
+        "decision_summary": rec.decision_summary,
+        "primary_reasons": rec.primary_reasons,
+        "key_tradeoff": rec.key_tradeoff,
+        "runner_up": rec.runner_up,
+        "default_comparison": rec.default_comparison,
         "rejected_alternatives": rec.rejected_alternatives,
         "review_reason": rec.review_reason,
+        # Split model opinions from grounded-judgment resampling (empty on the
+        # weighted path). Surfaced so the escalation-triage sub-agent can show
+        # the specialist where the automated judgment was divided.
+        "alternative_takes": rec.alternative_takes,
     }
     tool_context.state[_STATE_LAST_RECOMMENDATION_KEY] = result
     return result

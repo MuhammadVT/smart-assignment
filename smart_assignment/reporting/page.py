@@ -30,6 +30,7 @@ from smart_assignment.shared.config import (
     DEFAULT_CONFIG,
     FACTOR_CAPACITY_BUFFER,
     FACTOR_GEO_CLUSTERING,
+    FACTOR_SLOT_AVAILABILITY,
     FACTOR_WINDOW_MATCH,
     Config,
 )
@@ -38,8 +39,15 @@ from smart_assignment.shared.models import (
     CandidateEvaluation,
     Decision,
     RecommendationResult,
+    SlotRecommendation,
 )
-from smart_assignment.shared.timeutils import duration_minutes, fmt_time, fmt_window
+from smart_assignment.shared.slot_selection import nearest_neighbors
+from smart_assignment.shared.timeutils import (
+    duration_minutes,
+    fmt_time,
+    fmt_window,
+    overlap_minutes,
+)
 
 DEFAULT_OUTPUT = Path(__file__).resolve().parents[2] / "docs" / "index.html"
 
@@ -47,6 +55,7 @@ FACTOR_LABEL = {
     FACTOR_GEO_CLUSTERING: "Geographic clustering",
     FACTOR_CAPACITY_BUFFER: "Capacity buffer",
     FACTOR_WINDOW_MATCH: "Slot match (day + time)",
+    FACTOR_SLOT_AVAILABILITY: "Slot availability (openness)",
 }
 DECISION_PILL = {
     Decision.RECOMMENDED: ("rec", "✔ Recommended"),
@@ -151,6 +160,30 @@ _STYLE = """
   .arch-legend { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-top: 22px; }
   .arch-legend .card { padding: 16px; }
   .arch-legend p { font-size: 12.5px; }
+  /* LLM & agent touchpoints — every place a model is in the loop. */
+  .tp { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+  .tpcard { position: relative; }
+  .tptype { display: inline-block; font-size: 10px; font-weight: 800; letter-spacing: .05em;
+    text-transform: uppercase; padding: 3px 9px; border-radius: 999px; }
+  .tptype.agent { background: var(--violet-soft); color: var(--violet); }
+  .tptype.sub   { background: #e6ecfb; color: #274bbd; }
+  .tptype.call  { background: var(--blue-soft); color: var(--blue); }
+  .tptype.narr  { background: var(--green-soft); color: var(--green); }
+  .tpcard h4 { margin: 10px 0 2px; font-size: 15.5px; }
+  .tpcard .where { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+  .tpcard p { margin: 8px 0 0; font-size: 13px; color: var(--muted); }
+  .tpcard .guard { margin-top: 10px; font-size: 12.5px; color: #33415c; background: #f4f7fc;
+    border: 1px solid #dde6f2; border-radius: 8px; padding: 8px 10px; }
+  .tpcard .guard b { color: var(--navy); }
+  .tpmeta { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 11.5px; }
+  .tpmeta .flag { font-family: var(--mono); background: #f1f4f9; border-radius: 6px; padding: 2px 7px; color: #33415c; }
+  .tpmeta .state { font-weight: 700; padding: 2px 8px; border-radius: 999px; }
+  .tpmeta .state.on  { background: var(--green-soft); color: var(--green); }
+  .tpmeta .state.off { background: #eef1f6; color: var(--muted); }
+  .tpmeta .state.always { background: var(--violet-soft); color: var(--violet); }
+  .guarantee { margin-top: 18px; background: var(--violet-soft); border: 1px solid #ddd2f4;
+    border-radius: var(--radius); padding: 16px 18px; color: #3a2b6b; font-size: 13.5px; }
+  .guarantee b { color: var(--navy); }
   .legend { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
   .pill { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; font-size: 13px;
     padding: 6px 12px; border-radius: 999px; }
@@ -222,6 +255,13 @@ _STYLE = """
     border-radius: 8px; padding: 12px 14px; font-size: 13.5px; color: #22364f; }
   .reason .lbl { font-weight: 700; color: var(--blue); font-size: 11px; letter-spacing: .06em;
     text-transform: uppercase; display: block; margin-bottom: 4px; }
+  .reason .summary { font-weight: 600; display: block; margin-bottom: 6px; }
+  .reason ul.reasons { margin: 4px 0 0; padding-left: 18px; }
+  .reason ul.reasons li { margin: 2px 0; }
+  .reason .sub { margin-top: 8px; }
+  .reason .sub .k { font-weight: 700; color: var(--blue); font-size: 10.5px;
+    letter-spacing: .05em; text-transform: uppercase; display: block; }
+  .reason .vs { margin-top: 8px; font-size: 12px; color: var(--muted); font-style: italic; }
   details.routes { margin-top: 14px; border-top: 1px dashed var(--line); padding-top: 10px; }
   details.routes summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--blue); }
   .routelist { margin-top: 10px; display: grid; gap: 8px; }
@@ -236,6 +276,19 @@ _STYLE = """
   .route.routecard .factors { margin-top: 9px; }
   .rectag { font-size: 10px; font-weight: 700; color: var(--green); background: var(--green-soft);
     border-radius: 999px; padding: 2px 7px; margin-left: 6px; white-space: nowrap; }
+  /* Candidate (route, slot) options listed inside a route card (route-slot path). */
+  .slot-options { margin-top: 12px; display: grid; gap: 10px; }
+  .slot-option { border: 1px solid var(--line); border-radius: 10px; padding: 9px 11px; background: var(--bg); }
+  .slot-option.rec { border-color: var(--green); background: var(--green-soft); }
+  .slot-head { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+  .slot-win { font-weight: 700; color: var(--navy); font-family: var(--mono); }
+  .slot-score { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .slot-option .factors { margin-top: 8px; }
+  /* A factor that's present but deliberately unscored (no stated preference). */
+  .factor.na { grid-template-columns: 150px 1fr; }
+  .factor.na .fname { color: var(--muted); }
+  .factor.na .na-note { font-size: 11px; color: var(--muted); font-weight: 600; justify-self: start;
+    background: #f1f4f9; border: 1px dashed #cfd8e6; border-radius: 6px; padding: 2px 8px; }
   .checks { margin: 6px 0 0; padding-left: 0; list-style: none; color: var(--muted); }
   .checks li { padding: 1px 0; }
   .checks li .ok { color: var(--green); font-weight: 700; }
@@ -246,7 +299,7 @@ _STYLE = """
   footer a { text-decoration: none; }
   @media (max-width: 860px) {
     .flow { grid-template-columns: repeat(2, 1fr); }
-    .grid-2, .grid-3, .legend, .arch-legend { grid-template-columns: 1fr; }
+    .grid-2, .grid-3, .legend, .arch-legend, .tp { grid-template-columns: 1fr; }
     .examples { grid-template-columns: 1fr; }
     .hero h1 { font-size: 32px; }
     .factor { grid-template-columns: 120px 1fr 40px; }
@@ -318,11 +371,17 @@ _ARCH_SVG = """
   <line x1="690" y1="190" x2="648" y2="190" stroke="#7c8aa0" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arwd)"/>
 
   <rect x="690" y="300" width="266" height="80" rx="12" fill="#efeafb" stroke="#cfc2f0"/>
-  <text x="823" y="332" text-anchor="middle" font-size="12.5" font-weight="700" fill="#5b3fb0">🧠 LLM reasoner (Gemini)</text>
-  <text x="823" y="351" text-anchor="middle" font-size="10.5" fill="#6b5aa0">writes the plain-English rationale</text>
+  <text x="823" y="332" text-anchor="middle" font-size="12.5" font-weight="700" fill="#5b3fb0">🧠 LLM decision &amp; reasoning</text>
+  <text x="823" y="351" text-anchor="middle" font-size="10.5" fill="#6b5aa0">grounded pick (opt-in) · writes the rationale</text>
   <line x1="690" y1="340" x2="648" y2="340" stroke="#7c8aa0" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arwd)"/>
 
-  <text x="24" y="656" font-size="11.5" fill="#5b6675">→ agent flow &#160;&#160;·&#160;&#160; ⇢ agent calls a service &#160;&#160;·&#160;&#160; ◇ agent's own decision point</text>
+  <rect x="690" y="452" width="266" height="86" rx="12" fill="#e6ecfb" stroke="#a9bbe8"/>
+  <text x="823" y="482" text-anchor="middle" font-size="12.5" font-weight="700" fill="#274bbd">🤝 Escalation-triage sub-agent</text>
+  <text x="823" y="501" text-anchor="middle" font-size="10.5" fill="#3a52a8">a 2nd LlmAgent, exposed as an ADK AgentTool</text>
+  <text x="823" y="518" text-anchor="middle" font-size="10.5" fill="#3a52a8">consulted only on escalation · composes the brief</text>
+  <path d="M640,585 C690,585 690,520 688,510" fill="none" stroke="#274bbd" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arw)"/>
+
+  <text x="24" y="656" font-size="11.5" fill="#5b6675">→ agent flow &#160;&#160;·&#160;&#160; ⇢ agent calls a service / sub-agent &#160;&#160;·&#160;&#160; ◇ agent's own decision point</text>
 </svg>
 """
 
@@ -470,10 +529,6 @@ def _factor_bars(factor_scores) -> str:
     return "".join(rows)
 
 
-def _factor_rows(rec) -> str:
-    return _factor_bars(rec.factor_breakdown)
-
-
 def _route_checks(cand: CandidateEvaluation) -> str:
     checks = []
     for oc in cand.constraint_outcomes:
@@ -483,43 +538,145 @@ def _route_checks(cand: CandidateEvaluation) -> str:
     return "".join(checks)
 
 
+def _infeasible_card(cand: CandidateEvaluation) -> str:
+    """A routecard for an infeasible route (no score/slots -- just why it failed)."""
+    r = cand.route
+    title = f"{_esc(r.route_id)} · {_esc(r.name)} · {r.day.value} · {cand.distance_miles:.1f} mi"
+    return (
+        f'<div class="route routecard" data-route-id="{_esc(r.route_id)}"><div class="rtitle">'
+        f"<span>{title}</span><span class=\"status bad\">INFEASIBLE</span></div>"
+        f'<ul class="checks">{_route_checks(cand)}</ul></div>'
+    )
+
+
+def _feasible_route_card(cand: CandidateEvaluation, winner_id, threshold) -> str:
+    """A routecard for a feasible route scored at the ROUTE level (route-slot
+    scoring off): score bar + the route's weighted-factor bars."""
+    r = cand.route
+    title = f"{_esc(r.route_id)} · {_esc(r.name)} · {r.day.value} · {cand.distance_miles:.1f} mi"
+    rec_tag = ' <span class="rectag">★ recommended</span>' if r.route_id == winner_id else ""
+    status = f'<span class="status ok">FEASIBLE · {cand.total_score:.2f}</span>'
+    score_cls = "g" if cand.total_score >= threshold else "a"
+    pct = round(cand.total_score * 100)
+    body = (
+        f'<div class="score"><div class="bar">'
+        f'<span class="{score_cls}" style="width:{pct}%"></span></div></div>'
+        f'<div class="factors">{_factor_bars(cand.factor_scores)}</div>'
+    )
+    return (
+        f'<div class="route routecard" data-route-id="{_esc(r.route_id)}"><div class="rtitle">'
+        f"<span>{title}{rec_tag}</span>{status}</div>"
+        f'{body}<ul class="checks">{_route_checks(cand)}</ul></div>'
+    )
+
+
+# Canonical order of the route-slot factors, so "Slot match" always sits in the
+# same place -- even when it's shown as un-scored (no stated preference).
+_RS_FACTOR_ORDER = [
+    FACTOR_GEO_CLUSTERING,
+    FACTOR_CAPACITY_BUFFER,
+    FACTOR_WINDOW_MATCH,
+    FACTOR_SLOT_AVAILABILITY,
+]
+
+
+def _slot_factor_bars(factor_scores, has_preference: bool) -> str:
+    """Factor bars for one route-slot, in canonical order. Slot match is always
+    listed: when the prospect stated no preference it is *excluded from the
+    weighted total* (rather than given an arbitrary neutral), so it's shown greyed
+    with a clear 'not scored' note instead of a bar."""
+    by_name = {f.name: f for f in factor_scores}
+    rows = []
+    for name in _RS_FACTOR_ORDER:
+        f = by_name.get(name)
+        label = FACTOR_LABEL.get(name, name)
+        if f is not None:
+            pct = round(f.value * 100)
+            rows.append(
+                f'<div class="factor"><span class="fname">{_esc(label)}</span>'
+                f'<div class="bar"><span style="width:{pct}%"></span></div>'
+                f'<span class="fval">{f.value:.2f}</span></div>'
+            )
+        elif name == FACTOR_WINDOW_MATCH and not has_preference:
+            rows.append(
+                f'<div class="factor na"><span class="fname">{_esc(label)}</span>'
+                '<span class="na-note" title="The prospect stated no preferred slot, '
+                'so slot match is excluded from the score and the other weights '
+                'renormalize">not scored · no preferred slot given</span></div>'
+            )
+    return "".join(rows)
+
+
+def _slot_option(cand: CandidateEvaluation, ss, winner_id, threshold, has_preference) -> str:
+    """One candidate (route, slot) inside a route card: its window, its own
+    route-slot score bar, and its per-slot factor bars. The recommended slot is
+    highlighted + starred."""
+    is_rec = cand.route.route_id == winner_id and ss.slot.window == cand.chosen_window
+    win = _win(fmt_window(ss.slot.window))
+    star = ' <span class="rectag">★ recommended</span>' if is_rec else ""
+    score_cls = "g" if ss.total_score >= threshold else "a"
+    pct = round(ss.total_score * 100)
+    return (
+        f'<div class="slot-option{" rec" if is_rec else ""}">'
+        f'<div class="slot-head"><span class="slot-win">◆ {win}</span>{star}'
+        f'<span class="slot-score">score {ss.total_score:.2f}</span></div>'
+        f'<div class="score"><div class="bar">'
+        f'<span class="{score_cls}" style="width:{pct}%"></span></div></div>'
+        f'<div class="factors">{_slot_factor_bars(ss.factor_scores, has_preference)}</div></div>'
+    )
+
+
+def _route_slot_group_card(cand: CandidateEvaluation, winner_id, threshold, has_preference) -> str:
+    """A routecard for one feasible ROUTE on the route-slot path: the route header
+    + constraint checks once (no per-slot repetition), then its candidate slots
+    listed inside (each with its own score + factor bars). Mirrors the per-route
+    delivery-window panel."""
+    r = cand.route
+    title = f"{_esc(r.route_id)} · {_esc(r.name)} · {r.day.value} · {cand.distance_miles:.1f} mi"
+    has_rec = r.route_id == winner_id and any(
+        ss.slot.window == cand.chosen_window for ss in cand.scored_slots
+    )
+    rec_tag = ' <span class="rectag">★ recommended</span>' if has_rec else ""
+    slots = "".join(
+        _slot_option(cand, ss, winner_id, threshold, has_preference)
+        for ss in sorted(cand.scored_slots, key=lambda s: s.total_score, reverse=True)
+    )
+    return (
+        f'<div class="route routecard" data-route-id="{_esc(r.route_id)}"><div class="rtitle">'
+        f'<span>{title}{rec_tag}</span><span class="status ok">FEASIBLE</span></div>'
+        f'<ul class="checks">{_route_checks(cand)}</ul>'
+        f'<div class="slot-options">{slots}</div></div>'
+    )
+
+
 def _route_cards(result: RecommendationResult, config: Config) -> str:
-    """The "Routes the agent evaluated" section: one rich card per candidate --
-    feasible routes get the same score bar + weighted-factor bars the recommended
-    route shows, infeasible routes show why they failed. Open by default (the
-    ``<summary>`` still collapses it). Ranked-feasible first (so the recommended
-    route leads), then the infeasible ones. Each card carries ``data-route-id``
-    so the web app can tint it to match the route's colour on the map."""
+    """The "Routes the agent evaluated" section. Open by default (the
+    ``<summary>`` still collapses it). Each card carries ``data-route-id`` so the
+    web app can tint it to match the route's colour on the map.
+
+    On the route-slot path it renders one card per **route** (feasible ranked
+    first), with that route's candidate **slots** listed inside -- each slot with
+    its own score and factor bars -- so the route info isn't repeated per slot and
+    the section mirrors the per-route delivery-window panels. Off that path it
+    keeps one card per route with the route's own score."""
     rec = result.recommendation
     winner_id = rec.recommended_route_id
-    threshold = config.total_score_threshold
-    ordered = list(result.ranked_feasible) + [
-        e for e in result.candidates_considered if not e.feasible
-    ]
-    n = len(result.candidates_considered)
+    feasible = list(result.ranked_feasible)
+    infeasible = [e for e in result.candidates_considered if not e.feasible]
+    route_slot_mode = any(e.scored_slots for e in feasible)
 
     cards = []
-    for cand in ordered:
-        r = cand.route
-        title = f"{_esc(r.route_id)} · {_esc(r.name)} · {r.day.value} · {cand.distance_miles:.1f} mi"
-        rec_tag = ' <span class="rectag">★ recommended</span>' if r.route_id == winner_id else ""
-        if cand.feasible:
-            status = f'<span class="status ok">FEASIBLE · {cand.total_score:.2f}</span>'
-            score_cls = "g" if cand.total_score >= threshold else "a"
-            pct = round(cand.total_score * 100)
-            body = (
-                f'<div class="score"><div class="bar">'
-                f'<span class="{score_cls}" style="width:{pct}%"></span></div></div>'
-                f'<div class="factors">{_factor_bars(cand.factor_scores)}</div>'
-            )
-        else:
-            status = '<span class="status bad">INFEASIBLE</span>'
-            body = ""
-        cards.append(
-            f'<div class="route routecard" data-route-id="{_esc(r.route_id)}"><div class="rtitle">'
-            f"<span>{title}{rec_tag}</span>{status}</div>"
-            f'{body}<ul class="checks">{_route_checks(cand)}</ul></div>'
+    if route_slot_mode:
+        threshold = config.route_slot_score_threshold
+        has_pref = result.customer.preferred_slot is not None
+        cards.extend(
+            _route_slot_group_card(e, winner_id, threshold, has_pref) for e in feasible
         )
+    else:
+        threshold = config.total_score_threshold
+        cards.extend(_feasible_route_card(e, winner_id, threshold) for e in feasible)
+    cards.extend(_infeasible_card(e) for e in infeasible)
+    n = len(result.candidates_considered)
 
     return (
         f'<details class="routes" open><summary>Routes the agent evaluated ({n})</summary>'
@@ -544,7 +701,46 @@ def _route_rows(candidates: list[CandidateEvaluation]) -> str:
     return "".join(rows)
 
 
-def _example_card(result: RecommendationResult, include_routes: bool = True) -> str:
+def _reason_block(
+    rec: SlotRecommendation, reason_label: str, reasoning_override: Optional[str] = None
+) -> str:
+    """The 'why' panel. When ``reasoning_override`` is given (the live agent's own
+    recommendation narration), render exactly that text -- so the panel shows the
+    same words the chat box did, instead of a separately-rendered version. When a
+    grounded route-slot pick populated the structured fields, render them as
+    distinct sections (summary · reasons · trade-off · runner-up · vs-default);
+    otherwise fall back to the flat reasoning line."""
+    if reasoning_override and reasoning_override.strip():
+        body = _esc(reasoning_override.strip()).replace("\n", "<br>")
+        return f'<div class="reason"><span class="lbl">{reason_label}</span>{body}</div>'
+    if not rec.decision_summary:
+        return f'<div class="reason"><span class="lbl">{reason_label}</span>{_esc(rec.reasoning)}</div>'
+
+    parts = [
+        f'<span class="lbl">{reason_label}</span>',
+        f'<span class="summary">{_esc(rec.decision_summary)}</span>',
+    ]
+    if rec.primary_reasons:
+        items = "".join(f"<li>{_esc(r)}</li>" for r in rec.primary_reasons)
+        parts.append(f'<ul class="reasons">{items}</ul>')
+    if rec.key_tradeoff:
+        parts.append(
+            f'<div class="sub"><span class="k">Trade-off</span>{_esc(rec.key_tradeoff)}</div>'
+        )
+    if rec.runner_up:
+        parts.append(
+            f'<div class="sub"><span class="k">Runner-up</span>{_esc(rec.runner_up)}</div>'
+        )
+    if rec.default_comparison:
+        parts.append(f'<div class="vs">{_esc(rec.default_comparison)}</div>')
+    return f'<div class="reason">{"".join(parts)}</div>'
+
+
+def _example_card(
+    result: RecommendationResult,
+    include_routes: bool = True,
+    reasoning_override: Optional[str] = None,
+) -> str:
     c = result.customer
     rec = result.recommendation
     pill_cls, pill_text = DECISION_PILL[rec.decision]
@@ -574,8 +770,14 @@ def _example_card(result: RecommendationResult, include_routes: bool = True) -> 
             f'<small style="color:var(--muted)">(score {rec.total_score:.2f})</small></p>'
         )
 
+    # Show the winning route-slot's factor bars, always listing Slot match: when
+    # the prospect stated no preference it's excluded from the score, so it shows
+    # the same greyed "not scored" pill as the evaluated-route slot cards.
+    has_pref = result.customer.preferred_slot is not None
     factors_html = (
-        f'<div class="factors">{_factor_rows(rec)}</div>' if rec.factor_breakdown else ""
+        f'<div class="factors">{_slot_factor_bars(rec.factor_breakdown, has_pref)}</div>'
+        if rec.factor_breakdown
+        else ""
     )
     reason_label = "Why the agent escalated" if rec.requires_human_review else "Why the agent chose this"
 
@@ -607,10 +809,62 @@ def _example_card(result: RecommendationResult, include_routes: bool = True) -> 
           <div class="score">{score_bar}</div>
           {slot_html}
           {factors_html}
-          <div class="reason"><span class="lbl">{reason_label}</span>{_esc(rec.reasoning)}</div>
+          {_reason_block(rec, reason_label, reasoning_override)}
           {routes_html}
         </div>
       </article>"""
+
+
+def _rs_factor_formula(name: str, config: Config) -> str:
+    """The math skeleton for one route-slot factor, with the config constants
+    plugged in -- so a reader can reproduce the value from the cited inputs."""
+    cref = config.cluster_reference_miles
+    ceiling = config.max_utilization_after_assignment
+    margin = config.capacity_buffer_safety_margin
+    safe = ceiling - margin
+    if name == FACTOR_GEO_CLUSTERING:
+        return f"clamp(1 − avg_mi ÷ {cref:.0f})"
+    if name == FACTOR_CAPACITY_BUFFER:
+        return f"1.00 if util ≤ {safe:.0%}, else clamp(({ceiling:.0%} − util) ÷ {margin:.0%})"
+    if name == FACTOR_WINDOW_MATCH:
+        return "overlap-min ÷ preferred-min (0 on wrong day)"
+    if name == FACTOR_SLOT_AVAILABILITY:
+        return "1 ÷ (1 + Σ tier-harm over overlapping stops)"
+    return ""
+
+
+def _route_slot_score_lines(ranked_feasible, config: Config) -> list[str]:
+    """Score & Rank narrative for the route-slot path: every candidate slot on
+    every feasible route, scored as its own (route, slot) option -- with each
+    factor's formula, the concrete inputs it cited, and the weighted total, so a
+    user can validate the math by hand."""
+    lines = [
+        "Each candidate SLOT on each feasible route is scored as its own (route, slot) option. "
+        "Every factor shows its formula, the numbers it used, and its weight — so the math is checkable:"
+    ]
+    for e in ranked_feasible:
+        for ss in sorted(e.scored_slots, key=lambda s: s.total_score, reverse=True):
+            lines.append(
+                f"• <b>{_esc(e.route.route_id)} · {_esc(e.route.name)}</b> @ "
+                f"{_win(fmt_window(ss.slot.window))} → route-slot score <b>{ss.total_score:.2f}</b>"
+            )
+            weight_sum = 0.0
+            terms = []
+            for fs in ss.factor_scores:
+                label = FACTOR_LABEL.get(fs.name, fs.name)
+                formula = _rs_factor_formula(fs.name, config)
+                lines.append(
+                    f'<span class="calc">↳ {_esc(label)} = {formula} = <b>{fs.value:.2f}</b> '
+                    f"× weight {fs.weight:.2f} "
+                    f'<span style="color:var(--muted)">— {_esc(fs.detail)}</span></span>'
+                )
+                weight_sum += fs.weight
+                terms.append(f"{fs.weight:.2f}×{fs.value:.2f}")
+            lines.append(
+                f'<span class="calc">↳ total = ({" + ".join(terms)}) ÷ {weight_sum:.2f} = '
+                f"<b>{ss.total_score:.2f}</b></span>"
+            )
+    return lines
 
 
 def _sim_steps(result: RecommendationResult, config: Config) -> list[dict]:
@@ -659,7 +913,9 @@ def _sim_steps(result: RecommendationResult, config: Config) -> list[dict]:
                 f'• {_esc(e.route.route_id)}: <span class="no">INFEASIBLE</span> — failed {_esc(failed)}'
             )
 
-    if result.ranked_feasible:
+    if result.ranked_feasible and config.use_route_slot_scoring:
+        score = _route_slot_score_lines(result.ranked_feasible, config)
+    elif result.ranked_feasible:
         score = ["Each dimension is normalized to 0–1, then combined by weight:"]
         for e in result.ranked_feasible:
             ctx = build_context(c, e.route, config)
@@ -714,10 +970,13 @@ def _sim_steps(result: RecommendationResult, config: Config) -> list[dict]:
     else:
         score = ["No feasible routes survived the hard rules — nothing to score."]
 
+    rs = config.use_route_slot_scoring
+    bar = config.route_slot_score_threshold if rs else config.total_score_threshold
+    winner_label = "winning route-slot" if rs else "winning route"
     decide = [
         f"Decision: <b>{DECISION_SHORT[rec.decision]}</b>",
-        f"Total score for the winning route: <b>{rec.total_score:.0%}</b> "
-        f"(auto-assign bar {config.total_score_threshold:.0%})",
+        f"Total score for the {winner_label}: <b>{rec.total_score:.0%}</b> "
+        f"(auto-assign bar {bar:.0%})",
     ]
     if rec.recommended_route_id:
         decide.append(
@@ -745,18 +1004,95 @@ def _sim_steps(result: RecommendationResult, config: Config) -> list[dict]:
         },
         {
             "title": "Score & Rank",
-            "action": "The agent scores each feasible route on the weighted factors (with the math) and ranks them.",
+            "action": (
+                "The agent scores each feasible (route, slot) pair on the weighted factors "
+                "— including slot availability — and ranks them."
+                if config.use_route_slot_scoring
+                else "The agent scores each feasible route on the weighted factors (with the math) "
+                "and ranks them."
+            ),
             "lines": score,
         },
         {
             "title": "Recommend / Decide",
-            "action": "The agent picks the best slot, checks its total score against the auto-assign bar, and decides.",
+            "action": (
+                "The agent picks the best route-slot, checks its total against the auto-assign "
+                "bar, and decides."
+                if config.use_route_slot_scoring
+                else "The agent picks the best slot, checks its total score against the auto-assign "
+                "bar, and decides."
+            ),
             "lines": decide,
         },
     ]
 
 
+def _scoring_section_route_slot(config: Config) -> str:
+    """The 'how the agent scores' explainer for the route-slot path: the unit is
+    a (route, slot) pair, geo/capacity are route-level, window_match and slot
+    availability are slot-level, and window_match is dropped without a preference."""
+    gw = config.rs_weight_geo
+    cw = config.rs_weight_capacity
+    ww = config.rs_weight_window
+    aw = config.rs_weight_availability
+    cref = config.cluster_reference_miles
+    thr = config.route_slot_score_threshold
+    ceiling = config.max_utilization_after_assignment
+    safe = ceiling - config.capacity_buffer_safety_margin
+    hi = config.slot_tier_harm_high
+    mid = config.slot_tier_harm_mid
+    lo = config.slot_tier_harm_low
+    unk = config.slot_tier_harm_unknown
+    return f"""
+    <span class="eyebrow">How the agent scores &amp; ranks</span>
+    <h2>Every route-<em>slot</em> is scored on its own</h2>
+    <p class="sub">The decision unit is the <b>(route, time-slot) pair</b>: each candidate slot on each
+      feasible route is scored separately, so a route's <em>slot availability</em> — not just its capacity and
+      location — decides which route wins. Two factors are <b>route-level</b> (shared by all of a route's
+      slots) and two are <b>slot-level</b>. Each is normalized to 0–1 and combined by weight; deterministic
+      Python, same inputs → same score.</p>
+    <div class="grid-2">
+      <div class="card"><div class="icon">🧭</div><h3>Geographic clustering · weight {gw:.2f} <span
+        style="font-size:11px;color:var(--muted)">route-level</span></h3>
+        <p>How tightly the customer sits within the route's existing cluster of stops. Closer = higher.</p>
+        <div class="formula">score = clamp( 1 − <b>avg_miles_to_stops</b> ÷ {cref:.0f} , 0, 1 )</div></div>
+      <div class="card"><div class="icon">🛡️</div><h3>Capacity buffer · weight {cw:.2f} <span
+        style="font-size:11px;color:var(--muted)">route-level</span></h3>
+        <p>How safely under the capacity ceiling the truck stays once this order is added. Flat while
+          comfortably safe (≤ {safe:.0%} full), decaying to 0 at the {ceiling:.0%} ceiling.</p></div>
+      <div class="card"><div class="icon">🎯</div><h3>Slot match (day + time) · weight {ww:.2f} <span
+        style="font-size:11px;color:var(--muted)">slot-level</span></h3>
+        <p>How much <b>this</b> slot covers the customer's preferred day + time window. The day is a gate;
+          then it's the overlap fraction. <b>Dropped entirely</b> when the prospect states no preference — the
+          score simply renormalizes over the other factors (no arbitrary neutral value).</p></div>
+      <div class="card"><div class="icon">🪟</div><h3>Slot availability · weight {aw:.2f} <span
+        style="font-size:11px;color:var(--muted)">slot-level</span></h3>
+        <p>How <b>open</b> this slot is — few / low-tier committed stops already in it. Weighted so we avoid
+          crowding the most valued customers.</p>
+        <div class="formula">openness = 1 ÷ ( 1 + <b>Σ harm(incumbent)</b> over stops sharing the window )</div>
+        <p style="margin-top:8px;font-size:12.5px">Harm per overlapping committed stop, by tier:
+          <b>5 / Perks {hi:.1f}</b> &gt; <b>4 {mid:.1f}</b> &gt; the prospect &gt; <b>Other {lo:.1f}</b>
+          (unknown {unk:.1f}). A window full of Other-tier stops still scores open; one shared by tier-5 /
+          Perks incumbents scores contended.</p></div>
+    </div>
+
+    <div style="height:16px"></div>
+    <div class="card">
+      <h3 style="margin-top:0">Best route-slot, then the auto-assign decision</h3>
+      <div class="formula">total = ( {gw:.2f}·clustering + {cw:.2f}·capacity + {ww:.2f}·window* + {aw:.2f}·availability ) ÷ Σ&nbsp;active&nbsp;weights</div>
+      <p style="margin-top:14px"><span style="font-size:11px;color:var(--muted)">*window only when a
+        preference is stated; otherwise it's absent and the remaining weights renormalize.</span> The agent
+        picks the highest-scoring route-slot across all feasible routes and <b>auto-assigns</b> when its own
+        total is ≥ {thr:.0%}; otherwise it <b>escalates</b>. When grounded reasoning is enabled an LLM makes
+        the pick — but only from the route-slots that already clear the {thr:.0%} bar, so its choice is always
+        auto-assignable and the escalate boundary stays a deterministic threshold. The deterministic best is
+        its reference and fallback.</p>
+    </div>"""
+
+
 def _scoring_section(config: Config) -> str:
+    if config.use_route_slot_scoring:
+        return _scoring_section_route_slot(config)
     gw = config.factor_weights[FACTOR_GEO_CLUSTERING]
     cw = config.factor_weights[FACTOR_CAPACITY_BUFFER]
     ww = config.factor_weights[FACTOR_WINDOW_MATCH]
@@ -836,6 +1172,36 @@ def _config_sources(config: Config, results: list[RecommendationResult]) -> str:
         return f'<li><span class="k">{k} <span class="src">— {src}</span></span><span class="v">{v}</span></li>'
 
     safe_utilization = config.max_utilization_after_assignment - config.capacity_buffer_safety_margin
+    if config.use_route_slot_scoring:
+        scoring_rows = [
+            row(
+                "Route-slot weights (geo/cap/win/avail)",
+                f"{config.rs_weight_geo:.2f} / {config.rs_weight_capacity:.2f} / "
+                f"{config.rs_weight_window:.2f} / {config.rs_weight_availability:.2f}",
+                "rs_weight_*",
+            ),
+            row(
+                "Slot-openness harm (5·Perks/4/Other/unknown)",
+                f"{config.slot_tier_harm_high:.1f} / {config.slot_tier_harm_mid:.1f} / "
+                f"{config.slot_tier_harm_low:.1f} / {config.slot_tier_harm_unknown:.1f}",
+                "slot_tier_harm_*",
+            ),
+            row(
+                "Route-slot auto-assign bar",
+                f"{config.route_slot_score_threshold:.0%}",
+                "route_slot_score_threshold",
+            ),
+        ]
+    else:
+        scoring_rows = [
+            row("No-window neutral score", f"{config.window_neutral_score:.2f}", "window_neutral_score"),
+            row("Scoring weights (geo/cap/win)", f"{gw:.2f} / {cw:.2f} / {ww:.2f}", "factor_weights"),
+            row(
+                "Total score threshold (auto-assign bar)",
+                f"{config.total_score_threshold:.0%}",
+                "total_score_threshold",
+            ),
+        ]
     cfg_rows = "".join(
         [
             row("Route capacity ceiling", f"{config.max_utilization_after_assignment:.0%}", "max_utilization_after_assignment"),
@@ -845,13 +1211,7 @@ def _config_sources(config: Config, results: list[RecommendationResult]) -> str:
                 "capacity_buffer_safety_margin",
             ),
             row("Clustering reference (score→0)", f"{config.cluster_reference_miles:.0f} mi", "cluster_reference_miles"),
-            row("No-window neutral score", f"{config.window_neutral_score:.2f}", "window_neutral_score"),
-            row("Scoring weights (geo/cap/win)", f"{gw:.2f} / {cw:.2f} / {ww:.2f}", "factor_weights"),
-            row(
-                "Total score threshold (auto-assign bar)",
-                f"{config.total_score_threshold:.0%}",
-                "total_score_threshold",
-            ),
+            *scoring_rows,
             row("Serviceability hard cap", f"{config.max_service_distance_miles:.0f} mi", "max_service_distance_miles"),
             row("Candidates evaluated", f"Top-{config.top_n_candidate_routes}", "top_n_candidate_routes"),
         ]
@@ -892,7 +1252,328 @@ def _config_sources(config: Config, results: list[RecommendationResult]) -> str:
     </div>"""
 
 
-def build_map_data(result: RecommendationResult) -> Optional[dict]:
+def _slot_rationale_factors(factor_scores, has_preference: bool, order=None) -> str:
+    """Like ``_slot_factor_bars`` but annotates each bar with the concrete input
+    it cited (from ``FactorScore.detail``) and its weight — the "full details"
+    behind each factor's score, for the "why this slot" rationale card. ``order``
+    limits/orders which factors are shown (defaults to all four)."""
+    by_name = {f.name: f for f in factor_scores}
+    rows = []
+    for name in order or _RS_FACTOR_ORDER:
+        f = by_name.get(name)
+        label = FACTOR_LABEL.get(name, name)
+        if f is not None:
+            pct = round(f.value * 100)
+            rows.append(
+                '<div class="why-factor"><div class="factor">'
+                f'<span class="fname">{_esc(label)}</span>'
+                f'<div class="bar"><span style="width:{pct}%"></span></div>'
+                f'<span class="fval">{f.value:.2f}'
+                f'<small style="color:var(--muted)"> ×{f.weight:.2f}</small></span></div>'
+                f'<div class="why-factor-detail">{_esc(f.detail)}</div></div>'
+            )
+        elif name == FACTOR_WINDOW_MATCH and not has_preference:
+            rows.append(
+                '<div class="why-factor"><div class="factor na">'
+                f'<span class="fname">{_esc(label)}</span>'
+                '<span class="na-note">not scored · no preferred slot given</span>'
+                "</div></div>"
+            )
+    return "".join(rows)
+
+
+# How this specific time WINDOW was placed on the route, in plain language.
+_SLOT_BASIS_SENTENCE = {
+    "preference_accommodated": (
+        "This window was placed to line up with the customer's requested day and time."
+    ),
+    "between_adjacent_stops": (
+        "This window sits between the route's nearest committed stops, so the delivery "
+        "drops into the existing time cluster instead of stretching the day."
+    ),
+    "least_contended": (
+        "This is the most open window on the route — the fewest / lowest-tier committed "
+        "deliveries already overlap it."
+    ),
+}
+
+# The two SLOT-level factors: they differ window-to-window on the same route, so
+# they are what actually pick the time slot. (Geographic clustering and capacity
+# buffer are route-level — they explain the route, not the slot.)
+_SLOT_LEVEL_FACTORS = (FACTOR_WINDOW_MATCH, FACTOR_SLOT_AVAILABILITY)
+
+
+def _tier_label(tier: Optional[str]) -> str:
+    if not tier:
+        return "unknown tier"
+    return "Perks" if tier == "Perks" else f"Tier {tier}"
+
+
+def _openness_breakdown_html(route, window, config: Config) -> str:
+    """The exact openness calculation for the chosen window: its **contention** —
+    every committed delivery whose own window overlaps it, each weighted by tier
+    ("harm") — summed, then rolled up as ``openness = 1 / (1 + contention)``.
+    Contention is the sole input to the slot-availability (openness) score."""
+    overlapping = [
+        s
+        for s in route.committed_stops
+        if s.delivery_time_window is not None
+        and overlap_minutes(window, s.delivery_time_window) > 0
+    ]
+    if not overlapping:
+        return (
+            '<div class="why-calc"><div class="why-calc-head">Contention → openness</div>'
+            '<div class="why-calc-sum">no committed delivery overlaps this window → '
+            "contention = 0 → openness = 1 ÷ (1 + 0) = <b>1.00</b> (fully open)</div></div>"
+        )
+    items = "".join(
+        f'<li><span class="why-cust">{_esc(s.customer_number)}</span>'
+        f'<span class="why-meta">{_esc(_tier_label(s.customer_tier))}</span>'
+        f'<span class="why-num">harm {config.tier_harm_weight(s.customer_tier):.2f}</span></li>'
+        for s in sorted(
+            overlapping, key=lambda s: config.tier_harm_weight(s.customer_tier), reverse=True
+        )
+    )
+    total = sum(config.tier_harm_weight(s.customer_tier) for s in overlapping)
+    openness = 1.0 / (1.0 + total)
+    n = len(overlapping)
+    return (
+        '<div class="why-calc"><div class="why-calc-head">Contention → openness — committed '
+        "deliveries already overlapping this window, weighted by tier (“harm”)</div>"
+        f'<ul class="why-list">{items}</ul>'
+        f'<div class="why-calc-sum">contention = Σ harm = <b>{total:.2f}</b> '
+        f'({n} overlapping {"delivery" if n == 1 else "deliveries"}) → '
+        f"openness = 1 ÷ (1 + {total:.2f}) = <b>{openness:.2f}</b></div></div>"
+    )
+
+
+def _proximity_stops_html(location, route, config: Config) -> str:
+    """The nearest committed stops the window was clustered around — the
+    "proximity" set: customer number, distance, tier."""
+    neighbors = nearest_neighbors(
+        location, route.committed_stops, config.slot_neighbor_count, config.slot_neighbor_max_miles
+    )
+    if not neighbors:
+        return ""
+    items = "".join(
+        f'<li><span class="why-cust">{_esc(n.stop.customer_number)}</span>'
+        f'<span class="why-meta">{_esc(_tier_label(n.stop.customer_tier))}</span>'
+        f'<span class="why-num">{n.distance_miles:.1f} mi</span></li>'
+        for n in neighbors
+    )
+    return (
+        '<div class="why-calc"><div class="why-calc-head">Proximity — nearest committed '
+        "stops the window is placed among</div>"
+        f'<ul class="why-list">{items}</ul></div>'
+    )
+
+
+def _slot_rationale_html(result: RecommendationResult, config: Config) -> Optional[str]:
+    """A "why this time slot" card for the recommended slot, shown under the
+    delivery-window panel. It explains the SLOT choice only: how the window was
+    placed on the route (its basis), the slot-level factors that pick it (slot
+    match + availability), and the underlying detail — the exact openness
+    calculation (which committed stops contend, by tier + harm) and the proximity
+    stops the window was clustered around. Route-level factors (geography,
+    capacity) are excluded. ``None`` when nothing was recommended."""
+    rec = result.recommendation
+    if not rec.recommended_route_id or not rec.factor_breakdown:
+        return None
+    has_pref = result.customer.preferred_slot is not None
+    basis = _SLOT_BASIS_SENTENCE.get(rec.recommended_window_basis or "", "")
+    basis_html = f'<div class="slot-why-basis">{basis}</div>' if basis else ""
+    factors = _slot_rationale_factors(rec.factor_breakdown, has_pref, _SLOT_LEVEL_FACTORS)
+
+    winner = next(
+        (c for c in result.candidates_considered if c.route.route_id == rec.recommended_route_id),
+        None,
+    )
+    detail = ""
+    if winner is not None and winner.chosen_window is not None:
+        detail += _openness_breakdown_html(winner.route, winner.chosen_window, config)
+        if result.customer.location is not None:
+            detail += _proximity_stops_html(result.customer.location, winner.route, config)
+
+    # Collapsible (like "Routes the agent evaluated"): a triangle on the summary
+    # toggles it, collapsed by default so the panel stays compact until asked.
+    return (
+        '<details class="slot-why">'
+        '<summary class="slot-why-head"><span class="slot-why-title">Why this time slot</span>'
+        f"<span class=\"slot-why-slot\"><b>{_esc(rec.recommended_day)} · "
+        f'{_win(rec.recommended_window)}</b> '
+        f'<small style="color:var(--muted)">on {_esc(rec.recommended_route_id)} · '
+        f'{_esc(rec.recommended_route_name)}</small></span></summary>'
+        '<div class="slot-why-body">'
+        f"{basis_html}"
+        '<div class="slot-why-sub">The slot-level factors that pick this window from the '
+        "route's options (its geography &amp; capacity are covered in the evaluated routes "
+        "above):</div>"
+        f'<div class="factors">{factors}</div>'
+        f"{detail}"
+        "</div></details>"
+    )
+
+
+def _touchpoint_card(
+    type_cls: str,
+    type_label: str,
+    title: str,
+    where: str,
+    desc: str,
+    guard: str,
+    flag: str,
+    state_cls: str,
+    state_label: str,
+) -> str:
+    """One 'LLM & agent touchpoint' card: what kind of model call it is (agent /
+    sub-agent / LLM call / narration), what it does, its deterministic guardrail,
+    and whether it's on by default. ``desc``/``guard`` are trusted literal HTML
+    authored here; only the small labels are escaped."""
+    flag_html = f'<span class="flag">{_esc(flag)}</span>' if flag else ""
+    return (
+        '<div class="card tpcard">'
+        f'<span class="tptype {type_cls}">{_esc(type_label)}</span>'
+        f"<h4>{_esc(title)}</h4><div class=\"where\">{_esc(where)}</div>"
+        f"<p>{desc}</p>"
+        f'<div class="guard"><b>Guardrail:</b> {guard}</div>'
+        f'<div class="tpmeta">{flag_html}<span class="state {state_cls}">{_esc(state_label)}</span></div>'
+        "</div>"
+    )
+
+
+def _llm_touchpoints_section(config: Config) -> str:
+    """Enumerate every place a model is in the loop — the conversational agent,
+    the escalation-triage sub-agent (an ADK AgentTool), and the opt-in grounded
+    decision/selection calls — so the reader can see exactly where an LLM acts,
+    what it's allowed to do, and how the deterministic pipeline stays the floor.
+
+    Sourced from the code (roles + flags in ``shared/config.py``), so it can't
+    drift: thresholds and the sample count come from the live ``Config``."""
+    k = config.judgment_sample_count
+    rs_bar = f"{config.route_slot_score_threshold:.0%}"
+    ro_bar = f"{config.total_score_threshold:.0%}"
+    triage_on = config.use_escalation_triage
+
+    cards = [
+        _touchpoint_card(
+            "agent",
+            "Agent",
+            "Conversational orchestrator",
+            "agent.py · root_agent · ADK LlmAgent · role root_agent",
+            "The one agent that drives the whole run. It talks to the user across turns and "
+            "<b>decides when to call which tool</b> — Intake → Geo-Lookup → Constraint Check → "
+            "Score &amp; Rank → Recommend/Decide — then narrates the result.",
+            "It never computes a distance, constraint, score, or decision itself — every number "
+            "comes back from the deterministic tools (<span class=\"where\">tools/slot_recommendation.py</span>). "
+            "The conversation is LLM-driven; the outcome is not.",
+            "SMART_ASSIGNMENT_MODEL_ROOT_AGENT",
+            "always",
+            "Always on (conversational path)",
+        ),
+        _touchpoint_card(
+            "sub",
+            "Sub-agent · AgentTool",
+            "Escalation-triage sub-agent",
+            "triage/ · a 2nd LlmAgent via google.adk.tools.AgentTool · role triage",
+            "The first real multi-agent split. On an escalation, root_agent <b>consults a second "
+            "LlmAgent</b> (exposed as an ADK <em>AgentTool</em>, consult-and-return) to compose the "
+            "specialist handoff brief: root cause, concrete remediation options, and the question to ask.",
+            "Read-only — it only reads session state and runs strictly downstream of the deterministic "
+            "decision, so it <b>never changes the route, score, or decision</b>. A deterministic prose scan "
+            "(<span class=\"where\">triage/verifier.py</span>) appends a “⚠ Unverified” caveat to any figure "
+            "not found in the evaluation trace. root_agent keeps the human-in-the-loop pause.",
+            "SMART_ASSIGNMENT_USE_ESCALATION_TRIAGE",
+            "on" if triage_on else "off",
+            "On by default" if triage_on else "Off by default",
+        ),
+        _touchpoint_card(
+            "call",
+            "LLM call",
+            "Grounded recommend-vs-escalate judgment",
+            "judgment/ · role judgment",
+            "When enabled, an LLM makes the <b>recommend-or-escalate call itself</b> — reasoning over a "
+            f"structured evidence packet of the raw per-candidate facts — instead of the fixed weighted-sum "
+            f"+ {ro_bar} threshold gate.",
+            "Hard constraints still run first and are the only thing that can drop a candidate, so the LLM "
+            "<b>chooses only among already-feasible routes</b>. Structured citations are verified in code "
+            "(<span class=\"where\">judgment/verifier.py</span>), with one corrective retry; escalation-side "
+            f"cases resample up to k={k} and require consensus. Any failure falls back to the deterministic "
+            "weighted pick — never worse than today.",
+            "SMART_ASSIGNMENT_USE_GROUNDED_JUDGMENT",
+            "off",
+            "Off in code · on in .env.example",
+        ),
+        _touchpoint_card(
+            "call",
+            "LLM call",
+            "Grounded route-slot pick",
+            "routeslot/ · role judgment",
+            "When route-slot scoring is on, the decision unit is the <b>(route, slot) pair</b>. Recommend vs. "
+            f"escalate stays a deterministic threshold ({rs_bar}); on a recommend, an LLM <b>picks among only "
+            "the above-bar route-slots — by index</b> — and returns a structured trade-off explanation "
+            "(summary, reasons, key trade-off, runner-up, agree/diverge vs. the weighted default).",
+            "Because its menu is pre-filtered to above-threshold options, its pick is always auto-assignable — "
+            "it can never cause an escalation. Citations plus a tolerant prose scan are verified "
+            "(<span class=\"where\">routeslot/verifier.py</span>), one retry, then the deterministic best "
+            "route-slot as reference and fallback. Absorbs the slot-pick pass.",
+            "SMART_ASSIGNMENT_USE_ROUTE_SLOT_SCORING",
+            "off",
+            "Off in code · on in .env.example",
+        ),
+        _touchpoint_card(
+            "call",
+            "LLM call",
+            "Grounded delivery-slot selection",
+            "slotpick/ · role slotpick",
+            "After a route is chosen, an LLM <b>picks the final delivery window</b> from that route's "
+            "deterministically enumerated candidate menu — by index only, reasoning over each candidate's "
+            "facts. It reasons and selects; it never generates a window. (Superseded by the route-slot pick "
+            "above when route-slot scoring is on.)",
+            "Constrained to the enumerated candidates and verified against the packet "
+            "(<span class=\"where\">slotpick/verifier.py</span>); it <b>only re-orders that route's slots</b>, "
+            "never the route, score, or decision. The hand-tuned deterministic blend is demoted to reference "
+            "+ fallback — the auditable floor.",
+            "SMART_ASSIGNMENT_USE_GROUNDED_SLOT_SELECTION",
+            "off",
+            "Off in code · on in .env.example",
+        ),
+        _touchpoint_card(
+            "narr",
+            "LLM narration",
+            "Reasoning narration",
+            "reasoning.py · LLMReasoner · role reasoning",
+            "An optional reasoner that rewrites the deterministic reasoning trace into more fluent prose for "
+            "callers of the pipeline directly (e.g. <span class=\"where\">scripts/run_local.py</span>). The "
+            "conversational agent instead narrates the recommendation in its own words.",
+            "Narration only — it <b>never changes a number, a route, or the decision</b>. The deterministic "
+            "trace (<span class=\"where\">DeterministicReasoner</span>) is the fallback and is exactly what "
+            "generated this page — so these examples are reproducible offline.",
+            "SMART_ASSIGNMENT_MODEL_REASONING",
+            "off",
+            "Deterministic by default",
+        ),
+    ]
+
+    return f"""
+    <span class="eyebrow">LLM &amp; agent touchpoints</span>
+    <h2>Every place a model is in the loop — and its leash</h2>
+    <p class="sub">The default path is deterministic Python end-to-end, with a conversational agent on top.
+      Beyond that, several <b>opt-in</b> layers let an LLM reason over the real facts — each gated by a
+      <span style="font-family:var(--mono)">Config.use_*</span> flag. This is every one of them, called out:
+      what kind of model call it is, what it may touch, and the deterministic guardrail that keeps it honest.
+      Each LLM surface resolves its model per-role via <span style="font-family:var(--mono)">Config.for_role</span>,
+      so roles can run different model tiers while the backend stays global.</p>
+    <div class="tp">{"".join(cards)}</div>
+    <div class="guarantee">🛡️ <b>The invariant across all of them.</b> The deterministic pipeline always
+      runs first and is the floor. An LLM here <b>reasons and selects; it never invents</b> an actionable
+      value — it picks from a deterministically enumerated set (by index/id) and cites the facts it used,
+      which are checked in code before anything acts on them. On any failure — parse, failed verification,
+      missing credentials, backend error — the layer falls back to the deterministic result and logs why. So
+      an LLM layer is strictly <b>additive</b>: never worse than the deterministic baseline, only — when it
+      succeeds — better-reasoned and better-explained.</div>"""
+
+
+def build_map_data(result: RecommendationResult, config: Optional[Config] = None) -> Optional[dict]:
     """Lat/lng data for a proximity map: the prospect's geocoded location plus,
     for every evaluated route, its service center, service radius, and existing
     committed stops -- everything needed to visually judge why a route was
@@ -901,6 +1582,7 @@ def build_map_data(result: RecommendationResult) -> Optional[dict]:
     Returns ``None`` if the customer was never geocoded (e.g. intake failed
     before geo-lookup ran).
     """
+    config = config or DEFAULT_CONFIG
     loc = result.customer.location
     if loc is None:
         return None
@@ -911,10 +1593,42 @@ def build_map_data(result: RecommendationResult) -> Optional[dict]:
         c.route.route_id for c in result.candidates_considered if not c.feasible
     ]
     rank_by_id = {rid: i for i, rid in enumerate(ranked_order)}
+    winner_id = result.recommendation.recommended_route_id
     routes = []
     for cand in result.candidates_considered:
         r = cand.route
         center = r.service_center
+        # Candidate slots for the route-slot delivery panels: each scored slot,
+        # highest score first, with the overall recommended one flagged. Falls
+        # back to the single chosen window when route-slot scoring is off. Only
+        # feasible routes offer real slots -- an infeasible route has none.
+        if not cand.feasible:
+            slots = []
+        elif cand.scored_slots:
+            slots = [
+                {
+                    "open": fmt_time(ss.slot.window[0]),
+                    "close": fmt_time(ss.slot.window[1]),
+                    "score": round(ss.total_score, 2),
+                    "recommended": (
+                        r.route_id == winner_id and ss.slot.window == cand.chosen_window
+                    ),
+                }
+                for ss in sorted(
+                    cand.scored_slots, key=lambda s: s.total_score, reverse=True
+                )
+            ]
+        elif cand.chosen_window:
+            slots = [
+                {
+                    "open": fmt_time(cand.chosen_window[0]),
+                    "close": fmt_time(cand.chosen_window[1]),
+                    "score": round(cand.total_score, 2),
+                    "recommended": r.route_id == winner_id,
+                }
+            ]
+        else:
+            slots = []
         routes.append(
             {
                 "route_id": _esc(r.route_id),
@@ -938,6 +1652,9 @@ def build_map_data(result: RecommendationResult) -> Optional[dict]:
                     else None
                 ),
                 "window_basis": cand.window_basis or None,
+                # Route-slot candidates (each with its own score) for the
+                # per-(route, slot) delivery-window panels.
+                "slots": slots,
                 "stops": [
                     {
                         "lat": s.location.latitude,
@@ -968,10 +1685,17 @@ def build_map_data(result: RecommendationResult) -> Optional[dict]:
             "lng": loc.longitude,
         },
         "routes": routes,
+        # "Why this slot" rationale for the recommended route-slot, rendered under
+        # the delivery-window panel. None when nothing was recommended.
+        "rationaleHtml": _slot_rationale_html(result, config),
     }
 
 
-def build_workflow_payload(result: RecommendationResult, config: Config) -> dict:
+def build_workflow_payload(
+    result: RecommendationResult,
+    config: Config,
+    reasoning_override: Optional[str] = None,
+) -> dict:
     """The visualization payload for one workflow run: the animated step cards,
     the final result card, and the proximity-map data.
 
@@ -979,6 +1703,10 @@ def build_workflow_payload(result: RecommendationResult, config: Config) -> dict
     static page generator (``build_page``) and the live web app
     (``smart_assignment.webapp``) so the interactive UI can never drift from the
     published examples — both render the exact same structure.
+
+    ``reasoning_override`` lets the live LLM chat pass the agent's own
+    recommendation narration, so the result card's "Why the agent chose this"
+    shows the same text the chat box did instead of a separately-rendered version.
     """
     return {
         "name": _esc(result.customer.name),
@@ -987,10 +1715,32 @@ def build_workflow_payload(result: RecommendationResult, config: Config) -> dict
         # The recommended-route card, without its embedded routes list -- the full
         # evaluated-routes breakdown is `routesHtml`, rendered separately (below
         # the map in the web app) so it can be a rich, default-open section.
-        "resultHtml": _example_card(result, include_routes=False),
+        "resultHtml": _example_card(result, include_routes=False, reasoning_override=reasoning_override),
         "routesHtml": _route_cards(result, config),
-        "map": build_map_data(result),
+        "map": build_map_data(result, config),
+        # UI banners (e.g. grounded reasoning fell back to deterministic). Empty
+        # for the normal deterministic/weighted path, so the published static
+        # page never shows one.
+        "notices": _payload_notices(result),
     }
+
+
+def _payload_notices(result: RecommendationResult) -> list[dict]:
+    """Structured UI notices derived from the recommendation (rendered as
+    banners by the web app). Currently just the grounded-judgment fallback."""
+    rec = result.recommendation
+    notices: list[dict] = []
+    if getattr(rec, "grounded_fallback", False):
+        notices.append(
+            {
+                "kind": "warning",
+                "text": _esc(
+                    rec.grounded_fallback_reason
+                    or "Grounded reasoning was unavailable; showing the deterministic result."
+                ),
+            }
+        )
+    return notices
 
 
 def build_page(results: list[RecommendationResult], config: Config) -> str:
@@ -1063,8 +1813,10 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
       <h2>Five steps, executed autonomously by the agent</h2>
       <div class="agent-banner"><span class="big">🤖</span>
         <div><b>A single AI agent performs all five stages below in one end-to-end run</b> — these are
-        phases of the same agent's workflow, not five separate agents. A person is involved only if the
-        agent decides to escalate at the final stage.</div></div>
+        phases of the same agent's workflow, not five separate agents. On an escalation it consults one
+        <em>sub-agent</em> (the escalation-triage AgentTool) to write the handoff brief; otherwise a person
+        is involved only if the agent decides to escalate at the final stage. See the <b>Architecture</b> tab
+        for every agent and LLM touchpoint.</div></div>
       <div class="flow">
         <div class="step"><div class="num">1</div><h3>Intake</h3><p>Capture the customer's address, order quantity (cases), and preferred slot (day + time).</p><p class="action">Validate the intake profile &amp; build it.</p></div>
         <div class="step"><div class="num">2</div><h3>Geo-Lookup</h3><p>Geocode the address and find the nearest candidate routes.</p><p class="action">Geocode &amp; pick the Top-{top_n} nearest.</p></div>
@@ -1117,14 +1869,16 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
       <p class="sub">The agent is a Google ADK <em>LlmAgent</em> that talks to the user and calls a tool for
         each of the five steps — it decides <em>when</em> to call which tool and narrates the result, but
         every distance, constraint check, and score comes back from the tool itself, so the decision stays
-        reproducible and auditable.</p>
+        reproducible and auditable. On an escalation it consults a second LlmAgent — the escalation-triage
+        <em>AgentTool</em> — to write the handoff brief. Beyond that, several opt-in LLM layers can reason
+        over the real facts; the <b>LLM &amp; agent touchpoints</b> below list every one.</p>
       <div class="arch">
         {_ARCH_SVG}
         <div class="arch-legend">
           <div class="card"><div class="icon">🤖</div><h4>Agent orchestrator</h4><p>An ADK LlmAgent drives all five steps via tool calls, conversationally.</p></div>
           <div class="card"><div class="icon">🧭</div><h4>Deterministic tools</h4><p>Geo, hard constraints, and weighted scoring — plain code the agent calls.</p></div>
-          <div class="card"><div class="icon">🗣️</div><h4>Narrates, doesn't decide</h4><p>The same agent explains the already-decided result in its own words — it never computes a number itself.</p></div>
-          <div class="card"><div class="icon">🙋</div><h4>Human-in-the-loop</h4><p>On escalation, the agent pauses the conversation and waits for a specialist's reply.</p></div>
+          <div class="card"><div class="icon">🤝</div><h4>One sub-agent</h4><p>On escalation, a 2nd LlmAgent (an ADK AgentTool) composes the specialist brief — read-only, it never changes the decision.</p></div>
+          <div class="card"><div class="icon">🎯</div><h4>Selects, never invents</h4><p>Where an LLM decides, it picks from a deterministically enumerated set and cites facts — verified in code, with a deterministic fallback.</p></div>
         </div>
       </div>
     </div>
@@ -1132,13 +1886,19 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
 
   <section style="background:#fff; border-top:1px solid var(--line);">
     <div class="wrap">
+      {_llm_touchpoints_section(config)}
+    </div>
+  </section>
+
+  <section style="border-top:1px solid var(--line);">
+    <div class="wrap">
       <span class="eyebrow">Key mechanics</span>
       <h2>What makes it trustworthy</h2>
       <div class="grid-2">
         <div class="card"><h4>🤖 One agent, five steps</h4><p>A single ADK LlmAgent calls one tool per step — Intake → Geo-Lookup → Constraint Check → Score &amp; Rank → Decide — and pauses to escalate when needed.</p></div>
-        <div class="card"><h4>✅ Decisions are code, not vibes</h4><p>Constraints and scoring are deterministic Python, so identical inputs always yield the identical recommendation.</p></div>
-        <div class="card"><h4>🧠 The agent narrates, never computes</h4><p>It presents the deterministic reasoning trace in its own words; it never changes a number, a route, or the decision itself.</p></div>
-        <div class="card"><h4>🙋 Human-in-the-loop on escalation</h4><p>The agent pauses and waits for a specialist's reply (via ADK's request_input tool) when it finds no feasible slot, or the best option's own total score falls short of the auto-assign bar.</p></div>
+        <div class="card"><h4>✅ Decisions are code, not vibes</h4><p>Hard constraints and scoring are deterministic Python, so identical inputs always yield the identical recommendation — and the deterministic result is always the floor.</p></div>
+        <div class="card"><h4>🎯 An LLM selects, it never invents</h4><p>By default the agent just narrates the deterministic trace. Where an opt-in layer lets a model decide, it picks from a deterministically enumerated set and cites facts that are verified in code — it never free-generates a route, window, or score.</p></div>
+        <div class="card"><h4>🙋 Human-in-the-loop on escalation</h4><p>The agent pauses and waits for a specialist's reply (via ADK's request_input tool) when it finds no feasible slot, or the best option's own total score falls short of the auto-assign bar — after the triage sub-agent has drafted the brief.</p></div>
       </div>
     </div>
   </section>
@@ -1211,7 +1971,8 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
     Smart Assignment · an AI agent for delivery slot recommendation ·
     built on Google's Agent Development Kit (ADK).<br />
     Source &amp; docs on <a href="https://github.com/MuhammadVT/smart-assignment">GitHub</a>.
-    Decisions are deterministic and auditable; reasoning narration is LLM-written with a deterministic fallback.
+    Hard decisions are deterministic and auditable; where an LLM reasons — the conversational agent, the
+    triage sub-agent, and the opt-in grounded picks — it selects from a verified set with a deterministic fallback.
   </div>
 </footer>
 

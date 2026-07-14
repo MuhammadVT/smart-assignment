@@ -83,26 +83,25 @@ def llm_credentials_available(config: Config) -> bool:
 
 
 def resolve_mode(config: Optional[Config] = None) -> dict:
-    """Effective mode the app will actually serve, plus why.
+    """Effective mode the app will serve.
 
-    Returns ``{"mode", "configured"[, "reason"]}``. ``mode`` is what the client
-    should use; ``configured`` is what the env var asked for; ``reason`` explains
-    any downgrade (e.g. llm requested but no credentials).
+    Returns ``{"mode", "configured"}``. Unless the operator explicitly asks for
+    deterministic mode (``SMART_ASSIGNMENT_WEBAPP_MODE=deterministic``), the chat
+    drives the **real ADK agent** -- exactly what ``adk web`` does -- so the
+    web-app conversation behaves identically (free-form Q&A, the escalation-triage
+    handoff, revisions, etc.).
+
+    We deliberately do NOT pre-guess credential availability and downgrade to the
+    Phase-1 parser here: that heuristic can disagree with what the agent actually
+    needs (e.g. Vertex via a service account) and wrongly strand the app on the
+    parser even when ``adk web`` works. If the agent genuinely can't run (no
+    credentials, a model/network error), the ``/api/chat`` stream falls back to a
+    deterministic result per turn (see ``app.chat``), so the chat never dead-ends.
     """
     config = config or DEFAULT_CONFIG
     configured = webapp_mode()
     if configured != "llm":
         return {"mode": "deterministic", "configured": configured}
-    if not llm_credentials_available(config):
-        return {
-            "mode": "deterministic",
-            "configured": "llm",
-            "reason": (
-                "Conversational (LLM) mode is configured but no credentials were detected "
-                "for the active backend. Running in deterministic mode. Set "
-                "SMART_ASSIGNMENT_LLM_BACKEND and the matching credentials to enable it."
-            ),
-        }
     return {"mode": "llm", "configured": "llm"}
 
 
@@ -179,9 +178,14 @@ class LlmChatService:
             )
         return types.Content(role="user", parts=[types.Part(text=message)])
 
-    async def _visualization_from_state(self, session_id: str) -> Optional[dict]:
+    async def _visualization_from_state(
+        self, session_id: str, reasoning_override: Optional[str] = None
+    ) -> Optional[dict]:
         """Rebuild the profile from session state and produce the Simulator
-        payload by re-running the deterministic pipeline (drift-free)."""
+        payload by re-running the deterministic pipeline (drift-free on the
+        numbers). ``reasoning_override`` carries the agent's own recommendation
+        narration so the result card's "Why the agent chose this" shows the same
+        text the chat box did, not a separately-rendered one."""
         session = await self._get_session_service().get_session(
             app_name=_APP_NAME, user_id=_USER_ID, session_id=session_id
         )
@@ -196,7 +200,7 @@ class LlmChatService:
             geocoder=self._geocoder,
             reasoner=DeterministicReasoner(),
         )
-        return build_workflow_payload(result, DEFAULT_CONFIG)
+        return build_workflow_payload(result, DEFAULT_CONFIG, reasoning_override=reasoning_override)
 
     # -- the turn stream --
 
@@ -216,11 +220,32 @@ class LlmChatService:
         from google.adk.agents.run_config import RunConfig, StreamingMode
 
         saw_recommendation = False
+        # The agent's own recommendation narration (everything it says AFTER it
+        # calls recommend_or_escalate this turn), captured so the visualization's
+        # "Why the agent chose this" can show the same words as the chat box.
+        recommendation_reply: list[str] = []
         async for event in runner.run_async(
             user_id=_USER_ID,
             session_id=session_id,
             new_message=new_message,
-            run_config=RunConfig(streaming_mode=StreamingMode.SSE),
+            # Run the model in NON-streaming mode -- exactly what ``adk web`` does
+            # by default (its dev UI sends ``streaming=false`` unless "Token
+            # Streaming" is toggled on, so ADK builds
+            # ``RunConfig(streaming_mode=NONE)``). Two reasons this is the right
+            # choice here, not a downgrade:
+            #   1. Parity + robustness. Some LiteLLM-backed models (e.g. the Sage
+            #      path) raise inside LiteLLM's async streaming handler
+            #      ("'coroutine' object is not an iterator") when token streaming
+            #      is requested. ``adk web`` avoids it by defaulting to NONE; when
+            #      this service forced ``StreamingMode.SSE`` it hit that bug on
+            #      every turn and silently fell back to the deterministic brain --
+            #      the web-app-vs-``adk web`` divergence users saw.
+            #   2. No lost behavior. The browser-facing SSE stream is emitted by
+            #      THIS method (one frame per tool call / completed message); it
+            #      does not depend on model token streaming. The loop below only
+            #      emits aggregated, non-partial events anyway, so requesting
+            #      token streaming bought nothing while adding a failure mode.
+            run_config=RunConfig(streaming_mode=StreamingMode.NONE),
         ):
             # Human-in-the-loop: request_input surfaces as a long-running call.
             if getattr(event, "long_running_tool_ids", None):
@@ -251,10 +276,13 @@ class LlmChatService:
             if event.content and event.content.parts and not getattr(event, "partial", False):
                 text = "".join(p.text for p in event.content.parts if getattr(p, "text", None))
                 if text.strip():
+                    if saw_recommendation:
+                        recommendation_reply.append(text.strip())
                     yield {"type": "message", "text": text.strip()}
 
         if saw_recommendation:
-            payload = await self._visualization_from_state(session_id)
+            override = "\n\n".join(recommendation_reply) or None
+            payload = await self._visualization_from_state(session_id, reasoning_override=override)
             if payload:
                 yield {"type": "visualization", "payload": payload}
 
