@@ -33,10 +33,23 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Install the local ds-utils-lite dependency
+        # ds-utils-lite is vendored under smart_assignment/ and resolved from a
+        # local path (see [tool.uv.sources] in pyproject.toml); it is not on
+        # PyPI, so install it editable first to satisfy the main package's
+        # dependency on it (mirrors ci.yml).
+        run: pip install -e smart_assignment/ds_utils_lite
+
       - name: Install package
         run: pip install -e .
 
       - name: Regenerate docs/index.html from live workflow output
+        # Deterministic, offline generation so the published page always matches
+        # the mock demo data (and never depends on live SQL / a network geocoder).
+        env:
+          SMART_ASSIGNMENT_GEOCODER: mock
+          SMART_ASSIGNMENT_DATA_SOURCE: mock
+          SMART_ASSIGNMENT_USE_ROUTE_SLOT_SCORING: "true"
         run: python3 scripts/generate_page.py
 
       - name: Configure Pages
