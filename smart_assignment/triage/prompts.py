@@ -29,7 +29,7 @@ ROOT CAUSE
 constraint, or the proposed route's thin margin -- with the exact numbers.>
 
 OPTIONS (most workable first)
-1) <ROUTE_ID · DAY> — <its current state: utilization % and cases of headroom>
+1) <ROUTE_ID> - <ROUTE_NAME> · <DAY> — <its current state: utilization % and cases of headroom>
    Action: <the concrete change needed to make this route work for the order>
    Trade-off: <the cost/effort/who it affects — one short clause>
 2) <next option, same shape>
@@ -53,6 +53,8 @@ Rules:
   on each side (the utilization %, cases of headroom, the capacity ceiling,
   and the order size), never as a new computed count -- let the specialist do
   the arithmetic.
+- Whenever you name a route, write it as "<route_id> - <route_name>" using that
+  candidate's own route_id and name -- always both together, never one alone.
 - Keep every line tight; aim for the whole brief under ~180 words.
 - If there is only one viable path, still use the layout -- a single option and a
   RECOMMENDATION that says so.
