@@ -37,3 +37,18 @@ def test_uncitable_field_and_wrong_value_fail():
     assert not bad_field.ok
     wrong = verify_choice(AddressChoice(0, "x", [AddressCitation(0, "similarity", 0.01)]), packet)
     assert not wrong.ok
+
+
+def test_near_tolerance_but_different_similarity_fails():
+    # A citation 0.015 off the stored similarity is a different number, not a
+    # rounding artifact -- the old 0.02 tolerance accepted it.
+    packet = _packet()
+    sim = float(packet.candidate_facts(0)["similarity"])
+    off = verify_choice(
+        AddressChoice(0, "x", [AddressCitation(0, "similarity", round(sim + 0.015, 4))]), packet
+    )
+    assert not off.ok
+    exact = verify_choice(
+        AddressChoice(0, "x", [AddressCitation(0, "similarity", round(sim + 0.004, 4))]), packet
+    )
+    assert exact.ok  # within 4dp-rounding slack

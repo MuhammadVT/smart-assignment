@@ -58,3 +58,33 @@ def test_citation_to_unknown_field_fails():
         }
     )
     assert not verify_choice(out, packet).ok
+
+
+def test_magnitude_laundered_citation_fails():
+    # The old unconditional /100 normalization let a count citation 100x off
+    # pass (committed_overlap=200 for a stored 2). Only fraction fields
+    # (fit_score, blended_score) may be phrased as percents.
+    packet = _packet()
+    out = parse_slot_choice(
+        {
+            "chosen_index": 0,
+            "rationale": "Busy slot.",
+            "citations": [{"index": 0, "field": "committed_overlap", "value": 200}],
+        }
+    )
+    result = verify_choice(out, packet)
+    assert not result.ok
+    assert any("committed_overlap" in r for r in result.reasons)
+
+
+def test_percent_form_fraction_citation_still_passes():
+    # "70%" (as 70.0) for a stored fit_score of 0.7 keeps working.
+    packet = _packet()
+    out = parse_slot_choice(
+        {
+            "chosen_index": 0,
+            "rationale": "Tight fit.",
+            "citations": [{"index": 0, "field": "fit_score", "value": 70}],
+        }
+    )
+    assert verify_choice(out, packet).ok

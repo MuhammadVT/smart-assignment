@@ -19,6 +19,16 @@ def _packet_and_winner():
     return packet, winner_id, facts
 
 
+def _support(winner_id, facts):
+    """A valid route-specific citation for the pick, so tests that target OTHER
+    layers satisfy the RECOMMEND-must-be-cited rule."""
+    return {
+        "route_id": winner_id,
+        "field": "utilization_after",
+        "value": facts["utilization_after"],
+    }
+
+
 def test_grounded_fact_citation_passes():
     packet, winner_id, facts = _packet_and_winner()
     out = parse_judgment(
@@ -99,21 +109,21 @@ def test_percent_paraphrase_in_prose_is_grounded():
             "confidence": "HIGH",
             "recommended_route_id": winner_id,
             "rationale": f"After this order the truck sits at roughly {pct}% utilization.",
-            "citations": [],
+            "citations": [_support(winner_id, facts)],
         }
     )
     assert verify(out, packet).ok
 
 
 def test_hallucinated_number_in_prose_fails():
-    packet, winner_id, _facts = _packet_and_winner()
+    packet, winner_id, facts = _packet_and_winner()
     out = parse_judgment(
         {
             "decision": "RECOMMEND",
             "confidence": "HIGH",
             "recommended_route_id": winner_id,
             "rationale": "This route leaves 9999 cases of headroom, plenty of room.",
-            "citations": [],
+            "citations": [_support(winner_id, facts)],
         }
     )
     result = verify(out, packet)
@@ -123,14 +133,14 @@ def test_hallucinated_number_in_prose_fails():
 
 def test_route_id_in_prose_does_not_trip_the_number_scan():
     # The digits inside a real route-id must not be read as an ungrounded number.
-    packet, winner_id, _facts = _packet_and_winner()
+    packet, winner_id, facts = _packet_and_winner()
     out = parse_judgment(
         {
             "decision": "RECOMMEND",
             "confidence": "HIGH",
             "recommended_route_id": winner_id,
             "rationale": f"Route {winner_id} is the only feasible option and clusters well.",
-            "citations": [],
+            "citations": [_support(winner_id, facts)],
         }
     )
     assert verify(out, packet).ok
@@ -188,3 +198,252 @@ def test_true_and_false_comparisons():
         }
     )
     assert not verify(bad, packet).ok
+
+
+# ---------------------------------------------------------------------------
+# Adversarial-hardening regressions: cases that slipped the original checks.
+# ---------------------------------------------------------------------------
+
+
+def _recommend(winner_id, rationale, citations):
+    return parse_judgment(
+        {
+            "decision": "RECOMMEND",
+            "confidence": "HIGH",
+            "recommended_route_id": winner_id,
+            "rationale": rationale,
+            "citations": citations,
+        }
+    )
+
+
+def test_magnitude_laundered_fact_citations_fail():
+    # The old unconditional /100 normalization let a citation 100x (or 0.01x)
+    # off pass for counts/distances. Only fraction fields may normalize.
+    packet, winner_id, facts = _packet_and_winner()
+    for field_name, value in [
+        ("distance_miles", float(facts["distance_miles"]) * 100),
+        ("remaining_capacity_after", float(facts["remaining_capacity_after"]) * 100),
+        ("remaining_capacity_after", float(facts["remaining_capacity_after"]) / 100),
+    ]:
+        out = _recommend(
+            winner_id,
+            "Best fit.",
+            [
+                _support(winner_id, facts),
+                {"route_id": winner_id, "field": field_name, "value": value},
+            ],
+        )
+        result = verify(out, packet)
+        assert not result.ok, f"{field_name}={value} should not verify"
+        assert any(field_name in r for r in result.reasons)
+
+
+def test_percent_form_fact_citation_still_passes():
+    # "87%" (parsed to 87.0) for a stored 0.87 must keep working on fraction fields.
+    packet, winner_id, facts = _packet_and_winner()
+    pct = round(float(facts["utilization_after"]) * 100, 2)
+    out = _recommend(
+        winner_id,
+        "Best fit.",
+        [{"route_id": winner_id, "field": "utilization_after", "value": pct}],
+    )
+    assert verify(out, packet).ok
+
+
+def test_near_tolerance_but_different_fact_value_fails():
+    # 0.015 off is NOT a faithful paraphrase of a 4dp fact -- the old 0.02
+    # tolerance accepted it.
+    packet, winner_id, facts = _packet_and_winner()
+    off = round(float(facts["utilization_after"]) + 0.015, 4)
+    out = _recommend(
+        winner_id,
+        "Best fit.",
+        [{"route_id": winner_id, "field": "utilization_after", "value": off}],
+    )
+    result = verify(out, packet)
+    assert not result.ok
+    assert any("utilization_after" in r for r in result.reasons)
+
+
+def test_self_comparison_is_rejected():
+    # A route compared against itself is trivially "equal" -- padding, not grounding.
+    packet, winner_id, facts = _packet_and_winner()
+    out = _recommend(
+        winner_id,
+        "Best fit.",
+        [
+            _support(winner_id, facts),
+            {
+                "kind": "comparison",
+                "field": "distance_miles",
+                "route_id_a": winner_id,
+                "route_id_b": winner_id,
+                "relation": "equal",
+            },
+        ],
+    )
+    result = verify(out, packet)
+    assert not result.ok
+    assert any("against itself" in r for r in result.reasons)
+
+
+def test_recommend_with_no_citations_fails():
+    packet, winner_id, _facts = _packet_and_winner()
+    result = verify(_recommend(winner_id, "Trust me.", []), packet)
+    assert not result.ok
+    assert any("no citation backs" in r for r in result.reasons)
+
+
+def test_recommend_cited_only_via_another_route_fails():
+    # True facts about a DIFFERENT route must not count as support for the pick.
+    packet, winner_id, _facts = _packet_and_winner()
+    other = next(
+        c["route_id"]
+        for c in packet.feasible_candidates + packet.infeasible_candidates
+        if c["route_id"] != winner_id
+    )
+    other_facts = packet.candidate_dict(other)["facts"]
+    out = _recommend(
+        winner_id,
+        "Best fit.",
+        [{"route_id": other, "field": "distance_miles", "value": other_facts["distance_miles"]}],
+    )
+    result = verify(out, packet)
+    assert not result.ok
+    assert any("no citation backs" in r for r in result.reasons)
+
+
+def test_recommend_cited_only_via_constant_fact_fails():
+    # order_quantity_cases is identical for every candidate -- citing it
+    # supports nothing about the pick.
+    packet, winner_id, facts = _packet_and_winner()
+    out = _recommend(
+        winner_id,
+        "Best fit.",
+        [
+            {
+                "route_id": winner_id,
+                "field": "order_quantity_cases",
+                "value": facts["order_quantity_cases"],
+            }
+        ],
+    )
+    result = verify(out, packet)
+    assert not result.ok
+    assert any("no citation backs" in r for r in result.reasons)
+
+
+def test_escalate_needs_no_citations():
+    # The conservative path stays cheap: an ESCALATE is never blocked on citations.
+    packet, _winner_id, _facts = _packet_and_winner()
+    out = parse_judgment(
+        {
+            "decision": "ESCALATE",
+            "confidence": "LOW",
+            "recommended_route_id": None,
+            "rationale": "Too marginal to auto-assign.",
+            "citations": [],
+        }
+    )
+    assert verify(out, packet).ok
+
+
+def test_wrong_day_in_prose_fails_and_real_day_passes():
+    packet, winner_id, facts = _packet_and_winner()
+    candidate_days = {
+        c["day_label"] for c in packet.feasible_candidates + packet.infeasible_candidates
+    }
+    wrong = next(
+        d
+        for d in ("Sunday", "Monday", "Friday", "Saturday", "Thursday")
+        if d not in candidate_days
+    )
+    bad = _recommend(
+        winner_id, f"Delivers {wrong} morning, which suits them.", [_support(winner_id, facts)]
+    )
+    result = verify(bad, packet)
+    assert not result.ok
+    assert any(wrong in r for r in result.reasons)
+
+    real = packet.candidate_dict(winner_id)["day_label"]
+    good = _recommend(
+        winner_id, f"Delivers {real}, which suits them.", [_support(winner_id, facts)]
+    )
+    assert verify(good, packet).ok
+
+
+def test_invented_clock_window_fails_and_real_window_passes():
+    packet, winner_id, facts = _packet_and_winner()
+    bad = _recommend(
+        winner_id, "Can deliver in the 23:59 window they want.", [_support(winner_id, facts)]
+    )
+    result = verify(bad, packet)
+    assert not result.ok
+    assert any("23:59" in r for r in result.reasons)
+
+    window = packet.candidate_dict(winner_id)["window"]
+    good = _recommend(
+        winner_id, f"The {window} window is a good match.", [_support(winner_id, facts)]
+    )
+    assert verify(good, packet).ok
+
+
+def test_comma_grouped_fabricated_number_fails():
+    # "1,150" must be read as 1150, not split into a discarded "1" and a
+    # coincidentally-grounded "150".
+    packet, winner_id, facts = _packet_and_winner()
+    headroom = int(facts["remaining_capacity_after"])
+    out = _recommend(
+        winner_id,
+        f"That leaves 1,{headroom:03d} cases of headroom.",
+        [_support(winner_id, facts)],
+    )
+    result = verify(out, packet)
+    assert not result.ok
+    assert any(f"1,{headroom:03d}" in r for r in result.reasons)
+
+
+def test_unit_bearing_number_cannot_launder_through_percent_normalization():
+    # A stored utilization 0.84 must not ground "84 miles"; a stored headroom
+    # of 150 must not ground "15000 cases".
+    packet, winner_id, facts = _packet_and_winner()
+    fake_miles = round(float(facts["utilization_after"]) * 100)
+    fake_cases = int(facts["remaining_capacity_after"]) * 100
+    out = _recommend(
+        winner_id,
+        f"The stop is {fake_miles} miles out with {fake_cases} cases of headroom.",
+        [_support(winner_id, facts)],
+    )
+    result = verify(out, packet)
+    assert not result.ok
+    assert any(str(fake_miles) in r for r in result.reasons)
+    assert any(str(fake_cases) in r for r in result.reasons)
+
+
+def test_small_integer_with_unit_is_checked_but_bare_counts_are_not():
+    packet, winner_id, facts = _packet_and_winner()
+    bad = _recommend(
+        winner_id, "Careful: only 7 cases of headroom remain.", [_support(winner_id, facts)]
+    )
+    result = verify(bad, packet)
+    assert not result.ok
+    assert any("'7'" in r for r in result.reasons)
+
+    good = _recommend(
+        winner_id, "Clearly better than the other 2 routes.", [_support(winner_id, facts)]
+    )
+    assert verify(good, packet).ok
+
+
+def test_route_mention_without_hyphen_fails_even_if_number_grounds():
+    # "Route 150" names a nonexistent route; 150 happening to equal a packet
+    # number (the headroom) must not save it.
+    packet, winner_id, facts = _packet_and_winner()
+    headroom = int(facts["remaining_capacity_after"])
+    out = _recommend(
+        winner_id, f"Route {headroom} could absorb the overflow.", [_support(winner_id, facts)]
+    )
+    result = verify(out, packet)
+    assert not result.ok
+    assert any(f"route {headroom!r}".replace("route ", "") in r for r in result.reasons)

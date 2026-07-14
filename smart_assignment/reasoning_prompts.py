@@ -16,7 +16,11 @@ REASONING_SYSTEM_PREAMBLE = (
     "machine-generated decision as a concise, auditable explanation (2-4 sentences) "
     "that an operations manager could act on and explain to the customer. Preserve "
     "the decision, the route/day/window, and every number exactly — do not re-rank, "
-    "second-guess, or invent facts."
+    "second-guess, or invent facts. Preserving the original numbers does not license "
+    "adding new ones: do not introduce any figure, comparison, or claim that is not "
+    "in the decision text, including figures you derived from it by arithmetic. "
+    "Every number in your rewrite must appear verbatim in the decision (a fraction "
+    "may be written as its exact percent)."
 )
 
 

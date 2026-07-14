@@ -22,6 +22,7 @@ from .conftest import (
     escalate,
     evaluations_for,
     feasible_ids,
+    grounded_citation,
     recommend,
 )
 
@@ -39,7 +40,8 @@ def test_confident_recommend_ships_on_a_single_call():
     config = Config(use_grounded_judgment=True)
     customer, evals = evaluations_for(CLEAR_RECOMMEND, config)
     winner = feasible_ids(evals)[0]
-    fake = FakeJudgmentFn(recommend(winner, confidence="HIGH"))
+    cite = grounded_citation(customer, evals, winner, config)
+    fake = FakeJudgmentFn(recommend(winner, confidence="HIGH", citations=[cite]))
 
     rec = _judge(fake).decide(customer, evals, config)
 
@@ -88,7 +90,8 @@ def test_low_conf_recommend_resamples_when_knob_on():
     )
     customer, evals = evaluations_for(CLEAR_RECOMMEND, config)
     winner = feasible_ids(evals)[0]
-    fake = FakeJudgmentFn(recommend(winner, confidence="LOW"))
+    cite = grounded_citation(customer, evals, winner, config)
+    fake = FakeJudgmentFn(recommend(winner, confidence="LOW", citations=[cite]))
 
     rec = _judge(fake).decide(customer, evals, config)
 
@@ -107,7 +110,8 @@ def test_low_conf_recommend_ships_immediately_when_knob_off():
     )
     customer, evals = evaluations_for(CLEAR_RECOMMEND, config)
     winner = feasible_ids(evals)[0]
-    fake = FakeJudgmentFn(recommend(winner, confidence="LOW"))
+    cite = grounded_citation(customer, evals, winner, config)
+    fake = FakeJudgmentFn(recommend(winner, confidence="LOW", citations=[cite]))
 
     rec = _judge(fake).decide(customer, evals, config)
 
@@ -119,9 +123,11 @@ def test_low_conf_recommend_ships_immediately_when_knob_off():
 # --- consensus rule: unanimous vs majority ----------------------------------
 
 
-def _mixed_first_escalate_then_two_recommend(winner):
+def _mixed_first_escalate_then_two_recommend(winner, cite):
     # First sample escalates (triggers resample); next two recommend.
-    return FakeJudgmentFn([escalate(), recommend(winner), recommend(winner)])
+    return FakeJudgmentFn(
+        [escalate(), recommend(winner, citations=[cite]), recommend(winner, citations=[cite])]
+    )
 
 
 def test_unanimous_consensus_escalates_on_a_split():
@@ -130,7 +136,9 @@ def test_unanimous_consensus_escalates_on_a_split():
     )
     customer, evals = evaluations_for(CLEAR_RECOMMEND, config)
     winner = feasible_ids(evals)[0]
-    fake = _mixed_first_escalate_then_two_recommend(winner)
+    fake = _mixed_first_escalate_then_two_recommend(
+        winner, grounded_citation(customer, evals, winner, config)
+    )
 
     rec = _judge(fake).decide(customer, evals, config)
 
@@ -145,7 +153,9 @@ def test_majority_consensus_clears_the_same_split():
     )
     customer, evals = evaluations_for(CLEAR_RECOMMEND, config)
     winner = feasible_ids(evals)[0]
-    fake = _mixed_first_escalate_then_two_recommend(winner)
+    fake = _mixed_first_escalate_then_two_recommend(
+        winner, grounded_citation(customer, evals, winner, config)
+    )
 
     rec = _judge(fake).decide(customer, evals, config)
 
@@ -167,7 +177,16 @@ def test_differing_good_picks_are_not_treated_as_disagreement():
     b = ids[1] if len(ids) > 1 else ids[0]
     # First is a LOW-confidence recommend (escalation-side -> resample), second
     # recommends a different (or same) route.
-    fake = FakeJudgmentFn([recommend(a, confidence="LOW"), recommend(b, confidence="HIGH")])
+    fake = FakeJudgmentFn(
+        [
+            recommend(
+                a, confidence="LOW", citations=[grounded_citation(customer, evals, a, config)]
+            ),
+            recommend(
+                b, confidence="HIGH", citations=[grounded_citation(customer, evals, b, config)]
+            ),
+        ]
+    )
 
     rec = _judge(fake).decide(customer, evals, config)
 
@@ -209,7 +228,8 @@ def test_successful_grounded_recommend_does_not_flag_fallback():
     config = Config(use_grounded_judgment=True)
     customer, evals = evaluations_for(CLEAR_RECOMMEND, config)
     winner = feasible_ids(evals)[0]
-    fake = FakeJudgmentFn(recommend(winner, confidence="HIGH"))
+    cite = grounded_citation(customer, evals, winner, config)
+    fake = FakeJudgmentFn(recommend(winner, confidence="HIGH", citations=[cite]))
 
     rec = _judge(fake).decide(customer, evals, config)
 

@@ -69,7 +69,10 @@ Rules (STRICT):
   and runner_up.index must be a real option other than your pick. With a single
   option, use key_tradeoff to say why it is the clear choice and set runner_up to null.
 - EVERY number you state in any field must be a real fact from the option you
-  attribute it to, and must appear in `citations`. Do not state a number you cannot cite.
+  attribute it to, and must appear in `citations`. Do not state a number you cannot
+  cite -- and a figure YOU computed (a sum, difference, average, or projection over
+  option facts) counts as a number you cannot cite: state the option's own numbers
+  instead. Days and time windows must be quoted verbatim from the options.
 - Citable fact keys are exactly: {fields}.
 """.format(fields=", ".join(NUMERIC_FACT_KEYS))
 
