@@ -13,6 +13,9 @@ dist/
 .venv/
 venv/
 env/
+# uv resolves this on the fly for local `uv run`; the project pins deps in
+# pyproject.toml, so the lockfile is not tracked.
+uv.lock
 
 # Test / coverage
 .pytest_cache/
