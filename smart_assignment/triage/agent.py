@@ -99,9 +99,10 @@ def build_triage_agent(config: Config) -> LlmAgent:
         name=TRIAGE_AGENT_NAME,
         model=get_llm(config.for_role(ROLE_TRIAGE)),
         description=(
-            "Turns an escalated slot recommendation into a concise specialist "
-            "brief -- root cause, concrete remediation options, and the question "
-            "to ask -- grounded in the evaluation trace. Never changes the decision."
+            "Turns an escalated slot recommendation into a scannable specialist "
+            "brief -- situation, root cause, ranked remediation options, a suggested "
+            "starting point, and the decision to make -- grounded in the evaluation "
+            "trace. Never changes the decision."
         ),
         instruction=TRIAGE_INSTRUCTION,
         tools=[

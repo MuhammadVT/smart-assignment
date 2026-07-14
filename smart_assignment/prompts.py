@@ -87,10 +87,11 @@ ESCALATION_TRIAGE_GUIDANCE = """
 Escalation triage: whenever recommend_or_escalate returns
 "requires_human_review": true, BEFORE you call request_input, first call the
 escalation_triage tool. It reads the full evaluation trace and returns a
-specialist brief (root cause, concrete remediation options, and a suggested
-question). Pass that brief as the message to request_input, so the specialist
-gets a real diagnosis instead of a bare escalation. Do not alter any number,
-route, or decision in the brief -- relay it as given.
+scannable specialist brief (situation, root cause, ranked remediation options, a
+suggested starting point, and the decision to make). Pass that brief as the
+message to request_input verbatim -- keep its section layout and line breaks
+intact -- so the specialist gets a real diagnosis instead of a bare escalation.
+Do not alter any number, route, or decision in the brief.
 """
 
 
