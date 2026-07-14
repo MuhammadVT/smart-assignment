@@ -226,10 +226,14 @@ citations: it rejects a **dishonest self-assessment** (verdict must match whethe
 the pick actually equals the deterministic default; a DIVERGE needs a note; the
 trade-off and a valid, distinct runner-up are required whenever more than one
 option is offered), and it runs a **tolerant prose scan** (mirroring
-`triage/verifier.py`) so *every* number stated in any free-text field must be a
-real fact the packet contains — not just the ones in the citation list. Any
-failure feeds the single corrective retry, then the deterministic fallback: never
-worse than before, only — on success — better explained.
+`triage/verifier.py`) so *every* number (including `"1,234"`-style thousands),
+route-id or `"route N"` mention, day name, and HH:MM time stated in any free-text
+field must be grounded in the packet — not just the values in the citation list.
+Percent phrasings normalize only against fraction-scale facts and never for
+unit-bearing tokens ("84 miles" can't launder through a stored 0.84), and small
+integers carrying a unit or percent sign are checked. Any failure feeds the
+single corrective retry, then the deterministic fallback: never worse than
+before, only — on success — better explained.
 
 **Threshold.** `route_slot_score_threshold` defaults to `0.55`, a touch below the
 route-only `0.60`: dropping the 0.6 window neutral and adding availability shifts

@@ -132,3 +132,100 @@ def test_verifier_allows_single_option_without_runner_up():
     assert packet.n == 1
     choice = parse_route_slot_choice(choice_dict(0, runner_up=None, key_tradeoff=""))
     assert verify_choice(choice, packet).ok
+
+
+# ---------------------------------------------------------------------------
+# Adversarial-hardening regressions: cases that slipped the original checks.
+# ---------------------------------------------------------------------------
+
+
+def test_percent_form_citation_passes_but_magnitude_laundering_fails():
+    packet = _packet()
+    avail = packet.options[0]["facts"]["slot_availability"]  # 0.33
+    pct = parse_route_slot_choice(choice_dict(
+        0, runner_up_index=1,
+        citations=[{"index": 0, "field": "slot_availability", "value": round(avail * 100, 2)}],
+    ))
+    assert verify_choice(pct, packet).ok  # "33%" for a stored 0.33
+    laundered = parse_route_slot_choice(choice_dict(
+        0, runner_up_index=1,
+        citations=[{"index": 0, "field": "slot_availability", "value": round(avail / 100, 4)}],
+    ))
+    assert not verify_choice(laundered, packet).ok  # 100x down must not pass
+
+
+def test_near_tolerance_but_different_citation_value_fails():
+    # 0.35 is not a faithful paraphrase of a stored 0.33 -- the old 0.02
+    # tolerance accepted it.
+    packet = _packet()
+    off = parse_route_slot_choice(choice_dict(
+        0, runner_up_index=1,
+        citations=[{"index": 0, "field": "slot_availability", "value": 0.35}],
+    ))
+    assert not verify_choice(off, packet).ok
+
+
+def test_unit_bearing_figure_cannot_launder_through_percent_normalization():
+    # A stored 0.33 availability must not ground "33 miles"; percent form stays fine.
+    packet = _packet()
+    bad = parse_route_slot_choice(choice_dict(
+        0, runner_up_index=1,
+        primary_reasons=["The stop sits 33 miles from the cluster core."],
+    ))
+    result = verify_choice(bad, packet)
+    assert not result.ok and "33" in result.as_feedback()
+    good = parse_route_slot_choice(choice_dict(
+        0, runner_up_index=1,
+        primary_reasons=["Scores 80% overall; the morning slot is only 33% open."],
+    ))
+    assert verify_choice(good, packet).ok
+
+
+def test_comma_grouped_and_small_unit_figures_are_checked():
+    packet = _packet()
+    for reason in ("Leaves 8,000 cases of headroom.", "Only 7 cases of headroom remain."):
+        bad = parse_route_slot_choice(choice_dict(0, runner_up_index=1,
+                                                  primary_reasons=[reason]))
+        assert not verify_choice(bad, packet).ok, reason
+    fine = parse_route_slot_choice(
+        choice_dict(0, runner_up_index=1, primary_reasons=["Better than the other 2 options."])
+    )
+    assert verify_choice(fine, packet).ok
+
+
+def test_wrong_day_and_invented_window_are_flagged():
+    packet = _packet()
+    wrong_day = parse_route_slot_choice(choice_dict(
+        0, runner_up_index=1, primary_reasons=["The Friday run has the most open slot."],
+    ))
+    result = verify_choice(wrong_day, packet)
+    assert not result.ok and "Friday" in result.as_feedback()
+    real_day = parse_route_slot_choice(choice_dict(
+        0, runner_up_index=1, primary_reasons=["The Tuesday run has the most open slot."],
+    ))
+    assert verify_choice(real_day, packet).ok
+
+    fake_window = parse_route_slot_choice(choice_dict(
+        0, runner_up_index=1, primary_reasons=["Deliver in the 13:00-15:00 window."],
+    ))
+    result = verify_choice(fake_window, packet)
+    assert not result.ok and "13:00" in result.as_feedback()
+    real_window = parse_route_slot_choice(choice_dict(
+        0, runner_up_index=1,
+        primary_reasons=[f"The {packet.options[0]['window']} window clusters well."],
+    ))
+    assert verify_choice(real_window, packet).ok
+
+
+def test_hallucinated_route_mentions_are_flagged():
+    packet = _packet()
+    hyphenated = parse_route_slot_choice(choice_dict(
+        0, runner_up_index=1, primary_reasons=["RTE-Z-99 could also absorb it."],
+    ))
+    assert not verify_choice(hyphenated, packet).ok
+    # "Route 90" names no candidate; 90 equalling the order size must not save it.
+    bare = parse_route_slot_choice(choice_dict(
+        0, runner_up_index=1, primary_reasons=["Route 90 can absorb this order."],
+    ))
+    result = verify_choice(bare, packet)
+    assert not result.ok and "'90'" in result.as_feedback()
