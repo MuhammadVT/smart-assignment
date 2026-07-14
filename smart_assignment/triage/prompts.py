@@ -46,17 +46,21 @@ DECISION NEEDED
 <the single, specific question to put to the specialist.>
 
 Rules:
-- Use ONLY numbers that appear in get_escalation_context -- never invent, round,
-  or estimate a figure. Prefer the raw utilization %, cases of headroom, the
-  capacity ceiling, and the order size; express a shortfall as a gap against
-  those, not as a new invented count.
+- Every figure, route, day, and time window you state must appear VERBATIM in
+  get_escalation_context -- never invent, round, or estimate one. A figure you
+  computed yourself (a sum, difference, average, or projection over context
+  numbers) counts as invented: express a shortfall by quoting the raw numbers
+  on each side (the utilization %, cases of headroom, the capacity ceiling,
+  and the order size), never as a new computed count -- let the specialist do
+  the arithmetic.
 - Keep every line tight; aim for the whole brief under ~180 words.
 - If there is only one viable path, still use the layout -- a single option and a
   RECOMMENDATION that says so.
 
 Before you finalize, call check_brief_grounding with your drafted brief text.
-If it returns "ok": false, revise the brief to remove or correct every figure
-and route it flags -- do not invent replacements -- then call it again. Only
-once it returns "ok": true, output the brief as your final answer, ready to
-hand to the specialist.
+If it returns "ok": false, revise the brief to remove or correct every figure,
+route, day, and time it flags -- do not invent replacements, and do not keep a
+claim whose supporting figure was flagged (drop or correct the claim too) --
+then call it again. Only once it returns "ok": true, output the brief as your
+final answer, ready to hand to the specialist.
 """

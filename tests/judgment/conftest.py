@@ -13,6 +13,7 @@ from datetime import time
 
 from smart_assignment.integrations.geocoding_client import MockGeocoder
 from smart_assignment.integrations.route_capacity_client import fetch_candidate_routes
+from smart_assignment.judgment.evidence import build_evidence_packet
 from smart_assignment.pipeline import evaluate_candidates, geo_lookup, intake
 from smart_assignment.shared.config import Config
 from smart_assignment.shared.models import CustomerProfile, DayOfWeek, PreferredSlot
@@ -71,13 +72,28 @@ class FakeJudgmentFn:
         return out
 
 
-def recommend(route_id, confidence="HIGH", rationale="This is the best available fit."):
+def grounded_citation(customer, evals, route_id, config=None):
+    """A minimal valid fact citation for `route_id`, so a canned RECOMMEND
+    passes the verifier's rule that the pick be backed by a route-specific
+    citation."""
+    packet = build_evidence_packet(customer, evals, config or Config())
+    facts = packet.candidate_dict(route_id)["facts"]
+    return {
+        "route_id": route_id,
+        "field": "utilization_after",
+        "value": facts["utilization_after"],
+    }
+
+
+def recommend(
+    route_id, confidence="HIGH", rationale="This is the best available fit.", citations=None
+):
     return {
         "decision": "RECOMMEND",
         "confidence": confidence,
         "recommended_route_id": route_id,
         "rationale": rationale,
-        "citations": [],
+        "citations": citations or [],
     }
 
 

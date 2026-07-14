@@ -226,10 +226,14 @@ citations: it rejects a **dishonest self-assessment** (verdict must match whethe
 the pick actually equals the deterministic default; a DIVERGE needs a note; the
 trade-off and a valid, distinct runner-up are required whenever more than one
 option is offered), and it runs a **tolerant prose scan** (mirroring
-`triage/verifier.py`) so *every* number stated in any free-text field must be a
-real fact the packet contains — not just the ones in the citation list. Any
-failure feeds the single corrective retry, then the deterministic fallback: never
-worse than before, only — on success — better explained.
+`triage/verifier.py`) so *every* number (including `"1,234"`-style thousands),
+route-id or `"route N"` mention, day name, and HH:MM time stated in any free-text
+field must be grounded in the packet — not just the values in the citation list.
+Percent phrasings normalize only against fraction-scale facts and never for
+unit-bearing tokens ("84 miles" can't launder through a stored 0.84), and small
+integers carrying a unit or percent sign are checked. Any failure feeds the
+single corrective retry, then the deterministic fallback: never worse than
+before, only — on success — better explained.
 
 **Threshold.** `route_slot_score_threshold` defaults to `0.55`, a touch below the
 route-only `0.60`: dropping the 0.6 window neutral and adding availability shifts
@@ -365,13 +369,16 @@ The two functions that actually talk to a backend (`shared/llm.get_llm` and
 The triage brief is free text, so — unlike the grounded-judgment layer, which
 verifies structured citations — its numbers are checked by a prose scan
 (`triage/verifier.py`, deterministic, no LLM). `verify_brief` confirms every
-figure and route-id in the brief is grounded in the escalation context;
-`collect_grounding` stashes the groundable facts in session state when
+figure, route-id, day name, and HH:MM time in the brief is grounded in the
+escalation context; `collect_grounding` stashes the groundable facts (numbers,
+route-ids, days, windows, scrub-labels) in session state when
 `get_escalation_context` runs. It's tolerant by design — route-ids, route
 names, and the customer name (any of which may carry digits, e.g. a numeric
-route-id `3170` or a name `BT149361-[…]`) and clock times are scrubbed first,
-percent-vs-fraction is normalized, small bare counts are ignored — so faithful
-prose passes and only genuinely invented figures are flagged.
+route-id `3170` or a name `BT149361-[…]`) are scrubbed first,
+percent-vs-fraction is normalized (only against fraction-scale values, and
+never for a unit-bearing figure like "84 miles"), small bare counts without a
+unit are ignored — so faithful prose passes and only genuinely invented
+figures are flagged.
 
 Two enforcement points:
 
@@ -463,9 +470,16 @@ Grounded Judgment call x1  (llm.py -> shared/llm.generate_text)
         |
         v
 Structured-Citation Verifier (verifier.py, deterministic -- no model call)
-  1. pick must be in the feasible set (hard safety net on top of the schema)
-  2. every fact/comparison citation must resolve + match the packet exactly
-  3. tolerant prose scan: numbers/route-ids in the rationale must be grounded
+  1. pick must be in the feasible set (hard safety net on top of the schema),
+     and a RECOMMEND must be backed by >=1 citation on a route-varying fact of
+     the picked route (no citation-padding via other routes / shared constants)
+  2. every fact citation must resolve + match the packet (percent form allowed
+     only for fraction-valued fields, so a figure can't shift magnitude 100x);
+     every comparison must name two different routes and be arithmetically true
+  3. tolerant prose scan: numbers (incl. "1,234" thousands), route-ids,
+     "route N" mentions, day names, and HH:MM times in the rationale must all
+     be grounded; unit-bearing figures ("84 miles") can't launder through
+     percent normalization, and small counts with a unit ("5 cases") are checked
         | pass                                    | fail
         v                                         v
   first sample confident recommend?          one corrective retry -> still

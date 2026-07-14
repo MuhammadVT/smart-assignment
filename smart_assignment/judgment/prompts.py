@@ -61,12 +61,19 @@ before or after). Shape:
 Grounding rules (STRICT):
 - recommended_route_id MUST be one of the feasible_candidates' route_id values, \
 or null. NEVER name an infeasible route.
-- If decision is RECOMMEND, recommended_route_id must be non-null.
-- Every number you state in the rationale must come from the evidence packet. \
-Do NOT invent, round-trip, or estimate figures.
+- If decision is RECOMMEND, recommended_route_id must be non-null, and at least \
+one citation must reference the recommended route on a route-specific fact -- \
+back your pick with the facts it rests on.
+- Every number, day, and time window you state in the rationale must appear \
+verbatim in the evidence packet. Do NOT invent, round, or estimate figures -- \
+and a figure YOU computed (a sum, difference, average, or projection over \
+packet numbers) counts as invented: state the packet numbers you would have \
+combined instead.
 - Back every load-bearing fact with an entry in "citations". A "fact" citation \
-must exactly match facts[field] for that route. A "comparison" citation must be \
-arithmetically true of the two routes' facts.
+must exactly match facts[field] for that route (a fraction like 0.87 may be \
+written as 87%). A "comparison" citation must name two DIFFERENT routes and be \
+arithmetically true of their facts -- do not cite a comparison unless the \
+rationale actually relies on that exact pair of facts.
 - Citable fact keys are exactly: {fact_keys}.
 """.format(fact_keys=", ".join(NUMERIC_FACT_KEYS))
 
