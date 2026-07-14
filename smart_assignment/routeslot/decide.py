@@ -22,6 +22,7 @@ decided before/without the LLM:
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from typing import Callable, Optional
 
 from smart_assignment.routeslot.evidence import (
@@ -31,12 +32,15 @@ from smart_assignment.routeslot.evidence import (
 )
 from smart_assignment.routeslot.llm import generate_route_slot_choice
 from smart_assignment.routeslot.prompts import (
+    build_route_slot_decision_prompt,
+    build_route_slot_decision_retry_prompt,
     build_route_slot_prompt,
     build_route_slot_retry_prompt,
 )
 from smart_assignment.routeslot.schema import (
     VERDICT_AGREE,
     RouteSlotChoice,
+    RSDecision,
     parse_route_slot_choice,
 )
 from smart_assignment.routeslot.verifier import verify_choice
@@ -89,9 +93,17 @@ def decide_route_slot(
     config: Config,
     choice_fn: Optional[ChoiceFn] = None,
 ) -> SlotRecommendation:
-    """Decide over route-slot options. `choice_fn` is only consulted when
-    `config.use_grounded_judgment` is on AND at least one route-slot clears the
-    auto-assign bar; it defaults to the real backend call."""
+    """Decide over route-slot options.
+
+    Non-feasible cases are ALWAYS a deterministic escalation. For the feasible
+    ones the path depends on `config.use_grounded_route_slot_escalation`:
+
+      - on (default): the LLM makes the recommend-vs-escalate call itself over all
+        feasible route-slots (`_grounded_decide`), grounded + verified + resampled,
+        with the deterministic threshold decision as the fallback.
+      - off: the prior logic (`_threshold_decide`) -- the 0.55 bar gates
+        recommend-vs-escalate and the LLM only picks among the above-bar options.
+    """
     if not any(e.feasible for e in evaluations):
         return _escalate_no_feasible(customer, evaluations)
 
@@ -100,6 +112,24 @@ def decide_route_slot(
         # Serviceable route(s), but no delivery window could be constructed.
         return _escalate_no_slot(customer, evaluations)
 
+    if config.use_grounded_route_slot_escalation:
+        return _grounded_decide(customer, all_pairs, evaluations, config, choice_fn)
+    return _threshold_decide(customer, all_pairs, evaluations, config, choice_fn)
+
+
+def _threshold_decide(
+    customer: CustomerProfile,
+    all_pairs: list[RouteSlotOption],
+    evaluations: list[CandidateEvaluation],
+    config: Config,
+    choice_fn: Optional[ChoiceFn],
+    allow_llm: bool = True,
+) -> SlotRecommendation:
+    """The threshold-gated path (rollback, and the fallback for the grounded path):
+    the 0.55 bar decides recommend-vs-escalate, and the LLM -- when
+    `use_grounded_judgment` is on and `allow_llm` -- only PICKS among the above-bar
+    options. `allow_llm=False` forces a pure-deterministic decision (used as the
+    grounded path's fallback so a failed LLM call isn't retried)."""
     threshold = config.route_slot_score_threshold
     eligible = [p for p in all_pairs if p.scored.total_score >= threshold]
     if not eligible:
@@ -113,7 +143,7 @@ def decide_route_slot(
     index = 0  # deterministic best (packet is sorted by descending total)
     grounded_choice: Optional[RouteSlotChoice] = None
     grounded_fallback_reason: Optional[str] = None
-    if config.use_grounded_judgment:
+    if allow_llm and config.use_grounded_judgment:
         picked, choice, reason = _grounded_index(packet, config, choice_fn)
         if picked is not None:
             index, grounded_choice = picked, choice
@@ -177,6 +207,209 @@ def _grounded_index(
             "deterministic best route-slot."
         )
     return choice.chosen_index, choice, None
+
+
+# --- grounded ESCALATION (the LLM decides recommend-vs-escalate) --------------
+
+
+def _grounded_decide(
+    customer: CustomerProfile,
+    all_pairs: list[RouteSlotOption],
+    evaluations: list[CandidateEvaluation],
+    config: Config,
+    choice_fn: Optional[ChoiceFn],
+) -> SlotRecommendation:
+    """The LLM reasons over ALL feasible route-slots and decides recommend-vs-escalate
+    itself (the 0.55 bar is only a reference here). A confident recommendation ships
+    on one verified call; an escalate -- or a low-confidence recommend -- is
+    resampled `judgment_sample_count` times and combined by `judgment_consensus`
+    before it may auto-assign. Any mechanical/verification failure falls back to the
+    deterministic threshold decision, so it is never worse than the bar-gated path."""
+    packet = build_route_slot_packet(
+        customer, evaluations, config, auto_assign_threshold=config.route_slot_score_threshold
+    )
+
+    first = _verified_sample(packet, config, choice_fn)
+    if first is None:
+        # No verified sample (bad creds, malformed reply, persistent grounding
+        # failure) -> the deterministic threshold decision, marked as a fallback.
+        rec = _threshold_decide(
+            customer, all_pairs, evaluations, config, choice_fn=None, allow_llm=False
+        )
+        rec.grounded_fallback = True
+        rec.grounded_fallback_reason = (
+            "Grounded LLM reasoning was unavailable, so this shows the deterministic "
+            "threshold result. Check the LLM backend (SMART_ASSIGNMENT_LLM_BACKEND) and "
+            "its credentials."
+        )
+        return rec
+
+    if _ships_on_first_call(first, config):
+        return _recommend_grounded(customer, first, packet, all_pairs, evaluations, [first])
+
+    # Escalation-side (escalate, or low-confidence recommend): spend the budget.
+    samples = [first]
+    for _ in range(max(1, config.judgment_sample_count) - 1):
+        extra = _verified_sample(packet, config, choice_fn)
+        if extra is not None:
+            samples.append(extra)
+    return _resolve_escalation_side(customer, samples, packet, all_pairs, evaluations, config)
+
+
+def _verified_sample(
+    packet: RouteSlotPacket, config: Config, choice_fn: Optional[ChoiceFn]
+) -> Optional[RouteSlotChoice]:
+    """One decision sample: call, parse, verify; one corrective retry on a
+    verification failure; None on any mechanical failure (all logged)."""
+    fn = choice_fn or generate_route_slot_choice
+    try:
+        choice = parse_route_slot_choice(fn(config, build_route_slot_decision_prompt(packet)))
+        result = verify_choice(choice, packet)
+        if not result.ok:
+            retry = build_route_slot_decision_retry_prompt(packet, result.as_feedback())
+            choice = parse_route_slot_choice(fn(config, retry))
+            result = verify_choice(choice, packet)
+    except Exception as exc:  # noqa: BLE001 - any backend/parse failure -> fallback
+        logger.warning(
+            "Grounded route-slot decision failed (%s: %s); falling back to the "
+            "deterministic threshold decision. Check SMART_ASSIGNMENT_LLM_BACKEND.",
+            type(exc).__name__,
+            exc,
+        )
+        return None
+    if not result.ok:
+        logger.warning(
+            "Grounded route-slot decision ungrounded after one retry (%s); falling back.",
+            result.as_feedback(),
+        )
+        return None
+    return choice
+
+
+def _ships_on_first_call(choice: RouteSlotChoice, config: Config) -> bool:
+    """Only a confident recommendation ships on one call. An ESCALATE always
+    resamples; a LOW-confidence recommend resamples too, unless the operator opted
+    out via `judgment_retry_on_low_confidence_recommend`."""
+    if choice.decision is RSDecision.ESCALATE:
+        return False
+    low_conf = choice.confidence.value == "LOW"
+    if low_conf and config.judgment_retry_on_low_confidence_recommend:
+        return False
+    return True
+
+
+def _resolve_escalation_side(
+    customer: CustomerProfile,
+    samples: list[RouteSlotChoice],
+    packet: RouteSlotPacket,
+    all_pairs: list[RouteSlotOption],
+    evaluations: list[CandidateEvaluation],
+    config: Config,
+) -> SlotRecommendation:
+    """Consensus over the k samples' recommend-vs-escalate DECISIONS (not their
+    picks): clear back to a recommendation only if the consensus rule is met."""
+    recommends = [s for s in samples if s.decision is RSDecision.RECOMMEND]
+    n = len(samples)
+    if config.judgment_consensus == "majority":
+        cleared = len(recommends) * 2 > n
+    else:  # "unanimous" (default, precautionary)
+        cleared = len(recommends) == n
+
+    if cleared and recommends:
+        representative = _modal_recommend(recommends)
+        return _recommend_grounded(
+            customer, representative, packet, all_pairs, evaluations, samples
+        )
+    return _escalate_low_confidence(customer, samples, packet, all_pairs, evaluations, config)
+
+
+def _modal_recommend(recommends: list[RouteSlotChoice]) -> RouteSlotChoice:
+    """The sample whose picked option index is most common among recommenders (ties
+    broken by sample order) -- so differing-but-good picks aren't disagreement; only
+    the recommend/escalate decision is."""
+    counts = Counter(s.chosen_index for s in recommends)
+    modal_index, _ = counts.most_common(1)[0]
+    for s in recommends:
+        if s.chosen_index == modal_index:
+            return s
+    return recommends[0]
+
+
+def _takes(samples: list[RouteSlotChoice], packet: RouteSlotPacket) -> list[str]:
+    """One human-readable line per sample -- the divided reasoning a specialist
+    should see, surfaced through `alternative_takes`."""
+    lines: list[str] = []
+    for s in samples:
+        opt = packet.option_at(s.chosen_index)
+        where = (
+            f"{_route_label(opt.evaluation.route)} {fmt_window(opt.scored.slot.window)}"
+            if opt is not None
+            else "no valid option"
+        )
+        lines.append(f"[{s.decision.value}/{s.confidence.value}] {where}: {s.decision_summary}")
+    return lines
+
+
+def _recommend_grounded(
+    customer: CustomerProfile,
+    representative: RouteSlotChoice,
+    packet: RouteSlotPacket,
+    all_pairs: list[RouteSlotOption],
+    evaluations: list[CandidateEvaluation],
+    samples: list[RouteSlotChoice],
+) -> SlotRecommendation:
+    """A grounded RECOMMEND: map the representative choice to a recommendation and,
+    when it came out of a resample, attach the divided takes."""
+    chosen = packet.option_at(representative.chosen_index)
+    rec = _recommend(customer, chosen, all_pairs, evaluations, packet, representative)
+    if len(samples) > 1:
+        rec.alternative_takes = _takes(samples, packet)
+    return rec
+
+
+def _escalate_low_confidence(
+    customer: CustomerProfile,
+    samples: list[RouteSlotChoice],
+    packet: RouteSlotPacket,
+    all_pairs: list[RouteSlotOption],
+    evaluations: list[CandidateEvaluation],
+    config: Config,
+) -> SlotRecommendation:
+    """The grounded reasoner judged no feasible route-slot strong enough to
+    auto-assign. Propose the strongest option (the modal pick across samples, else
+    the deterministic best) for the specialist, with all reasoned takes."""
+    idxs = [s.chosen_index for s in samples if packet.option_at(s.chosen_index) is not None]
+    proposed_index = Counter(idxs).most_common(1)[0][0] if idxs else 0
+    best = packet.option_at(proposed_index) or all_pairs[0]
+    recommends = sum(1 for s in samples if s.decision is RSDecision.RECOMMEND)
+
+    ev = best.evaluation
+    scored = best.scored
+    rec = SlotRecommendation(
+        customer_number=customer.customer_number,
+        customer_address=customer.address,
+        customer_name=customer.name,
+        decision=Decision.ESCALATED_LOW_SCORE,
+        total_score=round(scored.total_score, 2),
+        reasoning=_deterministic_reasoning(best),
+        recommended_route_id=ev.route.route_id,
+        recommended_route_name=ev.route.name,
+        recommended_day=ev.route.day.value,
+        recommended_window=fmt_window(scored.slot.window),
+        recommended_window_basis=scored.slot.basis or None,
+        factor_breakdown=scored.factor_scores,
+        rejected_alternatives=_rejected(all_pairs, _key(best), evaluations),
+        review_reason=(
+            f"Grounded reasoning judged no feasible route-slot strong enough to "
+            f"auto-assign: {recommends}/{len(samples)} sample(s) recommended "
+            f"(consensus rule: {config.judgment_consensus}). Surfacing the strongest "
+            f"option and all reasoned takes for a specialist."
+        ),
+        alternative_takes=_takes(samples, packet),
+    )
+    # Structured floor so the escalation card isn't a one-liner either.
+    _apply_deterministic_narrative(rec, best, all_pairs)
+    return rec
 
 
 # --- recommendation + escalations --------------------------------------------
