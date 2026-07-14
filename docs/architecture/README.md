@@ -251,13 +251,26 @@ recommend_or_escalate -> requires_human_review?
   escalation_triage   (AgentTool: a second LlmAgent, consult-and-return)
      └─ get_escalation_context (reads session state: the profile + last
         recommendation; re-derives every feasible/infeasible route with its
-        raw facts + any split model opinions)  -> composes a specialist brief:
-        root cause · concrete remediation options · the question to ask
+        raw facts + any split model opinions)  -> composes a specialist brief
+        in a fixed, scannable layout:
+        SITUATION · ROOT CAUSE · OPTIONS (ranked, most-workable first, each with
+        its state / action / trade-off) · RECOMMENDATION (advisory starting point)
+        · DECISION NEEDED (the one question)
         |
         v
   root_agent -> request_input(message = the brief)   (root_agent still owns
                                                        the human-in-the-loop pause)
 ```
+
+The brief is laid out for a fast human decision, not as a paragraph: a one-line
+situation, the specific gate that tripped, then **ranked** remediation options
+(option 1 = closest to workable) each showing the route's current state, the
+concrete action, and the trade-off, followed by an advisory `RECOMMENDATION`
+(which option to start with, and why — overridable, never a decision) and the
+single `DECISION NEEDED`. It renders as multi-line text (the chat bubble keeps
+newlines) so the specialist can scan and compare options at a glance. The
+prompt-driven layout stays fully grounded — the same `verify_brief` prose scan
+(below) still rejects any figure not in the escalation context.
 
 **Why an `AgentTool` (consult-and-return), not a peer agent with control
 transfer:** `root_agent` stays in control of the conversation and keeps
