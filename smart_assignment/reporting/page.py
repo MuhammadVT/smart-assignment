@@ -390,10 +390,17 @@ _ARCH_SVG = """
   <line x1="330" y1="186" x2="342" y2="186" stroke="#1257a6" stroke-width="2" marker-end="url(#arw)"/>
   <line x1="480" y1="186" x2="492" y2="186" stroke="#1257a6" stroke-width="2" marker-end="url(#arw)"/>
 
+  <rect x="48" y="250" width="204" height="74" rx="12" fill="#efeafb" stroke="#cfc2f0"/>
+  <text x="150" y="277" text-anchor="middle" font-size="11.5" font-weight="700" fill="#5b3fb0">🧠 Address resolver (LLM)</text>
+  <text x="150" y="295" text-anchor="middle" font-size="9.5" fill="#6b5aa0">on a geocode miss: picks from the</text>
+  <text x="150" y="308" text-anchor="middle" font-size="9.5" fill="#6b5aa0">geocoder's suggested matches</text>
+  <text x="150" y="319" text-anchor="middle" font-size="8.5" fill="#8a7ec0">— for the user to confirm</text>
+  <path d="M244,226 C220,238 182,240 158,250" fill="none" stroke="#7c8aa0" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arwd)"/>
+
   <text x="334" y="288" text-anchor="middle" font-size="11" font-weight="700" fill="#0b2e59">5 · Decide</text>
   <polygon points="334,300 412,342 334,384 256,342" fill="#fff" stroke="#9a6700" stroke-width="2"/>
-  <text x="334" y="338" text-anchor="middle" font-size="11.5" font-weight="700" fill="#9a6700">feasible &amp;</text>
-  <text x="334" y="353" text-anchor="middle" font-size="11.5" font-weight="700" fill="#9a6700">high score?</text>
+  <text x="334" y="339" text-anchor="middle" font-size="11.5" font-weight="700" fill="#9a6700">recommend?</text>
+  <text x="334" y="354" text-anchor="middle" font-size="9.5" font-weight="700" fill="#5b3fb0">grounded LLM call</text>
   <path d="M562,226 L562,342 L414,342" fill="none" stroke="#1257a6" stroke-width="2" marker-end="url(#arw)"/>
 
   <rect x="150" y="560" width="250" height="62" rx="12" fill="#e7f4ea" stroke="#1a7f37"/>
@@ -425,7 +432,7 @@ _ARCH_SVG = """
   <text x="823" y="518" text-anchor="middle" font-size="10.5" fill="#3a52a8">consulted only on escalation · composes the brief</text>
   <path d="M640,585 C690,585 690,520 688,510" fill="none" stroke="#274bbd" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arw)"/>
 
-  <text x="24" y="656" font-size="11.5" fill="#5b6675">→ agent flow &#160;&#160;·&#160;&#160; ⇢ agent calls a service / sub-agent &#160;&#160;·&#160;&#160; ◇ agent's own decision point</text>
+  <text x="24" y="656" font-size="11.5" fill="#5b6675">→ agent flow &#160;&#160;·&#160;&#160; ⇢ agent calls a service / sub-agent &#160;&#160;·&#160;&#160; ◇ grounded decision point (LLM)</text>
 </svg>
 """
 
@@ -2000,7 +2007,9 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
         distance, constraint check, and score comes back from deterministic code, but the recommend/escalate
         <em>decision</em> and the route &amp; slot <em>pick</em> are made by an LLM reasoning over those
         verified facts — constrained to the feasible options, cited, checked in code, with a deterministic
-        fallback. On an escalation it consults a dedicated LlmAgent — the escalation-triage <em>AgentTool</em>
+        fallback. At <b>Geo-Lookup</b>, when an address won't geocode, a grounded resolver LLM picks the
+        closest of the geocoder's <em>own</em> suggested matches for the user to confirm — it never invents an
+        address. On an escalation it consults a dedicated LlmAgent — the escalation-triage <em>AgentTool</em>
         — to write the handoff brief. The <b>LLM &amp; agent touchpoints</b> below list every model in the loop.</p>
       <div class="arch">
         {_ARCH_SVG}
@@ -2008,7 +2017,7 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
           <div class="card"><div class="icon">🤖</div><h4>Agent orchestrator</h4><p>An ADK LlmAgent drives all five steps via tool calls, conversationally.</p></div>
           <div class="card"><div class="icon">🧭</div><h4>Deterministic tools</h4><p>Geo, hard constraints, and weighted scoring — plain code the agent calls.</p></div>
           <div class="card"><div class="icon">🤝</div><h4>A triage sub-agent</h4><p>On escalation, a dedicated LlmAgent (an ADK AgentTool) composes the specialist brief — read-only, it never changes the decision.</p></div>
-          <div class="card"><div class="icon">🎯</div><h4>Selects, never invents</h4><p>The recommend/escalate call and the route &amp; slot pick are an LLM's — but only from a deterministically enumerated, feasible set, with every cited fact verified in code and a deterministic fallback.</p></div>
+          <div class="card"><div class="icon">🎯</div><h4>Selects, never invents</h4><p>The recommend/escalate call, the route &amp; slot pick, and the on-miss address correction are an LLM's — but only from a deterministically enumerated set (feasible routes; the geocoder's own suggestions), with every cited fact verified in code and a deterministic fallback.</p></div>
         </div>
       </div>
     </div>
