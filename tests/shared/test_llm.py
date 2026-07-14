@@ -145,29 +145,101 @@ def test_offloaded_call_survives_a_loop_bound_resource():
     assert asyncio.run(server_turn()) == "grounded reply"
 
 
-def test_generate_text_sage_end_to_end_from_offloaded_tool(monkeypatch):
-    """End-to-end over the REAL generate_text sage branch: patch only the SDK
-    boundary (env check, registry, the async driver) so the sage driver behaves
-    like the loop-bound aiohttp session, then reach generate_text exactly as the
-    web app does -- from a tool body offloaded off the server loop. The grounded
-    text comes back instead of an exception forcing the deterministic fallback."""
-    from smart_assignment.shared import llm as llm_mod
+def _llm_response_with_text(*texts):
+    """A real ADK LlmResponse carrying text under content.parts (the actual shape
+    the sage LiteLlm handler produces) -- NOT a flat `.text`."""
+    from google.adk.models.llm_response import LlmResponse
+    from google.genai import types
 
-    monkeypatch.setattr(llm_mod, "_check_sage_env_vars", lambda: None)
-    monkeypatch.setattr(
-        llm_mod, "_load_sage_registry", lambda: MagicMock(get_llm=lambda model: object())
+    return LlmResponse(
+        content=types.Content(role="model", parts=[types.Part(text=t) for t in texts])
     )
+
+
+def test_generate_via_sage_async_reads_text_from_content_parts():
+    """Regression for `AttributeError: 'LlmResponse' object has no attribute
+    'text'`: ADK's LlmResponse exposes text via content.parts[].text. The driver
+    must concatenate those, not read a (non-existent) flat `.text`."""
+    from smart_assignment.shared.llm import _generate_via_sage_async
+
+    class FakeLlm:
+        async def generate_content_async(self, request, stream=False):
+            yield _llm_response_with_text("hello ", "world")
+
+    assert asyncio.run(_generate_via_sage_async(FakeLlm(), "prompt")) == "hello world"
+
+
+def test_generate_via_sage_async_over_real_adk_litellm():
+    """The most faithful check: drive the REAL ADK ``LiteLlm`` (what
+    ``SageLlmRegistry.get_llm`` returns) through a fake litellm custom provider --
+    the exact shape the Sage SDK uses (``SageLiteLlm`` is a litellm ``CustomLLM``).
+    This exercises ADK's real response object, so it catches the wrong-attribute
+    bug and any future ADK response-shape drift, not just a hand-rolled fake."""
+    import litellm
+    from google.adk.models.lite_llm import LiteLlm
+    from litellm import Choices, CustomLLM, Message, ModelResponse
+
+    from smart_assignment.shared.llm import _generate_via_sage_async
+
+    class _FakeProvider(CustomLLM):
+        async def acompletion(self, model, messages, model_response=None, **kwargs):
+            mr = model_response or ModelResponse()
+            mr.choices = [Choices(message=Message(role="assistant", content='{"ok": true}'))]
+            return mr
+
+    litellm.custom_provider_map.append(
+        {"provider": "smart_assignment_test", "custom_handler": _FakeProvider()}
+    )
+    try:
+        llm = LiteLlm(model="smart_assignment_test/model")
+        assert asyncio.run(_generate_via_sage_async(llm, "prompt")) == '{"ok": true}'
+    finally:
+        litellm.custom_provider_map[:] = [
+            p for p in litellm.custom_provider_map if p.get("provider") != "smart_assignment_test"
+        ]
+
+
+def test_generate_via_sage_async_raises_on_error_response():
+    """An error response surfaces as a RuntimeError so the caller falls back with a
+    reason, instead of silently returning an empty string that fails JSON parsing."""
+    from google.adk.models.llm_response import LlmResponse
+
+    from smart_assignment.shared.llm import _generate_via_sage_async
+
+    class FakeLlm:
+        async def generate_content_async(self, request, stream=False):
+            yield LlmResponse(error_code="SAFETY", error_message="blocked")
+
+    try:
+        asyncio.run(_generate_via_sage_async(FakeLlm(), "prompt"))
+    except RuntimeError as exc:
+        assert "SAFETY" in str(exc)
+    else:  # pragma: no cover - explicit failure if no error raised
+        raise AssertionError("expected a RuntimeError on an error response")
+
+
+def test_generate_text_sage_end_to_end_from_offloaded_tool(monkeypatch):
+    """End-to-end over the REAL generate_text sage branch AND the REAL response
+    parsing: patch only the SDK boundary (env check + registry) to return a fake
+    ADK BaseLlm whose generate_content_async yields a real LlmResponse -- and which,
+    like the Sage SDK's cached aiohttp session, only works on the loop it was bound
+    to. Reach it exactly as the web app does: from a tool body offloaded off the
+    server loop. The grounded text comes back instead of an exception forcing the
+    deterministic fallback."""
+    from smart_assignment.shared import llm as llm_mod
 
     host = {}
 
-    async def fake_generate_via_sage_async(llm, prompt):
-        # Like the Sage SDK's cached aiohttp session: only usable on the loop it
-        # was bound to (the server loop).
-        if asyncio.get_running_loop() is not host["loop"]:
-            raise RuntimeError(f"loop {host['loop']!r} is not the running loop")
-        return "grounded reply"
+    class LoopBoundFakeLlm:
+        async def generate_content_async(self, request, stream=False):
+            if asyncio.get_running_loop() is not host["loop"]:
+                raise RuntimeError(f"loop {host['loop']!r} is not the running loop")
+            yield _llm_response_with_text('{"decision": "RECOMMEND"}')
 
-    monkeypatch.setattr(llm_mod, "_generate_via_sage_async", fake_generate_via_sage_async)
+    monkeypatch.setattr(llm_mod, "_check_sage_env_vars", lambda: None)
+    monkeypatch.setattr(
+        llm_mod, "_load_sage_registry", lambda: MagicMock(get_llm=lambda model: LoopBoundFakeLlm())
+    )
 
     config = Config(llm_backend="sage", sage_model="sage-gemini-2.5-flash")
 
@@ -179,4 +251,4 @@ def test_generate_text_sage_end_to_end_from_offloaded_tool(monkeypatch):
 
         return await offload_to_worker_thread(sync_tool_body)
 
-    assert asyncio.run(server_turn()) == "grounded reply"
+    assert asyncio.run(server_turn()) == '{"decision": "RECOMMEND"}'

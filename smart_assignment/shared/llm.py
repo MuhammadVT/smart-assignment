@@ -157,7 +157,15 @@ def _check_sage_env_vars() -> None:
 
 
 async def _generate_via_sage_async(llm: Any, prompt: str) -> str:
-    """Drive one content-generation turn through an ADK BaseLlm object."""
+    """Drive one content-generation turn through an ADK BaseLlm object.
+
+    ADK's ``LlmResponse`` has no flat ``.text`` attribute (that was an incorrect
+    assumption that raised ``AttributeError: 'LlmResponse' object has no attribute
+    'text'`` on the first real sage reply); the generated text lives in
+    ``response.content.parts[i].text``. Concatenate those, skip empty/tool-only
+    parts, and raise on an error response so the caller falls back deterministically
+    with a clear reason rather than silently returning "".
+    """
     from google.adk.models.llm_request import LlmRequest  # ADK 2.x
     from google.genai import types
 
@@ -166,8 +174,15 @@ async def _generate_via_sage_async(llm: Any, prompt: str) -> str:
     )
     chunks: list[str] = []
     async for response in llm.generate_content_async(request, stream=False):
-        if response.text:
-            chunks.append(response.text)
+        error_code = getattr(response, "error_code", None)
+        if error_code:
+            message = getattr(response, "error_message", None) or ""
+            raise RuntimeError(f"Sage backend returned an error: {error_code} {message}".strip())
+        content = getattr(response, "content", None)
+        for part in getattr(content, "parts", None) or []:
+            text = getattr(part, "text", None)
+            if text:
+                chunks.append(text)
     return "".join(chunks)
 
 
