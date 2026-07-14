@@ -465,9 +465,12 @@ def _apply_deterministic_narrative(
     rec.decision_summary = (
         f"Assign {_route_label(route)} · {route.day.value} · {fmt_window(scored.slot.window)}."
     )
-    top = sorted(scored.factor_scores, key=lambda fs: fs.weighted, reverse=True)
+    # One line PER scored factor, in the breakdown's canonical order (geographic
+    # fit, capacity headroom, preferred-window match when a preference was stated,
+    # slot openness) -- a comprehensive, consistently-structured read, not just the
+    # top two. So slot openness and window match are always surfaced, never dropped.
     rec.primary_reasons = [
-        f"{_factor_label(fs.name).capitalize()}: {fs.detail}." for fs in top[:2]
+        f"{_factor_label(fs.name).capitalize()}: {fs.detail}." for fs in scored.factor_scores
     ]
 
     runner = _runner_up_option(chosen, all_pairs)
