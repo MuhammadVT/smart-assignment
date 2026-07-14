@@ -40,7 +40,13 @@ def test_deterministic_picks_the_highest_total_route_slot():
     assert rec.decision_summary and "RTE-A - Alpha" in rec.decision_summary
     assert rec.recommended_route_name == "Alpha"
     assert "strongest route-slot overall" in rec.reasoning and "RTE-A - Alpha" in rec.reasoning
-    assert len(rec.primary_reasons) == 2
+    # primary_reasons comprehensively covers EVERY scored factor (here geo,
+    # capacity, window-match, slot-openness), in the breakdown's canonical order --
+    # so slot openness and window match are never dropped.
+    assert len(rec.primary_reasons) == len(_evals()[0].scored_slots[0].factor_scores)
+    joined = " ".join(rec.primary_reasons)
+    assert "Slot openness" in joined and "Preferred-window match" in joined
+    assert "Geographic fit" in joined and "Capacity headroom" in joined
     assert rec.runner_up and rec.key_tradeoff
     assert rec.default_comparison is None  # only the grounded self-assessment sets this
 

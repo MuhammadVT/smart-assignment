@@ -202,8 +202,11 @@ the flag is off — flag-off reproduces prior output exactly.
 **Structured explanation (`routeslot/schema.py`).** A one-line rationale can't
 carry the *trade-off* an ops manager needs to trust an auto-assign, so on a
 RECOMMENDED pick the model returns a decomposed explanation rather than a
-sentence: `decision_summary` (the action line), `primary_reasons[]` (the decisive
-factors, each with its number), `key_tradeoff` (what the winner gives up vs. the
+sentence: `decision_summary` (the action line), `primary_reasons[]` (a
+comprehensive read — one line per scored factor, each with its number:
+geographic fit, capacity headroom, preferred-window match when a preference was
+stated, and slot openness — so no factor is silently dropped), `key_tradeoff`
+(what the winner gives up vs. the
 runner-up and why that's acceptable), `runner_up {index, why_not}`, and
 `vs_deterministic_default {verdict, note}` (an explicit AGREE/DIVERGE against the
 weighted blend). Only `chosen_index` is *actionable* — a real index from the
@@ -214,8 +217,9 @@ the flat `reasoning` line when the structured fields are absent.
 
 **Deterministic floor, grounded enrichment.** The structured fields are *always*
 populated on a RECOMMENDED route-slot — first deterministically from the score
-breakdown (`_apply_deterministic_narrative`: `decision_summary`, the top-weighted
-`primary_reasons` with their numbers, the score-ranked `runner_up`, and a
+breakdown (`_apply_deterministic_narrative`: `decision_summary`, a `primary_reasons`
+line for *every* scored factor in the breakdown's canonical order (not just the
+top two), the score-ranked `runner_up`, and a
 `key_tradeoff` naming the one factor the runner-up actually leads on), then, when
 the grounded LLM produced a *verified* choice, overwritten by its reasoned prose
 and AGREE/DIVERGE `default_comparison`. So the explanation is never a bare

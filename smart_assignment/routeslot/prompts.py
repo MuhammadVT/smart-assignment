@@ -42,8 +42,11 @@ Reply with a SINGLE JSON object and nothing else (no markdown). Shape:
   "chosen_index": <index of the route-slot you pick>,
   "decision_summary": "<one action line: assign <route> · <day> · <window>>",
   "primary_reasons": [
-    "<a decisive factor, WITH the number that supports it>",
-    "<a second supporting factor, with its number>"
+    "<geographic_clustering: your read of the neighborhood fit, WITH its number>",
+    "<capacity_buffer: how much truck headroom is left, with its number>",
+    "<window_match: how well the slot honors the stated preference, with its number \
+-- INCLUDE this line only when the option has a window_match fact>",
+    "<slot_availability: how open this slot is (who else holds it), with its number>"
   ],
   "key_tradeoff": "<what the winner gives up vs. the next-best option and why it is \
 still the better overall pick -- reference BOTH options' numbers>",
@@ -63,6 +66,11 @@ still the better overall pick -- reference BOTH options' numbers>",
 Rules (STRICT):
 - chosen_index MUST be one of the enumerated option indices. NEVER invent a route,
   a slot, or a time.
+- `primary_reasons` MUST comprehensively cover EVERY scored factor the chosen
+  option carries -- geographic_clustering, capacity_buffer, slot_availability,
+  and window_match (only when the option has a window_match fact) -- one short line
+  each, in that order, each citing that factor's own value. Never drop
+  slot_availability, and never drop window_match when a preference was stated.
 - verdict is AGREE only when chosen_index == deterministic_choice_index, else DIVERGE
   (and then `note` must justify the divergence).
 - When two or more options are offered, `key_tradeoff` and `runner_up` are REQUIRED
@@ -127,8 +135,11 @@ Reply with a SINGLE JSON object and nothing else (no markdown). Shape:
   "decision_summary": "<one action line: assign <route> · <day> · <window>, OR why
                         this is being escalated>",
   "primary_reasons": [
-    "<a decisive factor, WITH the number that supports it>",
-    "<a second supporting factor, with its number>"
+    "<geographic_clustering: your read of the neighborhood fit, WITH its number>",
+    "<capacity_buffer: how much truck headroom is left, with its number>",
+    "<window_match: how well the slot honors the stated preference, with its number \
+-- INCLUDE this line only when the option has a window_match fact>",
+    "<slot_availability: how open this slot is (who else holds it), with its number>"
   ],
   "key_tradeoff": "<what the pick gives up vs. the next-best option and why -- \
 reference BOTH options' numbers>",
@@ -148,6 +159,11 @@ reference BOTH options' numbers>",
 Rules (STRICT):
 - chosen_index MUST be one of the enumerated option indices. NEVER invent a route,
   a slot, or a time.
+- `primary_reasons` MUST comprehensively cover EVERY scored factor the chosen
+  option carries -- geographic_clustering, capacity_buffer, slot_availability,
+  and window_match (only when the option has a window_match fact) -- one short line
+  each, in that order, each citing that factor's own value. Never drop
+  slot_availability, and never drop window_match when a preference was stated.
 - verdict is AGREE only when chosen_index == deterministic_choice_index, else DIVERGE
   (and then `note` must justify the divergence).
 - When two or more options are offered, `key_tradeoff` and `runner_up` are REQUIRED
