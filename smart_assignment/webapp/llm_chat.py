@@ -32,6 +32,7 @@ from smart_assignment.reasoning import DeterministicReasoner
 from smart_assignment.reporting.page import build_workflow_payload
 from smart_assignment.shared.config import DEFAULT_CONFIG, Config
 from smart_assignment.shared.geo import Geocoder
+from smart_assignment.shared.llm import offload_to_worker_thread
 from smart_assignment.triage.formatting import normalize_brief
 from smart_assignment.tools.slot_recommendation import (
     _GEOCODER,
@@ -230,7 +231,13 @@ class LlmChatService:
         if not profile or not profile.get("address") or not profile.get("order_quantity_cases"):
             return None
         customer = _profile_from_state_dict(profile)
-        result = run_slot_recommendation(
+        # This re-runs the real pipeline, which (grounded route-slot scoring on)
+        # can make a synchronous grounded LLM call. We are on the server's event
+        # loop here, and for the sage backend that call must run a coroutine on
+        # this loop -- impossible if we block it. Offload the blocking re-run to a
+        # worker thread so the loop stays free (see offload_to_worker_thread).
+        result = await offload_to_worker_thread(
+            run_slot_recommendation,
             customer,
             config=DEFAULT_CONFIG,
             geocoder=self._geocoder,
