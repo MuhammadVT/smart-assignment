@@ -38,6 +38,7 @@ from smart_assignment.tools.slot_recommendation import (
     _STATE_PROFILE_KEY,
     _profile_from_state_dict,
 )
+from smart_assignment.webapp.parse import parse_intake
 
 _APP_NAME = "smart_assignment_webapp"
 _USER_ID = "webapp_user"
@@ -126,8 +127,19 @@ class LlmChatService:
         self._session_service = session_service
         self._geocoder = geocoder or _GEOCODER
         self._known_sessions: set[str] = set()
-        # session_id -> {"id", "name"} of a pending request_input call to resume.
+        # browser session_id -> {"id", "name"} of a pending request_input to resume.
         self._pending_input: dict[str, dict] = {}
+        # A browser session can hold many prospects one after another. Each new
+        # prospect gets its own *underlying* ADK conversation so the model and the
+        # session state start clean -- otherwise the previous prospect's history,
+        # profile, and any pending escalation bleed into the next one (stale
+        # numbers, a misrouted request_input resume). We rotate a generation
+        # counter and suffix the ADK session id; the browser session_id the client
+        # sends never changes. ``_concluded`` marks a browser session whose current
+        # prospect already reached a recommendation/escalation, so the NEXT full
+        # prospect triggers a rotation (a mid-prospect revision does not).
+        self._generation: dict[str, int] = {}
+        self._concluded: set[str] = set()
 
     # -- lazy ADK wiring (never built until a live turn actually needs it) --
 
@@ -151,13 +163,36 @@ class LlmChatService:
             )
         return self._runner
 
-    async def _ensure_session(self, session_id: str) -> None:
-        if session_id in self._known_sessions:
+    def _adk_session_id(self, session_id: str) -> str:
+        """The underlying ADK session id for a browser session's CURRENT prospect.
+        Generation 0 is the bare id (backward-compatible); later prospects get a
+        ``#N`` suffix so each starts a fresh ADK conversation + state."""
+        gen = self._generation.get(session_id, 0)
+        return session_id if gen == 0 else f"{session_id}#{gen}"
+
+    def _maybe_rotate_prospect(self, session_id: str, message: str) -> None:
+        """Start a new underlying ADK conversation when the user begins a NEW
+        prospect after the current one already concluded/escalated. A new prospect
+        is a message that carries a street address; a revision (e.g. "try 20
+        cases", "make it Tuesday") carries none and stays in the same session so
+        multi-turn context is preserved."""
+        has_address = parse_intake(message).address is not None
+        concluded = session_id in self._concluded or session_id in self._pending_input
+        if has_address and concluded:
+            self._generation[session_id] = self._generation.get(session_id, 0) + 1
+            # A rotated prospect is a fresh start: drop any pending escalation resume
+            # (so the new prospect isn't misrouted as the specialist's reply) and
+            # the concluded mark (the new prospect hasn't concluded yet).
+            self._pending_input.pop(session_id, None)
+            self._concluded.discard(session_id)
+
+    async def _ensure_session(self, adk_session_id: str) -> None:
+        if adk_session_id in self._known_sessions:
             return
         await self._get_session_service().create_session(
-            app_name=_APP_NAME, user_id=_USER_ID, session_id=session_id
+            app_name=_APP_NAME, user_id=_USER_ID, session_id=adk_session_id
         )
-        self._known_sessions.add(session_id)
+        self._known_sessions.add(adk_session_id)
 
     def _build_message(self, session_id: str, message: str):
         """A resume FunctionResponse if a request_input is pending, else text."""
@@ -180,7 +215,7 @@ class LlmChatService:
         return types.Content(role="user", parts=[types.Part(text=message)])
 
     async def _visualization_from_state(
-        self, session_id: str, reasoning_override: Optional[str] = None
+        self, adk_session_id: str, reasoning_override: Optional[str] = None
     ) -> Optional[dict]:
         """Rebuild the profile from session state and produce the Simulator
         payload by re-running the deterministic pipeline (drift-free on the
@@ -188,7 +223,7 @@ class LlmChatService:
         narration so the result card's "Why the agent chose this" shows the same
         text the chat box did, not a separately-rendered one."""
         session = await self._get_session_service().get_session(
-            app_name=_APP_NAME, user_id=_USER_ID, session_id=session_id
+            app_name=_APP_NAME, user_id=_USER_ID, session_id=adk_session_id
         )
         state = (session.state if session else None) or {}
         profile = state.get(_STATE_PROFILE_KEY)
@@ -214,7 +249,12 @@ class LlmChatService:
         ``{"type": "visualization", "payload"}``   — the 5 step cards + result
         ``{"type": "done"}``                       — turn finished
         """
-        await self._ensure_session(session_id)
+        # Start a fresh ADK conversation if this message begins a NEW prospect
+        # after the current one concluded/escalated, so nothing bleeds across.
+        self._maybe_rotate_prospect(session_id, message)
+        adk_session_id = self._adk_session_id(session_id)
+
+        await self._ensure_session(adk_session_id)
         runner = self._get_runner()
         new_message = self._build_message(session_id, message)
 
@@ -227,7 +267,7 @@ class LlmChatService:
         recommendation_reply: list[str] = []
         async for event in runner.run_async(
             user_id=_USER_ID,
-            session_id=session_id,
+            session_id=adk_session_id,
             new_message=new_message,
             # Run the model in NON-streaming mode -- exactly what ``adk web`` does
             # by default (its dev UI sends ``streaming=false`` unless "Token
@@ -286,8 +326,13 @@ class LlmChatService:
                     yield {"type": "message", "text": text.strip()}
 
         if saw_recommendation:
+            # This prospect reached a decision/escalation: the NEXT full prospect
+            # in this browser session should start a fresh ADK conversation.
+            self._concluded.add(session_id)
             override = "\n\n".join(recommendation_reply) or None
-            payload = await self._visualization_from_state(session_id, reasoning_override=override)
+            payload = await self._visualization_from_state(
+                adk_session_id, reasoning_override=override
+            )
             if payload:
                 yield {"type": "visualization", "payload": payload}
 

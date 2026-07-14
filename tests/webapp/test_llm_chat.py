@@ -241,6 +241,61 @@ async def test_stream_turn_human_in_the_loop_then_resume():
     assert any(f["type"] == "message" for f in frames2)
 
 
+async def test_new_prospect_after_conclusion_rotates_to_a_fresh_session():
+    """A second full prospect (one that carries a street address), entered after
+    the first concluded, runs in a FRESH underlying ADK session -- so the previous
+    prospect's history/state can't bleed into it."""
+    rec = _FakeCall("recommend_or_escalate")
+    turn1 = [_FakeEvent(calls=[rec]), _FakeEvent(text="First result.")]
+    turn2 = [_FakeEvent(calls=[rec]), _FakeEvent(text="Second result.")]
+    svc = LlmChatService(
+        runner=_FakeRunner([turn1, turn2]),
+        session_service=_FakeSessionService(_SAMPLE_STATE),
+        geocoder=MockGeocoder(),
+    )
+    await _collect(svc.stream_turn("s1", "5085 Westheimer Rd, Houston, TX 77056, 90 cases"))
+    assert "s1" in svc._concluded  # first prospect reached a decision
+    await _collect(svc.stream_turn("s1", "1200 McKinney St, Houston, TX 77010, 400 cases"))
+    assert svc._generation["s1"] == 1  # rotated
+    assert svc._session_service.created == ["s1", "s1#1"]  # a new ADK session
+
+
+async def test_revision_after_conclusion_stays_in_the_same_session():
+    """A revision (no new address, e.g. 'try 20 cases') keeps the same session so
+    multi-turn context is preserved -- it must NOT rotate."""
+    turn1 = [_FakeEvent(calls=[_FakeCall("recommend_or_escalate")]), _FakeEvent(text="Result.")]
+    turn2 = [_FakeEvent(calls=[_FakeCall("recommend_or_escalate")]), _FakeEvent(text="Revised.")]
+    svc = LlmChatService(
+        runner=_FakeRunner([turn1, turn2]),
+        session_service=_FakeSessionService(_SAMPLE_STATE),
+        geocoder=MockGeocoder(),
+    )
+    await _collect(svc.stream_turn("s1", "5085 Westheimer Rd, Houston, TX 77056, 90 cases"))
+    await _collect(svc.stream_turn("s1", "try 20 cases"))
+    assert svc._generation.get("s1", 0) == 0  # no rotation
+    assert svc._session_service.created == ["s1"]  # same session reused
+
+
+async def test_new_prospect_after_escalation_is_not_misrouted_as_a_resume():
+    """After an escalation leaves a pending request_input, a NEW prospect must NOT
+    be consumed as the specialist's reply -- it starts fresh, pending cleared."""
+    call = _FakeCall("adk_request_input", id="req-1", args={"message": "Confirm?"})
+    turn1 = [_FakeEvent(calls=[_FakeCall("recommend_or_escalate")]),
+             _FakeEvent(calls=[call], long_running=["req-1"])]
+    turn2 = [_FakeEvent(text="Second prospect handled.")]
+    runner = _FakeRunner([turn1, turn2])
+    svc = LlmChatService(
+        runner=runner, session_service=_FakeSessionService(_SAMPLE_STATE), geocoder=MockGeocoder()
+    )
+    await _collect(svc.stream_turn("s1", "5085 Westheimer Rd, Houston, TX 77056, 90 cases"))
+    assert "s1" in svc._pending_input  # escalation left a pending request_input
+    await _collect(svc.stream_turn("s1", "1200 McKinney St, Houston, TX 77010, 400 cases"))
+    second = runner.messages[1]
+    assert second.parts[0].text  # a fresh text message, not a resume
+    assert getattr(second.parts[0], "function_response", None) is None
+    assert "s1" not in svc._pending_input  # pending cleared by the rotation
+
+
 async def test_recommendation_narration_shown_in_visualization():
     """The agent's own recommendation narration (what it says AFTER calling
     recommend_or_escalate) is rendered in the result card's 'Why the agent chose
