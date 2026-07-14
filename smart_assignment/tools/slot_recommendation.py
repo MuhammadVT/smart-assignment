@@ -49,6 +49,7 @@ from smart_assignment.shared.models import (
     Route,
 )
 from smart_assignment.shared.timeutils import fmt_time, fmt_window, parse_time
+from smart_assignment.address_resolve import resolve_from_geocoder
 from smart_assignment.judgment import default_judge
 from smart_assignment.pipeline import evaluate_candidates, geo_lookup, intake
 from smart_assignment.reasoning import LLMReasoner
@@ -311,6 +312,75 @@ def find_candidate_routes(tool_context: ToolContext) -> dict:
             }
             for r in candidates
         ],
+    }
+
+
+# --- Step 2b: address resolution (grounded typo/ambiguity correction) -------
+
+
+def resolve_address(tool_context: ToolContext) -> dict:
+    """
+    Suggest a corrected delivery address when the on-file address couldn't be
+    geocoded (find_candidate_routes / evaluate / recommend returned an error
+    saying the address wasn't found).
+
+    This asks the geocoder for its real candidate matches and picks the closest
+    one to what the customer typed -- it NEVER invents an address. The result is
+    a SUGGESTION only: present it to the customer and get their confirmation
+    before doing anything with it.
+
+    Returns:
+      On a suggestion: {"ok": true, "needs_confirmation": true,
+        "original_address", "suggested_address", "alternatives": [...],
+        "rationale", "message"} -- show the message, then wait for the customer
+        to confirm or correct. Only after they confirm, call intake_customer with
+        the confirmed address and continue the workflow.
+      When nothing close was found: {"ok": false, "no_suggestions": true,
+        "message": "..."} -- relay it and ask the customer to double-check.
+    """
+    profile = tool_context.state.get(_STATE_PROFILE_KEY)
+    if not profile or not profile.get("address"):
+        return _error("There's no address on file yet -- call intake_customer first.")
+    address = profile["address"]
+
+    # Feature off (or, defensively, any failure): today's behavior.
+    if not DEFAULT_CONFIG.use_address_resolution:
+        return _double_check_result(address)
+
+    try:
+        resolved = resolve_from_geocoder(address, _GEOCODER, DEFAULT_CONFIG)
+    except Exception:  # noqa: BLE001 - never worse than the deterministic fallback
+        return _double_check_result(address)
+
+    if resolved is None:
+        return _double_check_result(address)
+
+    return {
+        "ok": True,
+        "needs_confirmation": True,
+        "original_address": address,
+        "suggested_address": resolved.chosen.formatted,
+        "alternatives": [c.formatted for c in resolved.alternatives],
+        "rationale": resolved.rationale,
+        "message": (
+            f"I couldn't find '{address}' exactly. Did you mean "
+            f"'{resolved.chosen.formatted}'? Please confirm before I proceed -- "
+            f"or pick one of the alternatives, or give a corrected address."
+        ),
+    }
+
+
+def _double_check_result(address: str) -> dict:
+    """The no-suggestion fallback -- today's 'ask the customer to double-check it'
+    behavior, returned when address resolution is off, finds nothing, or fails."""
+    return {
+        "ok": False,
+        "no_suggestions": True,
+        "error": (
+            f"I couldn't find a close match for '{address}' -- ask the customer to "
+            f"double-check it, or provide a more complete address (street, city, "
+            f"state, ZIP)."
+        ),
     }
 
 

@@ -35,7 +35,11 @@ from typing import Optional
 
 import requests
 
-from smart_assignment.shared.geo import AddressNotFoundError, GeocodingServiceError
+from smart_assignment.shared.geo import (
+    AddressCandidate,
+    AddressNotFoundError,
+    GeocodingServiceError,
+)
 from smart_assignment.shared.models import GeoPoint
 
 logger = logging.getLogger(__name__)
@@ -66,6 +70,30 @@ class CensusGeocoder:
         if not normalized:
             raise AddressNotFoundError(address, "address is blank")
         return _cached_lookup(normalized)
+
+    def suggest(self, address: str, *, limit: int = 5) -> list[AddressCandidate]:
+        """Return up to ``limit`` candidate matches the Census service found for
+        ``address`` -- the real, enumerated set the grounded resolver chooses
+        among (see the `address_resolve` package), so a near-miss/ambiguous
+        address can be corrected without inventing one.
+
+        Returns ``[]`` (not an exception) when the service ran but matched
+        nothing, so the caller can fall back to asking for a corrected address;
+        a transport/service problem still raises ``GeocodingServiceError``.
+        Census returns alternatives mainly for *ambiguous-but-valid* input; a
+        hard typo may yield no matches, which a suggest-capable provider (Google
+        Places, Mapbox) behind this same protocol would handle better.
+        """
+        normalized = " ".join(address.split())
+        if not normalized:
+            return []
+        try:
+            response = _request_once(normalized)
+        except requests.RequestException as exc:
+            raise GeocodingServiceError(
+                normalized, f"Census geocoder unreachable: {exc}"
+            ) from exc
+        return _parse_candidates(normalized, response, limit)
 
 
 @lru_cache(maxsize=2048)
@@ -136,3 +164,37 @@ def _parse_response(address: str, response: requests.Response) -> GeoPoint:
         raise GeocodingServiceError(
             address, f"Census geocoder response missing expected coordinates: {exc}"
         ) from exc
+
+
+def _parse_candidates(address: str, response: requests.Response, limit: int) -> list:
+    """Map the Census ``addressMatches`` into `AddressCandidate`s (best-effort).
+
+    Unlike :func:`_parse_response`, a missing/blank set is NOT an error here --
+    it returns ``[]`` so the resolver can fall back to asking for a corrected
+    address. A single match with unusable coordinates is skipped rather than
+    failing the whole set."""
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise GeocodingServiceError(
+            address, "Census geocoder returned a non-JSON response"
+        ) from exc
+
+    matches = payload.get("result", {}).get("addressMatches") or []
+    candidates: list[AddressCandidate] = []
+    for match in matches[: max(0, limit)]:
+        try:
+            coords = match["coordinates"]
+            point = GeoPoint(latitude=float(coords["y"]), longitude=float(coords["x"]))
+        except (KeyError, TypeError, ValueError):
+            continue  # skip a malformed match, keep the rest
+        formatted = str(match.get("matchedAddress") or address).strip()
+        components = match.get("addressComponents") or {}
+        candidates.append(
+            AddressCandidate(
+                formatted=formatted,
+                location=point,
+                components=components if isinstance(components, dict) else {},
+            )
+        )
+    return candidates

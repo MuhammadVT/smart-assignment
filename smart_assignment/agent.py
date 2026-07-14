@@ -44,6 +44,7 @@ from smart_assignment.tools import (
     find_candidate_routes,
     intake_customer,
     recommend_or_escalate,
+    resolve_address,
 )
 
 # Cached after first access so repeated lookups return the same agent instance.
@@ -55,6 +56,7 @@ def _build_root_agent() -> LlmAgent:
     so this needs credentials for the configured backend -- called only on first
     access to ``root_agent``, never at import."""
     triage_enabled = DEFAULT_CONFIG.use_escalation_triage
+    address_resolution_enabled = DEFAULT_CONFIG.use_address_resolution
 
     tools = [
         FunctionTool(intake_customer),
@@ -63,6 +65,13 @@ def _build_root_agent() -> LlmAgent:
         FunctionTool(recommend_or_escalate),
         request_input,
     ]
+    if address_resolution_enabled:
+        # A grounded typo/ambiguity corrector: on a geocode miss it picks the
+        # closest of the geocoder's real candidate matches for the user to
+        # confirm, instead of the agent inventing one (see the `address_resolve`
+        # package). Only added when enabled, so the instruction never names a
+        # tool that isn't present.
+        tools.append(FunctionTool(resolve_address))
     if triage_enabled:
         # Imported lazily so the package import stays credential-free -- this
         # runs only while root_agent is being built, which already resolves the
@@ -78,7 +87,10 @@ def _build_root_agent() -> LlmAgent:
             "Collects a new prospect customer's delivery details conversationally "
             "and recommends -- or escalates -- a delivery route and slot."
         ),
-        instruction=build_instruction(include_triage=triage_enabled),
+        instruction=build_instruction(
+            include_triage=triage_enabled,
+            include_address_resolution=address_resolution_enabled,
+        ),
         tools=tools,
     )
 

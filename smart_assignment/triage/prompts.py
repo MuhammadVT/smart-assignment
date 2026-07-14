@@ -28,7 +28,7 @@ ROOT CAUSE
 <one or two sentences naming the specific gate that tripped -- which hard
 constraint, or the proposed route's thin margin -- with the exact numbers.>
 
-OPTIONS  (most workable first)
+OPTIONS (most workable first)
 1) <ROUTE_ID · DAY> — <its current state: utilization % and cases of headroom>
    Action: <the concrete change needed to make this route work for the order>
    Trade-off: <the cost/effort/who it affects — one short clause>

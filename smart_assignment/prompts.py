@@ -79,6 +79,25 @@ returns {"ok": false}, that is a real error to relay to the user, not
 something to work around on your own.
 """
 
+# Appended to INSTRUCTION only when address resolution is enabled
+# (Config.use_address_resolution). Names the resolve_address tool, which only
+# exists in the agent's tool list when that flag is on.
+ADDRESS_RESOLUTION_GUIDANCE = """
+Address correction: if find_candidate_routes (or evaluate_and_score_routes or
+recommend_or_escalate) returns an error saying the address could not be found or
+geocoded, call resolve_address. It looks up the geocoder's real candidate matches
+and suggests the closest one -- it never invents an address.
+ - If it returns "needs_confirmation": true, DO NOT proceed on your own. Show the
+   "message" (the suggested address, plus any alternatives), and ask the customer
+   to confirm, pick an alternative, or give a corrected address. This is an
+   intake-level pause -- a legitimate place to wait for the user. Only AFTER they
+   confirm, call intake_customer with the confirmed address, then continue the
+   workflow (find_candidate_routes -> ... -> recommend_or_escalate).
+ - If it returns "no_suggestions": true, relay its message and ask the customer
+   to double-check the address. Do not guess.
+Never adopt a suggested address without the customer's explicit confirmation.
+"""
+
 # Appended to INSTRUCTION only when the escalation-triage sub-agent is enabled
 # (Config.use_escalation_triage). It tells root_agent to consult the
 # escalation_triage AgentTool before the human handoff. The tool name here must
@@ -95,8 +114,17 @@ Do not alter any number, route, or decision in the brief.
 """
 
 
-def build_instruction(include_triage: bool = False) -> str:
-    """The root_agent system instruction, with the triage step appended when
-    the escalation-triage sub-agent is wired in (so the instruction never tells
-    the model to call a tool that isn't present)."""
-    return INSTRUCTION + (ESCALATION_TRIAGE_GUIDANCE if include_triage else "")
+def build_instruction(
+    include_triage: bool = False, include_address_resolution: bool = False
+) -> str:
+    """The root_agent system instruction, with optional steps appended only when
+    the corresponding tool is wired in (so the instruction never tells the model
+    to call a tool that isn't present): the address-resolution step when
+    ``include_address_resolution`` is on, and the triage step when
+    ``include_triage`` is on."""
+    instruction = INSTRUCTION
+    if include_address_resolution:
+        instruction += ADDRESS_RESOLUTION_GUIDANCE
+    if include_triage:
+        instruction += ESCALATION_TRIAGE_GUIDANCE
+    return instruction
