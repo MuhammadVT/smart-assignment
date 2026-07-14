@@ -198,6 +198,20 @@ class Config:
     # adds an availability term, shifting the score distribution, and ops asked to
     # err slightly toward recommending. See routeslot/decide.py.
     route_slot_score_threshold: float = 0.55
+    # When True (default), the recommend-vs-escalate call on the route-slot path is
+    # made by the LLM ITSELF over ALL feasible route-slots -- not gated by the
+    # route_slot_score_threshold bar. The model reasons over the options (grounded +
+    # verified, same as every other LLM call) and either RECOMMENDs the best one or
+    # ESCALATEs when it judges none good enough; an escalation-side/low-confidence
+    # call is resampled `judgment_sample_count` times and combined by
+    # `judgment_consensus` before it may auto-assign. The threshold is DEMOTED to a
+    # reference fact in the evidence packet, and the deterministic threshold decision
+    # remains the FALLBACK on any LLM/verify/backend failure -- so it is never worse
+    # than the bar-gated baseline. When False, the route-slot path uses the prior
+    # logic exactly: the threshold gates recommend-vs-escalate and the LLM only picks
+    # among the above-bar options (reproducible rollback). Non-feasible cases are
+    # always a deterministic escalation regardless of this flag.
+    use_grounded_route_slot_escalation: bool = True
 
     # --- Decision / escalation ---
     # The winning route's own total_score (see shared/scoring.score_candidate)
@@ -346,6 +360,9 @@ class Config:
             slot_tier_harm_unknown=_float_env("SMART_ASSIGNMENT_SLOT_HARM_UNKNOWN", 0.4),
             route_slot_score_threshold=_float_env(
                 "SMART_ASSIGNMENT_ROUTE_SLOT_SCORE_THRESHOLD", 0.55
+            ),
+            use_grounded_route_slot_escalation=_bool_env(
+                "SMART_ASSIGNMENT_USE_GROUNDED_ROUTE_SLOT_ESCALATION", True
             ),
             total_score_threshold=_float_env("SMART_ASSIGNMENT_TOTAL_SCORE_THRESHOLD", 0.60),
             use_grounded_judgment=_bool_env("SMART_ASSIGNMENT_USE_GROUNDED_JUDGMENT", False),

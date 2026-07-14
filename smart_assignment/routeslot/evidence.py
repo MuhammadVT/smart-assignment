@@ -43,6 +43,12 @@ class RouteSlotPacket:
     options: list[dict]
     infeasible: list[dict]
     deterministic_best_index: Optional[int]
+    # Reference only (grounded-escalation path): the deterministic auto-assign bar.
+    # An option's reference_weighted_score >= this is what the heuristic would
+    # auto-assign; the LLM may agree or, with justification, decide otherwise. None
+    # on the pick-only path (which pre-filters to above-bar options, so the bar is
+    # not a decision the model makes).
+    auto_assign_threshold: Optional[float] = None
     _options: list[RouteSlotOption] = field(default_factory=list)
 
     @property
@@ -60,12 +66,15 @@ class RouteSlotPacket:
         return None
 
     def as_dict(self) -> dict:
-        return {
+        out = {
             "customer": self.customer,
             "route_slot_options": self.options,
             "infeasible_routes": self.infeasible,
             "deterministic_choice_index": self.deterministic_best_index,
         }
+        if self.auto_assign_threshold is not None:
+            out["auto_assign_threshold"] = self.auto_assign_threshold
+        return out
 
 
 def _slot_phrase(customer: CustomerProfile) -> Optional[str]:
@@ -84,12 +93,16 @@ def build_route_slot_packet(
     evaluations: list[CandidateEvaluation],
     config: Config,
     min_score: Optional[float] = None,
+    auto_assign_threshold: Optional[float] = None,
 ) -> RouteSlotPacket:
     """Enumerate feasible route-slots as an indexed option menu for the grounded
     decision. When ``min_score`` is given, only options whose deterministic total
     meets it are included -- so the LLM reasons over the auto-assignable
-    (above-threshold) route-slots only. Options are ordered by descending total so
-    index 0 is the deterministic pick, but the pick is named explicitly."""
+    (above-threshold) route-slots only (the pick-only path). When
+    ``auto_assign_threshold`` is given, it and a per-option ``meets_auto_assign_bar``
+    flag ride along as *reference* for the grounded-escalation path (which sees ALL
+    feasible options). Options are ordered by descending total so index 0 is the
+    deterministic pick, but the pick is named explicitly."""
     pairs: list[RouteSlotOption] = [
         RouteSlotOption(evaluation=ev, scored=s)
         for ev in evaluations
@@ -103,23 +116,25 @@ def build_route_slot_packet(
     for i, p in enumerate(pairs):
         route = p.evaluation.route
         slot = p.scored.slot
-        options.append(
-            {
-                "index": i,
-                "route_id": route.route_id,
-                "route_name": route.name,
-                "day": route.day.value,
-                "window": fmt_window(slot.window),
-                "anchor_time": fmt_time(slot.anchor_time) if slot.anchor_time else None,
-                "basis": slot.basis,
-                "facts": _facts(p.scored),
-                "factor_breakdown": [
-                    {"name": fs.name, "value": round(fs.value, 4), "weight": fs.weight,
-                     "detail": fs.detail}
-                    for fs in p.scored.factor_scores
-                ],
-            }
-        )
+        option = {
+            "index": i,
+            "route_id": route.route_id,
+            "route_name": route.name,
+            "day": route.day.value,
+            "window": fmt_window(slot.window),
+            "anchor_time": fmt_time(slot.anchor_time) if slot.anchor_time else None,
+            "basis": slot.basis,
+            "facts": _facts(p.scored),
+            "factor_breakdown": [
+                {"name": fs.name, "value": round(fs.value, 4), "weight": fs.weight,
+                 "detail": fs.detail}
+                for fs in p.scored.factor_scores
+            ],
+        }
+        if auto_assign_threshold is not None:
+            # Reference flag (not a citable fact): a bool never enters the number scan.
+            option["meets_auto_assign_bar"] = p.scored.total_score >= auto_assign_threshold
+        options.append(option)
 
     infeasible = [
         {
@@ -144,5 +159,6 @@ def build_route_slot_packet(
         options=options,
         infeasible=infeasible,
         deterministic_best_index=best_index,
+        auto_assign_threshold=auto_assign_threshold,
         _options=pairs,
     )

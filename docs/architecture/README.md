@@ -158,29 +158,40 @@ build_route_slot_packet   flatten all feasible route-slots into one indexed menu
                           the deterministic best index
         |
         v
-decide_route_slot         recommend-vs-escalate is a DETERMINISTIC threshold
- (routeslot/decide.py)    (route_slot_score_threshold); the LLM reasons only over
-                          the route-slots that already clear it. Branches:
+decide_route_slot         non-feasible cases ALWAYS escalate deterministically; for
+ (routeslot/decide.py)    the feasible ones the recommend-vs-escalate call depends on
+                          Config.use_grounded_route_slot_escalation. Branches:
                             · no feasible route            -> ESCALATED_NO_FEASIBLE_SLOT
                             · feasible route, no slot built -> ESCALATED_NO_FEASIBLE_SLOT
                                                               (distinct review_reason)
-                            · feasible slots, none ≥ bar    -> ESCALATED_LOW_SCORE
-                                                              (deterministic best proposed;
-                                                               NO llm call)
-                            · ≥1 slot ≥ bar                 -> RECOMMENDED: LLM picks among
-                                                              the eligible (above-bar) menu
-                                                              (constrained + cited + verified,
-                                                              one retry, deterministic fallback);
-                                                              ABSORBS the slotpick pass.
+                            · feasible route-slots:
+                               – flag ON (default): the LLM decides over ALL feasible
+                                 route-slots (see below)
+                               – flag OFF (rollback): the 0.55 bar gates it; none ≥ bar
+                                 -> ESCALATED_LOW_SCORE (deterministic best proposed, NO
+                                 llm call); ≥1 ≥ bar -> RECOMMENDED, LLM picks among the
+                                 eligible (above-bar) menu. ABSORBS the slotpick pass.
 ```
 
-Because the LLM's menu is filtered to the **above-threshold** options, its pick is
-always auto-assignable — it can never *cause* an escalation, and no grounded call
-is spent on cases that were going to escalate anyway. The recommend/escalate
-boundary stays a deterministic, reproducible threshold, so the high-stakes
-auto-assign gate remains auditable. (Whether the LLM should additionally
-*re-decide* marginal escalations with k-sample resampling, as `judgment/` does, is
-a deferred option; today it only selects among the recommendable route-slots.)
+**LLM-decided escalation (`use_grounded_route_slot_escalation`, default on).** The
+LLM makes the recommend-vs-escalate call *itself* over **all** feasible route-slots
+— the `route_slot_score_threshold` bar does **not** gate it (it rides along in the
+packet as a reference `auto_assign_threshold` + per-option `meets_auto_assign_bar`,
+and stays the fallback). The output adds `decision` (RECOMMEND | ESCALATE) and
+`confidence` (HIGH | LOW) to the same grounded, cited, verified choice; `chosen_index`
+is always the strongest option (on an ESCALATE it's the best-but-insufficient one the
+specialist reviews). Because the bar no longer binds it, the model **may escalate an
+above-bar option** (it judges even the best isn't good enough) or **recommend a
+below-bar one** — so the k-try guardrail matters: a confident RECOMMEND ships on one
+verified call; an ESCALATE or a LOW-confidence RECOMMEND is resampled
+`judgment_sample_count` times and must reach `judgment_consensus` (unanimous/majority)
+to auto-assign, else it escalates (`ESCALATED_LOW_SCORE`, distinct review_reason,
+strongest option proposed, all reasoned takes in `alternative_takes`). This is the
+same sampling+consensus machinery as `judgment/`, applied to the route-slot unit. On
+**any** mechanical/verification failure it falls back to the deterministic threshold
+decision, so it is never worse than the bar-gated baseline. Set the flag off to
+reproduce the prior threshold-gated behavior exactly (the LLM then only picks among
+above-bar options, as the box's rollback branch describes).
 
 This is the same **constrained-option + grounded + deterministic-fallback**
 pattern as judgment/triage/slotpick, applied to the route-slot unit; the weighted
