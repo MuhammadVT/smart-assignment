@@ -32,7 +32,7 @@ LOW_SCORE = CustomerProfile(
 )
 NO_FEASIBLE = CustomerProfile(
     name="Katy Prairie Steakhouse",
-    address="24600 Katy Fwy, Katy, TX 77494",
+    address="5000 Katy Mills Cir, Katy, TX 77494",
     order_quantity_cases=260,
     preferred_slot=PreferredSlot(DayOfWeek.TUE, (time(6, 0), time(8, 0))),
 )

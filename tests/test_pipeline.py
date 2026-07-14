@@ -44,7 +44,7 @@ def test_unserviceable_customer_escalates_no_feasible_slot():
     customer = CustomerProfile(
         customer_number="067-100003",
         name="Katy Prairie Steakhouse",
-        address="24600 Katy Fwy, Katy, TX 77494",
+        address="5000 Katy Mills Cir, Katy, TX 77494",
         order_quantity_cases=260,
         preferred_slot=PreferredSlot(DayOfWeek.TUE, (time(6, 0), time(8, 0))),
     )
