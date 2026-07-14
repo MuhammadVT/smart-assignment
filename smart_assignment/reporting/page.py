@@ -227,6 +227,50 @@ _STYLE = """
   .sim-line .no { color: var(--red); font-weight: 700; }
   .sim-line .calc { font-family: var(--mono); font-size: 11.5px; color: #5b6675; }
   .sim-line .calc b { color: var(--navy); }
+  /* Score & Rank: each (route, slot) option is a collapsible <details> -- a
+     compact score line (the summary) with its full per-factor math tucked inside,
+     hidden by default. Same numbers as before, laid out to be scannable. */
+  .sim-line .rs-details { border: 1px solid var(--line); border-radius: 11px; background: var(--card);
+    box-shadow: var(--shadow); overflow: hidden; }
+  .sim-line .rs-details.winner { border-color: var(--green); }
+  .sim-line .rs-head { list-style: none; cursor: pointer; user-select: none; display: flex;
+    align-items: center; gap: 9px; padding: 9px 12px; }
+  .sim-line .rs-head::-webkit-details-marker { display: none; }
+  .sim-line .rs-caret { flex: none; width: 11px; text-align: center; color: var(--muted);
+    font-size: 9px; transition: transform .15s; }
+  .sim-line .rs-details[open] .rs-caret { transform: rotate(90deg); color: var(--blue); }
+  .sim-line .rs-id { font-weight: 700; font-size: 13.5px; font-variant-numeric: tabular-nums; }
+  .sim-line .rs-name { color: var(--muted); font-size: 12px; }
+  .sim-line .rs-win { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+  .sim-line .rs-spacer { flex: 1 1 auto; min-width: 6px; }
+  .sim-line .rs-showmath { font-size: 11px; font-weight: 600; color: var(--blue); white-space: nowrap; }
+  .sim-line .rs-showmath::after { content: "show the math"; }
+  .sim-line .rs-details[open] .rs-showmath { color: var(--muted); }
+  .sim-line .rs-details[open] .rs-showmath::after { content: "hide the math"; }
+  .sim-line .rs-score { font-family: var(--mono); font-weight: 700; font-variant-numeric: tabular-nums;
+    font-size: 13.5px; border-radius: 8px; padding: 3px 8px; line-height: 1; background: #eef2f7; color: var(--navy); }
+  .sim-line .rs-details.winner .rs-score { background: var(--green-soft); color: var(--green); }
+  .sim-line .rs-star { color: var(--green); }
+  .sim-line .rs-math { border-top: 1px solid var(--line); background: #f8fafd; padding: 10px 12px 11px; }
+  .sim-line .rs-factor { display: grid; grid-template-columns: 4px 1fr auto; gap: 3px 10px;
+    padding: 8px 0; border-bottom: 1px dashed var(--line); }
+  .sim-line .rs-factor:first-child { padding-top: 1px; }
+  .sim-line .rs-factor:last-child { border-bottom: 0; }
+  .sim-line .rs-ftick { grid-row: 1 / span 2; border-radius: 3px; align-self: stretch; }
+  .sim-line .rs-fname { font-size: 12.5px; font-weight: 600; color: var(--ink); }
+  .sim-line .rs-fnums { display: inline-flex; align-items: baseline; gap: 7px; justify-self: end; white-space: nowrap; }
+  .sim-line .rs-fval { font-family: var(--mono); font-weight: 700; font-size: 12.5px;
+    font-variant-numeric: tabular-nums; color: var(--navy); }
+  .sim-line .rs-fwt { font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
+  .sim-line .rs-fcontrib { font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
+  .sim-line .rs-fdetail { grid-column: 2 / span 2; font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+  .sim-line .rs-fformula { font-family: var(--mono); font-size: 10.5px; color: var(--ink);
+    background: #eef2f7; border-radius: 5px; padding: 1px 6px; margin-right: 6px; }
+  .sim-line .rs-total { display: flex; align-items: baseline; flex-wrap: wrap; gap: 7px;
+    margin-top: 9px; padding-top: 9px; border-top: 1px solid var(--line); }
+  .sim-line .rs-total-lbl { font-size: 11.5px; font-weight: 700; color: var(--ink); }
+  .sim-line .rs-total-expr { font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
+  .sim-line .rs-total-eq { font-family: var(--mono); font-size: 13px; font-weight: 700; color: var(--navy); margin-left: auto; }
   .sim-output { margin-top: 18px; }
   .examples { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; }
   .result { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
@@ -833,37 +877,84 @@ def _rs_factor_formula(name: str, config: Config) -> str:
     return ""
 
 
-def _route_slot_score_lines(ranked_feasible, config: Config) -> list[str]:
+# Per-dimension accent colours for the route-slot factor rows: each factor gets
+# a small tick in its own hue so the four dimensions are told apart at a glance.
+_RS_FACTOR_COLOR = {
+    FACTOR_GEO_CLUSTERING: "#1257a6",
+    FACTOR_CAPACITY_BUFFER: "#9a6700",
+    FACTOR_WINDOW_MATCH: "#5b3fb0",
+    FACTOR_SLOT_AVAILABILITY: "#0e7c7b",
+}
+
+
+def _route_slot_details(e, ss, config: Config, is_win: bool) -> str:
+    """One (route, slot) option as a collapsible ``<details>``: a compact score
+    line is the summary; the per-factor breakdown (formula + cited inputs +
+    weight + contribution) and the weighted total live inside, collapsed by
+    default. Same numbers as before -- only laid out to be scannable and
+    checkable on demand rather than as a wall of text."""
+    win = _win(fmt_window(ss.slot.window))
+    star = ' <span class="rs-star">★</span>' if is_win else ""
+
+    rows = []
+    weight_sum = 0.0
+    terms = []
+    for fs in ss.factor_scores:
+        label = FACTOR_LABEL.get(fs.name, fs.name)
+        formula = _rs_factor_formula(fs.name, config)
+        color = _RS_FACTOR_COLOR.get(fs.name, "var(--muted)")
+        rows.append(
+            f'<div class="rs-factor">'
+            f'<span class="rs-ftick" style="background:{color}"></span>'
+            f'<span class="rs-fname">{_esc(label)}</span>'
+            f'<span class="rs-fnums"><span class="rs-fval">{fs.value:.2f}</span>'
+            f'<span class="rs-fwt">× {fs.weight:.2f}</span>'
+            f'<span class="rs-fcontrib">→ {fs.weighted:.2f}</span></span>'
+            f'<span class="rs-fdetail"><span class="rs-fformula">{_esc(formula)}</span>'
+            f"{_esc(fs.detail)}</span></div>"
+        )
+        weight_sum += fs.weight
+        terms.append(f"{fs.weight:.2f}×{fs.value:.2f}")
+
+    total = (
+        '<div class="rs-total"><span class="rs-total-lbl">Route-slot score</span>'
+        f'<span class="rs-total-expr">= ({" + ".join(terms)}) ÷ {weight_sum:.2f}</span>'
+        f'<span class="rs-total-eq">= {ss.total_score:.2f}</span></div>'
+    )
+
+    return (
+        f'<details class="rs-details{" winner" if is_win else ""}">'
+        '<summary class="rs-head">'
+        '<span class="rs-caret">▶</span>'
+        f'<span class="rs-id">{_esc(e.route.route_id)}</span>'
+        f'<span class="rs-name">{_esc(e.route.name)}</span>'
+        f'<span class="rs-win">@ {win}</span>'
+        '<span class="rs-spacer"></span>'
+        '<span class="rs-showmath"></span>'
+        f'<span class="rs-score">{ss.total_score:.2f}{star}</span>'
+        "</summary>"
+        f'<div class="rs-math">{"".join(rows)}{total}</div>'
+        "</details>"
+    )
+
+
+def _route_slot_score_lines(ranked_feasible, config: Config, rec=None) -> list[str]:
     """Score & Rank narrative for the route-slot path: every candidate slot on
-    every feasible route, scored as its own (route, slot) option -- with each
-    factor's formula, the concrete inputs it cited, and the weighted total, so a
-    user can validate the math by hand."""
+    every feasible route, scored as its own (route, slot) option. Each option is
+    a collapsed ``<details>`` row -- score line visible, the full per-factor math
+    (formula, cited inputs, weight, weighted total) one click away -- so the
+    reader can still validate every number by hand without a wall of text. The
+    recommended (route, slot) is flagged."""
     lines = [
-        "Each candidate SLOT on each feasible route is scored as its own (route, slot) option. "
-        "Every factor shows its formula, the numbers it used, and its weight — so the math is checkable:"
+        "Each candidate slot on each feasible route is scored as its own (route, slot) option. "
+        "Open <b>show the math</b> on any row to see every factor's formula, the numbers it used, "
+        "and its weight — so the math is checkable:"
     ]
+    winner_id = rec.recommended_route_id if rec else None
     for e in ranked_feasible:
         for ss in sorted(e.scored_slots, key=lambda s: s.total_score, reverse=True):
-            lines.append(
-                f"• <b>{_esc(e.route.route_id)} · {_esc(e.route.name)}</b> @ "
-                f"{_win(fmt_window(ss.slot.window))} → route-slot score <b>{ss.total_score:.2f}</b>"
-            )
-            weight_sum = 0.0
-            terms = []
-            for fs in ss.factor_scores:
-                label = FACTOR_LABEL.get(fs.name, fs.name)
-                formula = _rs_factor_formula(fs.name, config)
-                lines.append(
-                    f'<span class="calc">↳ {_esc(label)} = {formula} = <b>{fs.value:.2f}</b> '
-                    f"× weight {fs.weight:.2f} "
-                    f'<span style="color:var(--muted)">— {_esc(fs.detail)}</span></span>'
-                )
-                weight_sum += fs.weight
-                terms.append(f"{fs.weight:.2f}×{fs.value:.2f}")
-            lines.append(
-                f'<span class="calc">↳ total = ({" + ".join(terms)}) ÷ {weight_sum:.2f} = '
-                f"<b>{ss.total_score:.2f}</b></span>"
-            )
+            is_win = bool(winner_id) and e.route.route_id == winner_id and ss.slot.window == e.chosen_window
+            lines.append(_route_slot_details(e, ss, config, is_win))
     return lines
 
 
@@ -914,7 +1005,7 @@ def _sim_steps(result: RecommendationResult, config: Config) -> list[dict]:
             )
 
     if result.ranked_feasible and config.use_route_slot_scoring:
-        score = _route_slot_score_lines(result.ranked_feasible, config)
+        score = _route_slot_score_lines(result.ranked_feasible, config, rec)
     elif result.ranked_feasible:
         score = ["Each dimension is normalized to 0–1, then combined by weight:"]
         for e in result.ranked_feasible:

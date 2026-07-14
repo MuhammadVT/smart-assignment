@@ -379,12 +379,16 @@ def test_route_slot_cards_and_payload_are_slot_level():
         assert scores == sorted(scores, reverse=True)  # highest score first
     assert sum(1 for r in routes for s in r["slots"] if s["recommended"]) == 1
 
-    # Step 4 exposes the per-factor math (a formula + the cited inputs).
+    # Step 4 exposes the per-factor math (a formula + the cited inputs), each
+    # route-slot in a collapsible "show the math" <details> (hidden by default).
     score_step = next(s for s in _sim_steps(bayou, config) if s["title"] == "Score & Rank")
     joined = " ".join(score_step["lines"])
     assert "clamp(1 − avg_mi" in joined  # geo formula
     assert "1 ÷ (1 + Σ tier-harm" in joined  # slot-availability formula
-    assert "total = (" in joined  # weighted-sum breakdown
+    assert "Route-slot score" in joined and ") ÷ " in joined  # weighted-sum breakdown
+    # The toggle label itself is CSS-generated, so the summary span is empty markup.
+    assert '<span class="rs-showmath"></span>' in joined
+    assert joined.count('<details class="rs-details') == sum(len(e.scored_slots) for e in feasible)
 
 
 def test_route_slot_card_shows_unscored_slot_match_without_preference():
