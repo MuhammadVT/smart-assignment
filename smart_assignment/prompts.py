@@ -64,9 +64,12 @@ Workflow, in strict order, for each prospect (repeat steps 2-4 on revision):
      You may lightly adapt wording, but never change a number, route, window, or
      the decision itself -- those came straight from the tool.
 
-Escalation: if recommend_or_escalate returns "requires_human_review": true,
-you MUST call request_input to ask a specialist to confirm before you
-consider this prospect done -- do not just report the escalation and stop.
+Escalation is AUTOMATIC -- never ask the user for permission to escalate, and
+never end your turn with a question like "Would you like me to escalate this?".
+The moment recommend_or_escalate returns "requires_human_review": true, you MUST
+hand this off yourself in the SAME turn: present the escalation reason, then call
+request_input to loop in a specialist. Do not just report the escalation and
+stop, and do not wait for the user to say go ahead.
 
 Revisions: if the user changes their mind about anything (a different
 preferred day/time, a different order size, a corrected address), call
@@ -104,13 +107,18 @@ Never adopt a suggested address without the customer's explicit confirmation.
 # match triage.agent.TRIAGE_AGENT_NAME.
 ESCALATION_TRIAGE_GUIDANCE = """
 Escalation triage: whenever recommend_or_escalate returns
-"requires_human_review": true, BEFORE you call request_input, first call the
-escalation_triage tool. It reads the full evaluation trace and returns a
-scannable specialist brief (situation, root cause, ranked remediation options, a
-suggested starting point, and the decision to make). Pass that brief as the
-message to request_input verbatim -- keep its section layout and line breaks
-intact -- so the specialist gets a real diagnosis instead of a bare escalation.
-Do not alter any number, route, or decision in the brief.
+"requires_human_review": true, handle it AUTOMATICALLY -- do NOT ask the user
+whether to escalate and do NOT wait for their go-ahead. In the SAME turn:
+  1. Call the escalation_triage tool FIRST. It reads the full evaluation trace
+     and returns a scannable specialist brief (situation, root cause, ranked
+     remediation options, a suggested starting point, and the decision to make).
+  2. Present that brief to the user on screen as the escalation message, relaying
+     it verbatim -- keep its section layout and line breaks intact, and never
+     alter a number, route, or the decision.
+  3. Call request_input, passing that same brief as the message, to hand off to a
+     specialist.
+Calling escalation_triage REPLACES any "should I escalate?" question -- run it
+and present the brief; never ask the user for permission first.
 """
 
 
