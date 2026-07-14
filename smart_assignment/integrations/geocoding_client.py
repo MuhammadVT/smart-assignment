@@ -32,7 +32,7 @@ _GEOCODER_ENV = "SMART_ASSIGNMENT_GEOCODER"
 _KNOWN_ADDRESSES: dict[str, GeoPoint] = {
     "1200 McKinney St, Houston, TX 77010": GeoPoint(29.7570, -95.3670),
     "5085 Westheimer Rd, Houston, TX 77056": GeoPoint(29.7400, -95.4630),
-    "24600 Katy Fwy, Katy, TX 77494": GeoPoint(29.7830, -95.8240),
+    "5000 Katy Mills Cir, Katy, TX 77494": GeoPoint(29.7869, -95.8181),
     "1201 Lake Woodlands Dr, The Woodlands, TX 77380": GeoPoint(30.1620, -95.4590),
 }
 
