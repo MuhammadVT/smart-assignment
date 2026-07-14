@@ -330,10 +330,24 @@ Two enforcement points:
 ```
 triage agent drafts brief
    ├─ (cooperative) calls check_brief_grounding(brief) -> revise until ok
-   └─ (deterministic) after_model_callback runs verify_brief on the FINAL brief;
-      if any figure/route is still ungrounded, appends a caveat naming them
-      ("⚠ Unverified — figures not found in the evaluation trace: …")
+   └─ (deterministic) after_model_callback (_finalize_brief):
+        1. normalize_brief -> reflow the FINAL brief into the one canonical
+           layout (headers/options/labels each on their own line)
+        2. verify_brief -> if any figure/route is still ungrounded, append a
+           caveat naming them ("⚠ Unverified — figures not found …")
 ```
+
+**Layout normalization (`triage/formatting.py`).** The brief is LLM-written, so
+its formatting drifts turn to turn — one escalation comes back tidy and
+multi-line, the next as a single run-on line. `normalize_brief` deterministically
+reflows any brief into the canonical structure by putting the known section
+headers, the `N)` option markers, and the `Action`/`Trade-off` labels on their own
+lines. It only moves whitespace — never a word, number, or route — so a
+well-formed brief is left materially unchanged, it's idempotent, and the grounding
+scan (which sees identical figures) is unaffected. It runs at the source (the
+callback above) *and* at the web-app display surface (`llm_chat` normalizes the
+`request_input` message), so the specialist always sees the same scannable layout
+even if an intervening agent reflowed the brief.
 
 The callback always runs, so ungrounded figures are flagged for the specialist
 even if the agent skipped the self-check. It only *annotates* (never silently
