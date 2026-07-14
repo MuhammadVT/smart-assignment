@@ -28,8 +28,10 @@ def test_deterministic_picks_the_highest_total_route_slot():
     assert "strongest route-slot overall" in rec.reasoning
     # ...but the deterministic structured floor is always populated, so a user
     # (or the agent narration) gets the reasons + trade-off, not a one-liner.
-    assert rec.decision_summary and "RTE-A".lower() not in rec.decision_summary.lower()
-    assert rec.recommended_route_name == "Alpha" and "Alpha" in rec.decision_summary
+    # Routes are named as "<route id> - <route name>" -- both id and name together.
+    assert rec.decision_summary and "RTE-A - Alpha" in rec.decision_summary
+    assert rec.recommended_route_name == "Alpha"
+    assert "strongest route-slot overall" in rec.reasoning and "RTE-A - Alpha" in rec.reasoning
     assert len(rec.primary_reasons) == 2
     assert rec.runner_up and rec.key_tradeoff
     assert rec.default_comparison is None  # only the grounded self-assessment sets this
@@ -41,7 +43,7 @@ def test_deterministic_floor_tradeoff_names_the_runner_up_advantage():
     rec = decide_route_slot(customer(), _evals(), Config(use_route_slot_scoring=True))
     assert "0.80 vs" in rec.key_tradeoff        # the winner's score edge
     assert "slot openness" in rec.key_tradeoff  # the factor the runner-up leads on
-    assert "Bravo" in rec.runner_up
+    assert "RTE-B - Bravo" in rec.runner_up     # runner-up named as <id> - <name>
 
 
 def test_escalates_when_best_route_slot_is_below_threshold():
@@ -52,10 +54,12 @@ def test_escalates_when_best_route_slot_is_below_threshold():
 
 
 def test_no_feasible_route_escalates():
-    infeasible = scored_eval("RTE-X", "X", [], feasible=False)
+    infeasible = scored_eval("RTE-X", "Xavier", [], feasible=False)
     rec = decide_route_slot(customer(), [infeasible], Config(use_route_slot_scoring=True))
     assert rec.decision is Decision.ESCALATED_NO_FEASIBLE_SLOT
     assert rec.recommended_route_id is None
+    # Infeasible routes are named as "<route id> - <route name>" too.
+    assert any("RTE-X - Xavier" in line for line in rec.rejected_alternatives)
 
 
 def test_grounded_pick_diverges_to_a_more_open_slot():

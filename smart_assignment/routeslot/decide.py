@@ -72,6 +72,12 @@ def _factor_label(name: str) -> str:
     return _FACTOR_LABEL.get(name, name.replace("_", " "))
 
 
+def _route_label(route) -> str:
+    """How a route is named to the user everywhere in a recommendation: the stable
+    route id AND the human-readable name together, as ``<route id> - <route name>``."""
+    return f"{route.route_id} - {route.name}"
+
+
 # A choice_fn turns (config, prompt) into a raw route-slot-choice dict. Injectable
 # so tests drive the grounded path with a fake and no network/credentials.
 ChoiceFn = Callable[[Config, str], dict]
@@ -224,7 +230,7 @@ def _apply_deterministic_narrative(
     route = chosen.evaluation.route
     scored = chosen.scored
     rec.decision_summary = (
-        f"Assign {route.name} · {route.day.value} · {fmt_window(scored.slot.window)}."
+        f"Assign {_route_label(route)} · {route.day.value} · {fmt_window(scored.slot.window)}."
     )
     top = sorted(scored.factor_scores, key=lambda fs: fs.weighted, reverse=True)
     rec.primary_reasons = [
@@ -235,7 +241,8 @@ def _apply_deterministic_narrative(
     if runner is not None:
         r_route = runner.evaluation.route
         rec.runner_up = (
-            f"{r_route.name} ({r_route.day.value}) {fmt_window(runner.scored.slot.window)} "
+            f"{_route_label(r_route)} ({r_route.day.value}) "
+            f"{fmt_window(runner.scored.slot.window)} "
             f"— route-slot scored {runner.scored.total_score:.2f}"
         )
         rec.key_tradeoff = _deterministic_tradeoff(chosen, runner)
@@ -300,7 +307,7 @@ def _render_runner_up(choice: RouteSlotChoice, packet: RouteSlotPacket) -> Optio
     opt = packet.options[ru.index] if 0 <= ru.index < packet.n else None
     if opt is None:
         return ru.why_not
-    return f"{opt['route_name']} ({opt['day']}) {opt['window']} — {ru.why_not}"
+    return f"{opt['route_id']} - {opt['route_name']} ({opt['day']}) {opt['window']} — {ru.why_not}"
 
 
 def _render_default_comparison(choice: RouteSlotChoice) -> Optional[str]:
@@ -393,7 +400,8 @@ def _deterministic_reasoning(option: RouteSlotOption) -> str:
     route = option.evaluation.route
     top = max(option.scored.factor_scores, key=lambda fs: fs.weighted)
     return (
-        f"{route.name} ({route.day.value}) at {fmt_window(option.scored.slot.window)} is the "
+        f"{_route_label(route)} ({route.day.value}) at "
+        f"{fmt_window(option.scored.slot.window)} is the "
         f"strongest route-slot overall; {top.detail}."
     )
 
@@ -408,7 +416,7 @@ def _rejected(
         if _key(p) == chosen_key:
             continue
         out.append(
-            f"{p.evaluation.route.route_id} ({p.evaluation.route.day.value}) "
+            f"{_route_label(p.evaluation.route)} ({p.evaluation.route.day.value}) "
             f"{fmt_window(p.scored.slot.window)}: route-slot scored {p.scored.total_score:.2f}"
         )
     out.extend(_infeasible_lines(evaluations))
@@ -422,5 +430,5 @@ def _infeasible_lines(evaluations: list[CandidateEvaluation]) -> list[str]:
             failed = ", ".join(
                 CONSTRAINT_LABEL.get(c.name, c.name) for c in ev.failed_constraints
             )
-            lines.append(f"{ev.route.route_id} ({ev.route.day.value}): infeasible — {failed}")
+            lines.append(f"{_route_label(ev.route)} ({ev.route.day.value}): infeasible — {failed}")
     return lines
