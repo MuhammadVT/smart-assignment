@@ -31,6 +31,7 @@ ROLE_TRIAGE = "triage"  # the escalation-triage sub-agent (AgentTool)
 ROLE_JUDGMENT = "judgment"  # the grounded-judgment decision call
 ROLE_REASONING = "reasoning"  # the LLM-narrated reasoning trace (LLMReasoner)
 ROLE_SLOTPICK = "slotpick"  # the grounded slot selection over a route's candidate menu
+ROLE_ADDRESS_RESOLVE = "address_resolve"  # grounded pick among geocoder address candidates
 
 # role -> env var that overrides that role's model. A role whose env var is
 # unset uses the global `model` / `sage_model`, so behavior is unchanged.
@@ -40,6 +41,7 @@ _ROLE_MODEL_ENV = {
     ROLE_JUDGMENT: "SMART_ASSIGNMENT_MODEL_JUDGMENT",
     ROLE_REASONING: "SMART_ASSIGNMENT_MODEL_REASONING",
     ROLE_SLOTPICK: "SMART_ASSIGNMENT_MODEL_SLOTPICK",
+    ROLE_ADDRESS_RESOLVE: "SMART_ASSIGNMENT_MODEL_ADDRESS_RESOLVE",
 }
 
 
@@ -232,6 +234,18 @@ class Config:
     # always resamples regardless of this flag.
     judgment_retry_on_low_confidence_recommend: bool = True
 
+    # --- Address resolution (optional; grounded typo/ambiguity correction) ---
+    # When True, if the geocoder can't resolve the prospect's address, the agent
+    # can ask a suggest-capable geocoder for candidate matches and let an LLM
+    # pick the closest one (constrained to that enumerated set, grounded +
+    # verified -- see the `address_resolve` package) for the USER to confirm; it
+    # never invents an address. Default ON (ops asked for it): a typo/ambiguous
+    # address becomes a confirmable suggestion instead of a dead-end. On any
+    # failure -- feature unavailable, no candidate found, LLM/verify error -- it
+    # falls back to today's "ask the customer to double-check it." Turning it off
+    # reproduces that prior behavior exactly.
+    use_address_resolution: bool = True
+
     # --- Escalation triage (optional sub-agent) ---
     # When True, root_agent exposes an `escalation_triage` AgentTool (see the
     # `triage` package) and, on any escalation, calls it to compose a specialist
@@ -342,6 +356,7 @@ class Config:
             judgment_retry_on_low_confidence_recommend=_bool_env(
                 "SMART_ASSIGNMENT_JUDGMENT_RETRY_ON_LOW_CONFIDENCE", True
             ),
+            use_address_resolution=_bool_env("SMART_ASSIGNMENT_USE_ADDRESS_RESOLUTION", True),
             use_escalation_triage=_bool_env("SMART_ASSIGNMENT_USE_ESCALATION_TRIAGE", True),
             llm_backend=os.environ.get("SMART_ASSIGNMENT_LLM_BACKEND", "sage"),
             model=os.environ.get("SMART_ASSIGNMENT_MODEL", "gemini-2.5-flash"),

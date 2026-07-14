@@ -19,8 +19,9 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 
-from smart_assignment.shared.geo import Geocoder
+from smart_assignment.shared.geo import AddressCandidate, Geocoder
 from smart_assignment.shared.models import GeoPoint
 
 logger = logging.getLogger(__name__)
@@ -31,12 +32,17 @@ _GEOCODER_ENV = "SMART_ASSIGNMENT_GEOCODER"
 _KNOWN_ADDRESSES: dict[str, GeoPoint] = {
     "1200 McKinney St, Houston, TX 77010": GeoPoint(29.7570, -95.3670),
     "5085 Westheimer Rd, Houston, TX 77056": GeoPoint(29.7400, -95.4630),
-    "24600 Katy Fwy, Katy, TX 77494": GeoPoint(29.7830, -95.8240),
+    "5000 Katy Mills Cir, Katy, TX 77494": GeoPoint(29.7869, -95.8181),
     "1201 Lake Woodlands Dr, The Woodlands, TX 77380": GeoPoint(30.1620, -95.4590),
 }
 
 # Rough Houston centroid for the deterministic fallback.
 _HOUSTON_CENTER = GeoPoint(29.7604, -95.3698)
+
+
+def _tokens(text: str) -> set[str]:
+    """Lowercased word/number tokens, for a cheap deterministic overlap score."""
+    return {t for t in re.findall(r"[a-z0-9]+", text.lower()) if t}
 
 
 class MockGeocoder:
@@ -51,6 +57,28 @@ class MockGeocoder:
         lat = _HOUSTON_CENTER.latitude + ((seed % 20) - 10) / 100.0
         lng = _HOUSTON_CENTER.longitude + ((seed % 17) - 8) / 100.0
         return GeoPoint(round(lat, 4), round(lng, 4))
+
+    def suggest(self, address: str, *, limit: int = 5) -> list[AddressCandidate]:
+        """Offline candidate matches: the curated demo addresses that share at
+        least one token with ``address``, ranked by token overlap (highest
+        first). So a typo like "1200 McKiney St, Houston" still surfaces
+        "1200 McKinney St, Houston, TX 77010" as a candidate, while junk with no
+        overlap returns ``[]`` (the caller then falls back to "double-check").
+        Deterministic and network-free, mirroring the rest of MockGeocoder."""
+        query = _tokens(address)
+        if not query:
+            return []
+        scored: list[tuple[int, str, GeoPoint]] = []
+        for known, point in _KNOWN_ADDRESSES.items():
+            overlap = len(query & _tokens(known))
+            if overlap > 0:
+                scored.append((overlap, known, point))
+        # Sort by overlap desc, then address text for a stable, deterministic order.
+        scored.sort(key=lambda s: (-s[0], s[1]))
+        return [
+            AddressCandidate(formatted=known, location=point)
+            for _, known, point in scored[: max(0, limit)]
+        ]
 
 
 def resolve_geocoder() -> Geocoder:

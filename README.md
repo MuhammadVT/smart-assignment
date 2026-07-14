@@ -170,7 +170,7 @@ The four bundled customers exercise a different branch each:
 |---|---|---|---|
 | Bayou City Bistro (downtown) | 1200 McKinney St, Houston | sits in the dense Central route, well under the capacity safety margin | **RECOMMENDED** (~97%) |
 | Galleria Grill & Catering | 5085 Westheimer Rd, Houston | large catering order — only one nearby route can still take it, and even that route's own score is mediocre (getting quite full) | **ESCALATE – low total score** (~57%) |
-| Katy Prairie Steakhouse (far west) | 24600 Katy Fwy, Katy | all routes out of range / over capacity | **ESCALATE – no feasible slot** |
+| Katy Prairie Steakhouse (far west) | 5000 Katy Mills Cir, Katy | all routes out of range / over capacity | **ESCALATE – no feasible slot** |
 | Woodlands Fresh Cafe | 1201 Lake Woodlands Dr, The Woodlands | North route fits well but is getting full — the one demo route inside the capacity-buffer decay zone (81% utilized) | **RECOMMENDED** (~86%) |
 
 ### Reasoning: deterministic vs. LLM

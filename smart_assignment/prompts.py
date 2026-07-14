@@ -64,9 +64,12 @@ Workflow, in strict order, for each prospect (repeat steps 2-4 on revision):
      You may lightly adapt wording, but never change a number, route, window, or
      the decision itself -- those came straight from the tool.
 
-Escalation: if recommend_or_escalate returns "requires_human_review": true,
-you MUST call request_input to ask a specialist to confirm before you
-consider this prospect done -- do not just report the escalation and stop.
+Escalation is AUTOMATIC -- never ask the user for permission to escalate, and
+never end your turn with a question like "Would you like me to escalate this?".
+The moment recommend_or_escalate returns "requires_human_review": true, you MUST
+hand this off yourself in the SAME turn: present the escalation reason, then call
+request_input to loop in a specialist. Do not just report the escalation and
+stop, and do not wait for the user to say go ahead.
 
 Revisions: if the user changes their mind about anything (a different
 preferred day/time, a different order size, a corrected address), call
@@ -79,23 +82,57 @@ returns {"ok": false}, that is a real error to relay to the user, not
 something to work around on your own.
 """
 
+# Appended to INSTRUCTION only when address resolution is enabled
+# (Config.use_address_resolution). Names the resolve_address tool, which only
+# exists in the agent's tool list when that flag is on.
+ADDRESS_RESOLUTION_GUIDANCE = """
+Address correction: if find_candidate_routes (or evaluate_and_score_routes or
+recommend_or_escalate) returns an error saying the address could not be found or
+geocoded, call resolve_address. It looks up the geocoder's real candidate matches
+and suggests the closest one -- it never invents an address.
+ - If it returns "needs_confirmation": true, DO NOT proceed on your own. Show the
+   "message" (the suggested address, plus any alternatives), and ask the customer
+   to confirm, pick an alternative, or give a corrected address. This is an
+   intake-level pause -- a legitimate place to wait for the user. Only AFTER they
+   confirm, call intake_customer with the confirmed address, then continue the
+   workflow (find_candidate_routes -> ... -> recommend_or_escalate).
+ - If it returns "no_suggestions": true, relay its message and ask the customer
+   to double-check the address. Do not guess.
+Never adopt a suggested address without the customer's explicit confirmation.
+"""
+
 # Appended to INSTRUCTION only when the escalation-triage sub-agent is enabled
 # (Config.use_escalation_triage). It tells root_agent to consult the
 # escalation_triage AgentTool before the human handoff. The tool name here must
 # match triage.agent.TRIAGE_AGENT_NAME.
 ESCALATION_TRIAGE_GUIDANCE = """
 Escalation triage: whenever recommend_or_escalate returns
-"requires_human_review": true, BEFORE you call request_input, first call the
-escalation_triage tool. It reads the full evaluation trace and returns a
-specialist brief (root cause, concrete remediation options, and a suggested
-question). Pass that brief as the message to request_input, so the specialist
-gets a real diagnosis instead of a bare escalation. Do not alter any number,
-route, or decision in the brief -- relay it as given.
+"requires_human_review": true, handle it AUTOMATICALLY -- do NOT ask the user
+whether to escalate and do NOT wait for their go-ahead. In the SAME turn:
+  1. Call the escalation_triage tool FIRST. It reads the full evaluation trace
+     and returns a scannable specialist brief (situation, root cause, ranked
+     remediation options, a suggested starting point, and the decision to make).
+  2. Present that brief to the user on screen as the escalation message, relaying
+     it verbatim -- keep its section layout and line breaks intact, and never
+     alter a number, route, or the decision.
+  3. Call request_input, passing that same brief as the message, to hand off to a
+     specialist.
+Calling escalation_triage REPLACES any "should I escalate?" question -- run it
+and present the brief; never ask the user for permission first.
 """
 
 
-def build_instruction(include_triage: bool = False) -> str:
-    """The root_agent system instruction, with the triage step appended when
-    the escalation-triage sub-agent is wired in (so the instruction never tells
-    the model to call a tool that isn't present)."""
-    return INSTRUCTION + (ESCALATION_TRIAGE_GUIDANCE if include_triage else "")
+def build_instruction(
+    include_triage: bool = False, include_address_resolution: bool = False
+) -> str:
+    """The root_agent system instruction, with optional steps appended only when
+    the corresponding tool is wired in (so the instruction never tells the model
+    to call a tool that isn't present): the address-resolution step when
+    ``include_address_resolution`` is on, and the triage step when
+    ``include_triage`` is on."""
+    instruction = INSTRUCTION
+    if include_address_resolution:
+        instruction += ADDRESS_RESOLUTION_GUIDANCE
+    if include_triage:
+        instruction += ESCALATION_TRIAGE_GUIDANCE
+    return instruction
