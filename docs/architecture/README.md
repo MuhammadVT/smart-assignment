@@ -388,15 +388,36 @@ The two functions that actually talk to a backend (`shared/llm.get_llm` and
 `config.for_role(<its role>)`.
 
 `generate_text` is a **synchronous** API, but the sage backend it fronts is async
-under the hood. It is reached both from the CLI pipeline (no event loop) and from
-the web app's `async` `/api/chat` handler, where the ADK agent runs the pipeline
-tools on the server's loop thread. A bare `asyncio.run()` there raises
-`RuntimeError: asyncio.run() cannot be called from a running event loop`, which the
-grounded layers catch and fall back on — silently dropping the LLM decision in the
-web app. `generate_text` therefore drives the sage coroutine through
-`_run_coro_blocking`, which uses `asyncio.run()` when no loop is running and a
-one-shot worker thread (its own loop) when one is, so the grounded path holds in
-both worlds.
+and its aiohttp `ClientSession` (inside the Sage SDK's process-global litellm
+handler) is **bound to the first event loop that touches it** — under the web app
+that is uvicorn's server loop, where the agent's own turns run. Two facts collide
+there:
+
+- ADK invokes a synchronous `FunctionTool` **inline on the server loop thread**, so
+  the pipeline these tools drive blocks that loop while running.
+- The sage coroutine `generate_text` must run has to execute **on that same loop**
+  (its session lives there); a bare `asyncio.run()` raises `asyncio.run() cannot be
+  called from a running event loop`, and running it on any *other* loop raises
+  `loop <...> is not the running loop`.
+
+You cannot both block the server loop and run a coroutine on it. The resolution is
+a two-part cooperation:
+
+1. **The tools offload their blocking body off the loop.** `agent.py` wraps each
+   pipeline `FunctionTool` with `_offloaded_tool`, making it an `async` tool that
+   runs its synchronous work in a worker thread via `offload_to_worker_thread`
+   (`shared/llm.py`). That frees the server loop. The web app's
+   `_visualization_from_state` re-run is offloaded the same way. `functools.wraps`
+   keeps the tool's name/signature/declaration identical, so ADK's `tool_context`
+   injection is unchanged.
+2. **The grounded call hands its coroutine back to the server loop.**
+   `offload_to_worker_thread` records the server loop in a `ContextVar` (which
+   `asyncio.to_thread` copies into the worker thread); `_run_coro_blocking` then
+   submits the sage coroutine to that recorded *host loop* via
+   `asyncio.run_coroutine_threadsafe(...).result()` — so it runs where the session
+   is bound. With no host loop recorded (the CLI/offline case) it just uses
+   `asyncio.run()`. This keeps the grounded path working in both worlds instead of
+   silently falling back to the deterministic result.
 
 ### Brief groundedness verification
 

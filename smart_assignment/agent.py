@@ -33,12 +33,14 @@ agent, a Q&A agent over past recommendations), since each tool is already
 independent and keyed only through session state (see tools/slot_recommendation.py).
 """
 
+import functools
+
 from google.adk.agents import LlmAgent
 from google.adk.tools import FunctionTool, request_input
 
 from smart_assignment.prompts import build_instruction
 from smart_assignment.shared.config import DEFAULT_CONFIG, ROLE_ROOT_AGENT
-from smart_assignment.shared.llm import get_llm
+from smart_assignment.shared.llm import get_llm, offload_to_worker_thread
 from smart_assignment.tools import (
     evaluate_and_score_routes,
     find_candidate_routes,
@@ -51,6 +53,27 @@ from smart_assignment.tools import (
 _root_agent: LlmAgent = None  # type: ignore[assignment]
 
 
+def _offloaded_tool(func):
+    """Wrap a synchronous pipeline tool so ADK runs it as an async tool whose
+    blocking body executes OFF the event loop.
+
+    ADK invokes a synchronous ``FunctionTool`` inline on the event-loop thread. On
+    the server that thread is uvicorn's loop, and the pipeline these tools drive
+    can make a synchronous grounded LLM call that (for the sage backend) must run a
+    coroutine on that very loop -- which is impossible while the tool is blocking
+    it. Offloading the body to a worker thread frees the loop, and
+    ``offload_to_worker_thread`` records it so the grounded call can hand its
+    coroutine back (see ``shared/llm.py``). ``functools.wraps`` preserves the
+    name/signature/docstring, so ADK builds the identical function declaration and
+    ``tool_context`` injection still works; the wrapper is just ``async``."""
+
+    @functools.wraps(func)
+    async def _async_tool(*args, **kwargs):
+        return await offload_to_worker_thread(func, *args, **kwargs)
+
+    return _async_tool
+
+
 def _build_root_agent() -> LlmAgent:
     """Construct the conversational agent. Resolves the LLM backend (``get_llm``),
     so this needs credentials for the configured backend -- called only on first
@@ -58,11 +81,14 @@ def _build_root_agent() -> LlmAgent:
     triage_enabled = DEFAULT_CONFIG.use_escalation_triage
     address_resolution_enabled = DEFAULT_CONFIG.use_address_resolution
 
+    # Every pipeline tool is offloaded to a worker thread (see _offloaded_tool):
+    # its body is synchronous and may make a grounded LLM call that needs the
+    # server's event loop free, so it must not run inline on that loop.
     tools = [
-        FunctionTool(intake_customer),
-        FunctionTool(find_candidate_routes),
-        FunctionTool(evaluate_and_score_routes),
-        FunctionTool(recommend_or_escalate),
+        FunctionTool(_offloaded_tool(intake_customer)),
+        FunctionTool(_offloaded_tool(find_candidate_routes)),
+        FunctionTool(_offloaded_tool(evaluate_and_score_routes)),
+        FunctionTool(_offloaded_tool(recommend_or_escalate)),
         request_input,
     ]
     if address_resolution_enabled:
@@ -71,7 +97,7 @@ def _build_root_agent() -> LlmAgent:
         # confirm, instead of the agent inventing one (see the `address_resolve`
         # package). Only added when enabled, so the instruction never names a
         # tool that isn't present.
-        tools.append(FunctionTool(resolve_address))
+        tools.append(FunctionTool(_offloaded_tool(resolve_address)))
     if triage_enabled:
         # Imported lazily so the package import stays credential-free -- this
         # runs only while root_agent is being built, which already resolves the
