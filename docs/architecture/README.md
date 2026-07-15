@@ -193,6 +193,18 @@ decision, so it is never worse than the bar-gated baseline. Set the flag off to
 reproduce the prior threshold-gated behavior exactly (the LLM then only picks among
 above-bar options, as the box's rollback branch describes).
 
+**Output-format hardening.** A conversational backend (e.g. the Sage generic agent)
+tends to answer a decision prompt with *prose* ("I have analyzed the options… I
+recommend escalating") or a tool call rather than the bare JSON this layer parses —
+which surfaces as a `JSONDecodeError` before there is anything to verify. Two defenses:
+the route-slot prompts (`prompts.py`) pin the reply to a single raw JSON object with a
+forceful directive placed **first and last** (primacy + recency) that also forbids any
+tool/function call; and `_choice_with_json_retry` (`decide.py`) gives a non-JSON reply
+**one corrective JSON-only retry** before the sample gives up — separate from, and
+prior to, the existing verification retry. Two non-JSON replies still fall back
+deterministically. (This is prompt-level only; the Sage SDK ignores API-level JSON/
+structured-output constraints, so the prompt is the sole lever on that backend.)
+
 This is the same **constrained-option + grounded + deterministic-fallback**
 pattern as judgment/triage/slotpick, applied to the route-slot unit; the weighted
 total per route-slot is the reference and the fallback. The prior route-only path
