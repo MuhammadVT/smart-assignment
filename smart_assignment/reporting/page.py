@@ -699,6 +699,20 @@ _FRONTEND_JS = """
     card.setAttribute('aria-pressed', 'true');
     var sel = host.querySelector('#fe-sel');
     if (sel) { sel.textContent = card.getAttribute('data-when') || sel.textContent; }
+    // Switch the cluster map to the selected slot's route (when it has its own body).
+    var rid = card.getAttribute('data-route');
+    var bodies = host.querySelectorAll('.fe-mapbody');
+    if (rid && bodies.length) {
+      var match = false;
+      for (var j = 0; j < bodies.length; j++) {
+        if (bodies[j].getAttribute('data-route') === rid) { match = true; }
+      }
+      if (match) {
+        for (var m = 0; m < bodies.length; m++) {
+          bodies[m].hidden = (bodies[m].getAttribute('data-route') !== rid);
+        }
+      }
+    }
   }
   host.addEventListener('click', function (ev) {
     selectCard(ev.target.closest ? ev.target.closest('.fe-opt.selectable') : null);
@@ -2173,35 +2187,17 @@ def _fe_option_card(o: dict, result: RecommendationResult, config: Config, bar: 
             f'{_esc(rec.key_tradeoff)}</div>'
         )
     # Every feasible option is a real, selectable choice (the rep confirms one).
+    # data-route lets the map switch to this option's route when it's selected.
     selrow = '<div class="fe-selrow"><span class="fe-selmark"></span></div>'
     return (
-        f'<article class="fe-opt selectable{selected}" data-when="{when}" role="button" tabindex="0" '
+        f'<article class="fe-opt selectable{selected}" data-when="{when}" '
+        f'data-route="{_esc(route.route_id)}" role="button" tabindex="0" '
         f'aria-pressed="{"true" if recommended else "false"}">'
         f'<div class="fe-opt-head"><div class="fe-radio" aria-hidden="true"></div>'
         f'<div class="fe-opt-title"><div class="when"><b>{_esc(_fe_day(route.day.value))}</b> · '
         f'<span class="nowrap">{win}</span></div>'
         f'<div class="fe-route">Route <b>{_esc(route.route_id)}</b> · {_esc(route.name)}</div></div>'
         f'{badge}</div>{_fe_why(o, bar, recommended)}{_fe_tiles(o["factors"], o["cand"])}{tradeoff}{selrow}</article>'
-    )
-
-
-def _fe_unavailable_card(cand: CandidateEvaluation) -> str:
-    route = cand.route
-    failed = ", ".join(CONSTRAINT_LABEL.get(c.name, c.name) for c in cand.failed_constraints)
-    detail = cand.failed_constraints[0].detail if cand.failed_constraints else ""
-    # Selectable like the feasible cards (per request), but clearly an unavailable
-    # route -- selecting it just reflects the choice; the label flags it.
-    when = f"{_esc(_fe_day(route.day.value))} · {_esc(route.route_id)} (unavailable)"
-    return (
-        f'<article class="fe-opt dim selectable" data-when="{when}" role="button" tabindex="0" '
-        'aria-pressed="false"><div class="fe-opt-head">'
-        f'<div class="fe-radio no" aria-hidden="true"></div>'
-        f'<div class="fe-opt-title"><div class="when"><b>{_esc(_fe_day(route.day.value))}</b> · '
-        f'<span class="nowrap" style="color:var(--muted);font-weight:500">no slot built</span></div>'
-        f'<div class="fe-route">Route <b>{_esc(route.route_id)}</b> · {_esc(route.name)}</div></div>'
-        f'<span class="fe-rank no"><span class="d"></span>Unavailable</span></div>'
-        f'<div class="fe-unavail"><span class="x">✗ {_esc(failed)}</span> — {_esc(detail)}</div>'
-        '<div class="fe-selrow"><span class="fe-selmark"></span></div></article>'
     )
 
 
@@ -2244,21 +2240,6 @@ def _convex_hull(pts: list) -> list:
     return lower[:-1] + upper[:-1]
 
 
-def _fe_focus(result: RecommendationResult):
-    """The route to centre the map on: the recommended/proposed route, else the
-    top feasible one, else None (no serviceable route)."""
-    rec = result.recommendation
-    focus = None
-    if rec.recommended_route_id:
-        focus = next(
-            (c for c in result.candidates_considered if c.route.route_id == rec.recommended_route_id),
-            None,
-        )
-    if focus is None and result.ranked_feasible:
-        focus = result.ranked_feasible[0]
-    return focus
-
-
 # A clean, light map canvas -- a faint grid, no busy blocks -- so the cluster
 # polygon and markers are the focus.
 _FE_MAP_BACKDROP = (
@@ -2270,23 +2251,23 @@ _FE_MAP_BACKDROP = (
 )
 
 
-def _fe_cluster_svg(result: RecommendationResult) -> str:
-    """A clean, grounded cluster view: the focus route's committed stops + the new
+def _fe_nomap(result: RecommendationResult) -> str:
+    """The map placeholder when there's no serviceable route to centre on."""
+    nearest = min(result.candidates_considered, key=lambda c: c.distance_miles, default=None)
+    if nearest is None:
+        return '<div class="nomap">No candidate routes to display.</div>'
+    return (
+        f'<div class="nomap">No serviceable route near this address — the nearest, '
+        f'<b>{_esc(nearest.route.route_id)}</b>, is {nearest.distance_miles:.0f} mi from its service '
+        f'center (outside the serviceable radius). Routed to a specialist.</div>'
+    )
+
+
+def _fe_route_cluster_svg(route, cust) -> str:
+    """A clean, grounded cluster view for one route: its committed stops + the new
     prospect (projected from the real geocoded coordinates) inside a convex-hull
     polygon, plus a mock Depot (the OpCo the truck leaves from) with a dashed
     delivery line into the cluster."""
-    focus = _fe_focus(result)
-    cust = result.customer.location
-    if focus is None or cust is None:
-        nearest = min(result.candidates_considered, key=lambda c: c.distance_miles, default=None)
-        if nearest is None:
-            return '<div class="nomap">No candidate routes to display.</div>'
-        return (
-            f'<div class="nomap">No serviceable route near this address — the nearest, '
-            f'<b>{_esc(nearest.route.route_id)}</b>, is {nearest.distance_miles:.0f} mi from its service '
-            f'center (outside the serviceable radius). Routed to a specialist.</div>'
-        )
-    route = focus.route
     cpt = (cust.latitude, cust.longitude)
     stops = [(s.location.latitude, s.location.longitude) for s in route.committed_stops if s.location]
     # Mock Depot: place it just outside the cluster (lower-left) so a clean dashed
@@ -2330,10 +2311,10 @@ def _fe_cluster_svg(result: RecommendationResult) -> str:
     )
 
 
-def _fe_geo_miles(rec) -> Optional[str]:
-    """The 'avg X mi to existing stops' figure from the winning slot's geo factor,
-    for the map subtitle; None if unavailable."""
-    for f in rec.factor_breakdown or []:
+def _fe_geo_miles(factors) -> Optional[str]:
+    """The 'avg X mi to existing stops' figure from a route-slot's geo factor, for
+    the map subtitle; None if unavailable."""
+    for f in factors or []:
         if f.name == FACTOR_GEO_CLUSTERING and f.detail:
             m = re.search(r"avg\s+([\d.]+)\s*mi", f.detail)
             if m:
@@ -2350,7 +2331,7 @@ def _frontend_panel_html(result: RecommendationResult, config: Config) -> str:
         if config.use_route_slot_scoring
         else config.total_score_threshold
     )
-    options, infeasible = _fe_options(result)
+    options, _infeasible = _fe_options(result)
 
     # --- left: prospect ---
     sysco = _esc(c.customer_number) if c.customer_number else "— new prospect"
@@ -2386,8 +2367,8 @@ def _frontend_panel_html(result: RecommendationResult, config: Config) -> str:
             'there is nothing to auto-assign. Routed to a routing specialist.</div>'
         )
 
+    # Only the feasible options are shown as slot cards (no "Unavailable" cards).
     cards = "".join(_fe_option_card(o, result, config, bar) for o in options)
-    cards += "".join(_fe_unavailable_card(e) for e in infeasible)
 
     escalate = (
         '<div class="fe-escalate"><h4>None of these work for the customer?</h4>'
@@ -2426,16 +2407,33 @@ def _frontend_panel_html(result: RecommendationResult, config: Config) -> str:
 
     main = f'<main class="fe-main">{banner}{cards}{escalate}{confirm}</main>'
 
-    # --- right: clean cluster map (SVG: polygon + stops + new prospect + depot) ---
-    focus = _fe_focus(result)
-    svg = _fe_cluster_svg(result)
-    if focus is not None:
-        route = focus.route
-        miles = _fe_geo_miles(rec)
-        near = f"new stop {miles} mi from the cluster" if miles else "new stop near the existing cluster"
+    # --- right: cluster map, one body per feasible route. The selected slot's
+    #     route is shown; clicking a slot on a different route switches the map. ---
+    cust = c.location
+    if options and cust is not None:
+        by_route: dict = {}
+        route_order: list = []
+        for o in options:
+            rid = o["cand"].route.route_id
+            if rid not in by_route:
+                by_route[rid] = o
+                route_order.append(rid)
+        initial = rec.recommended_route_id if rec.recommended_route_id in by_route else route_order[0]
+        bodies = []
+        for rid in route_order:
+            o = by_route[rid]
+            route = o["cand"].route
+            miles = _fe_geo_miles(o["factors"])
+            near = f"new stop {miles} mi from the cluster" if miles else "new stop near the existing cluster"
+            hidden = "" if rid == initial else " hidden"
+            bodies.append(
+                f'<div class="fe-mapbody" data-route="{_esc(rid)}"{hidden}>'
+                f'<div class="mt">{_esc(route.route_id)} · cluster view</div>'
+                f'<div class="ms">{_esc(route.name)} · {near}</div>'
+                f'{_fe_route_cluster_svg(route, cust)}</div>'
+            )
         map_card = (
-            f'<aside class="fe-map"><div class="mt">{_esc(route.route_id)} · cluster view</div>'
-            f'<div class="ms">{_esc(route.name)} · {near}</div>{svg}'
+            f'<aside class="fe-map">{"".join(bodies)}'
             '<div class="fe-legend">'
             '<span><i class="fe-dot" style="background:#1257a6"></i>Existing stops</span>'
             '<span><i class="fe-dot" style="background:#5b3fb0"></i>New prospect</span>'
@@ -2445,7 +2443,7 @@ def _frontend_panel_html(result: RecommendationResult, config: Config) -> str:
             '</div><div class="fe-gain">▲ Adds density without extending route time</div></aside>'
         )
     else:
-        map_card = f'<aside class="fe-map"><div class="mt">Proximity</div>{svg}</aside>'
+        map_card = f'<aside class="fe-map"><div class="mt">Proximity</div>{_fe_nomap(result)}</aside>'
 
     return f'<div class="fe-grid">{side}{main}{map_card}</div>'
 

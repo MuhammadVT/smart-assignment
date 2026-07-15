@@ -357,7 +357,11 @@ def _mock_routes() -> list[Route]:
             day=DayOfWeek.TUE,
             service_center=GeoPoint(29.7589, -95.3677),
             service_radius_miles=12.0,
-            vehicle_capacity_cases=900,
+            # Sized so the large Galleria order is capacity-feasible here too (a
+            # second feasible route), but at a poor buffer -- it still scores below
+            # the auto-assign bar, so the case escalates while demonstrating a
+            # route choice (and the map switching) on the Frontend tab.
+            vehicle_capacity_cases=1050,
             vehicle_capacity_weight=18000.0,
             vehicle_capacity_cubes=1200.0,
             avg_load_cases=520,
