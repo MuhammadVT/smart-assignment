@@ -384,6 +384,35 @@ def _mock_routes() -> list[Route]:
             ],
         ),
         Route(
+            # A SECOND downtown route on a different day (WED). It gives a
+            # close-in prospect like Bayou a real cross-route slot option (so the
+            # Frontend map can switch routes), but its day mismatch keeps its
+            # window score at 0 for a TUE-preferring prospect, so RTE-4100 stays
+            # the recommended winner. Sized so a small order (Bayou, 90) fits with
+            # comfortable headroom while a large one (Galleria, 400) does NOT --
+            # it stays capacity-infeasible there, leaving Galleria's escalation
+            # unchanged.
+            route_id="RTE-4110",
+            name="Downtown / Midtown",
+            day=DayOfWeek.WED,
+            service_center=GeoPoint(29.7480, -95.3560),
+            service_radius_miles=12.0,
+            vehicle_capacity_cases=850,
+            vehicle_capacity_weight=16000.0,
+            vehicle_capacity_cubes=1100.0,
+            avg_load_cases=430,
+            avg_load_weight=8600.0,
+            avg_load_cubes=573.0,
+            available_windows=[(time(7, 30), time(10, 30)), (time(11, 0), time(13, 0))],
+            committed_stops=[
+                RouteStop("067-055051", GeoPoint(29.7420, -95.3300), delivery_time_window=(time(7, 30), time(10, 30)), customer_tier="4"),
+                RouteStop("067-055052", GeoPoint(29.7350, -95.3370), delivery_time_window=(time(7, 30), time(10, 30)), customer_tier="5"),
+                RouteStop("067-055053", GeoPoint(29.7500, -95.3250), delivery_time_window=(time(11, 0), time(13, 0)), customer_tier="Other"),
+                RouteStop("067-055054", GeoPoint(29.7280, -95.3450), delivery_time_window=(time(11, 0), time(13, 0)), customer_tier="Perks"),
+                RouteStop("067-055055", GeoPoint(29.7450, -95.3230), delivery_time_window=(time(7, 30), time(10, 30)), customer_tier="4"),
+            ],
+        ),
+        Route(
             route_id="RTE-4200",
             name="West Houston / Energy Corridor",
             day=DayOfWeek.WED,
@@ -431,6 +460,36 @@ def _mock_routes() -> list[Route]:
                 RouteStop("067-033035", GeoPoint(30.1850, -95.4820), delivery_time_window=(time(13, 0), time(15, 0)), customer_tier="4"),
                 RouteStop("067-033036", GeoPoint(30.1440, -95.4500), delivery_time_window=(time(8, 0), time(12, 0)), customer_tier="Other"),
                 RouteStop("067-033037", GeoPoint(30.1910, -95.4560), delivery_time_window=(time(13, 0), time(15, 0)), customer_tier="5"),
+            ],
+        ),
+        Route(
+            # A SECOND Woodlands-area route on a different day (FRI). It gives a
+            # Woodlands prospect a real cross-route slot option (so the Frontend
+            # map can switch routes), but its FRI day mismatch keeps its window
+            # score at 0 for a THU-preferring prospect, so the well-fitting
+            # RTE-4300 stays the recommended winner while this appears as a
+            # lower-ranked, still-feasible alternative.
+            route_id="RTE-4310",
+            name="Spring / South Woodlands",
+            day=DayOfWeek.FRI,
+            service_center=GeoPoint(30.1470, -95.4730),
+            service_radius_miles=16.0,
+            vehicle_capacity_cases=800,
+            vehicle_capacity_weight=16000.0,
+            vehicle_capacity_cubes=1080.0,
+            avg_load_cases=470,
+            avg_load_weight=9400.0,
+            avg_load_cubes=627.0,
+            # All stops sit in the single morning window, so this route offers
+            # Woodlands one clean cross-route alternative slot (keeping the demo
+            # to ~3 option cards) rather than a second afternoon one.
+            available_windows=[(time(8, 0), time(11, 0))],
+            committed_stops=[
+                RouteStop("067-066061", GeoPoint(30.1400, -95.4680), delivery_time_window=(time(8, 0), time(11, 0)), customer_tier="4"),
+                RouteStop("067-066062", GeoPoint(30.1350, -95.4800), delivery_time_window=(time(8, 0), time(11, 0)), customer_tier="5"),
+                RouteStop("067-066063", GeoPoint(30.1520, -95.4650), delivery_time_window=(time(8, 0), time(11, 0)), customer_tier="Other"),
+                RouteStop("067-066064", GeoPoint(30.1300, -95.4900), delivery_time_window=(time(8, 0), time(11, 0)), customer_tier="Perks"),
+                RouteStop("067-066065", GeoPoint(30.1560, -95.4780), delivery_time_window=(time(8, 0), time(11, 0)), customer_tier="4"),
             ],
         ),
         Route(

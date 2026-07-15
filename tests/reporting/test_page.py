@@ -134,7 +134,7 @@ def test_frontend_tab_renders_sc_facing_slot_view_per_prospect():
 
     joined = " ".join(payload[c.lookup_key]["frontendHtml"] for c in SAMPLE_CUSTOMERS)
     # Raw scores are shown as quality ranks; the recommended one auto-assigns.
-    assert "High confidence · auto-assign" in joined  # a clean auto-assign
+    assert "High capacity · auto-assign" in joined  # a clean auto-assign
     assert "· needs review" in joined  # low-score escalation, proposed
     assert "No serviceable route" in joined  # no-feasible-slot escalation
     # Slots are selectable (the rep picks one); the map draws a cluster polygon
