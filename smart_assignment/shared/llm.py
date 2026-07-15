@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import logging
 import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -38,6 +39,8 @@ if TYPE_CHECKING:
     from asyncio import AbstractEventLoop
 
     from smart_assignment.shared.config import Config
+
+logger = logging.getLogger(__name__)
 
 _T = TypeVar("_T")
 
@@ -152,6 +155,61 @@ def _check_sage_env_vars() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Diagnostic: reveal the real sage reply the SDK hides behind its error string
+# ---------------------------------------------------------------------------
+
+# The Sage SDK's ``SageLiteLlm._extract_response`` replaces the model's real answer
+# with this exact sentinel whenever the agent returns a tool/function call whose
+# name isn't in the tools we passed (the grounded path passes none), or an
+# unexpected shape. Downstream we then only see an empty/"Something went wrong"
+# reply and a JSONDecodeError -- with no clue what the agent actually did.
+_SAGE_ERROR_SENTINEL = "Something went wrong, Please try again later"
+
+
+def _install_sage_response_diagnostic(sage_litellm_cls: Any) -> None:
+    """Wrap a ``SageLiteLlm``-like class's ``_extract_response`` so that whenever it
+    returns the generic error sentinel, the REAL ``agent_response`` (a function call
+    and its name, or the raw shape) is logged. Idempotent; never alters the returned
+    value, so it can't change any decision or fallback -- it only adds a log line."""
+    original = sage_litellm_cls._extract_response
+    if getattr(original, "_sa_diagnostic", False):
+        return
+
+    def _logged_extract_response(response: Any, tools: Any):
+        result = original(response, tools)
+        try:
+            _, text_response = result
+            if text_response == _SAGE_ERROR_SENTINEL:
+                data = getattr(response, "data", None) or {}
+                agent_response = (data.get("responses") or {}).get("agent_response")
+                logger.warning(
+                    "Sage masked the reply with its generic error string; the real "
+                    "agent_response (tools offered=%d) was: %r",
+                    len(tools or []),
+                    repr(agent_response)[:1000],
+                )
+        except Exception as exc:  # noqa: BLE001 - a diagnostic must never break the call
+            logger.warning("Sage response diagnostic could not read agent_response: %s", exc)
+        return result
+
+    _logged_extract_response._sa_diagnostic = True  # type: ignore[attr-defined]
+    sage_litellm_cls._extract_response = staticmethod(_logged_extract_response)
+
+
+def _maybe_install_sage_response_diagnostic(config: "Config") -> None:
+    """Install the diagnostic above when ``config.debug_sage_raw_response`` is on.
+    A no-op otherwise, and silently skipped if the Sage SDK isn't importable, so it
+    never affects the standard backend or offline imports."""
+    if not getattr(config, "debug_sage_raw_response", False):
+        return
+    try:
+        from sage_core import SageLiteLlm  # type: ignore[import-untyped]
+    except Exception:  # noqa: BLE001 - diagnostic is best-effort only
+        return
+    _install_sage_response_diagnostic(SageLiteLlm)
+
+
+# ---------------------------------------------------------------------------
 # Internal: async content generation through ADK BaseLlm
 # ---------------------------------------------------------------------------
 
@@ -247,7 +305,9 @@ def get_llm(config: "Config") -> Any:
     """
     if config.llm_backend == "sage":
         _check_sage_env_vars()
-        return _load_sage_registry().get_llm(config.sage_model)
+        registry = _load_sage_registry()
+        _maybe_install_sage_response_diagnostic(config)
+        return registry.get_llm(config.sage_model)
     if _is_litellm_model(config.model):
         from google.adk.models.lite_llm import LiteLlm  # requires the `litellm` extra
 
@@ -273,7 +333,9 @@ def generate_text(config: "Config", prompt: str) -> str:
     """
     if config.llm_backend == "sage":
         _check_sage_env_vars()
-        llm = _load_sage_registry().get_llm(config.sage_model)
+        registry = _load_sage_registry()
+        _maybe_install_sage_response_diagnostic(config)
+        llm = registry.get_llm(config.sage_model)
         return _run_coro_blocking(_generate_via_sage_async(llm, prompt))
 
     if _is_litellm_model(config.model):

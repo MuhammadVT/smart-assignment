@@ -292,6 +292,14 @@ class Config:
     # standard); the backend itself stays global.
     role_models: dict[str, str] = field(default_factory=dict)
 
+    # --- Diagnostics (opt-in, off by default) ---
+    # When True, wrap the Sage SDK's response extractor so that whenever it would
+    # return its generic "Something went wrong" sentinel -- masking the model's real
+    # reply -- the true agent_response (e.g. a tool/function call the grounded path
+    # never offered) is logged. Purely diagnostic: it changes no decision, value, or
+    # fallback; it only makes an opaque sage failure legible. Off by default.
+    debug_sage_raw_response: bool = False
+
     def tier_harm_weight(self, tier: Optional[str]) -> float:
         """Harm weight for crowding a committed stop of the given Sysco tier --
         how much to protect it when scoring slot openness. Unknown/absent tiers
@@ -379,6 +387,7 @@ class Config:
             model=os.environ.get("SMART_ASSIGNMENT_MODEL", "gemini-2.5-flash"),
             sage_model=os.environ.get("SMART_ASSIGNMENT_SAGE_MODEL", "sage-gemini-2.5-flash"),
             role_models=_role_models_from_env(),
+            debug_sage_raw_response=_bool_env("SMART_ASSIGNMENT_DEBUG_SAGE_RESPONSE", False),
         )
 
 
