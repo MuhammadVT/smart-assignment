@@ -8,11 +8,8 @@ is an injected fake.
 
 from __future__ import annotations
 
-import json
-
 from smart_assignment.routeslot import decide_route_slot
 from smart_assignment.routeslot.evidence import build_route_slot_packet
-from smart_assignment.routeslot.prompts import build_route_slot_decision_prompt
 from smart_assignment.shared.config import Config
 from smart_assignment.shared.models import Decision
 
@@ -227,45 +224,3 @@ def test_no_feasible_route_always_escalates_without_the_llm():
     rec = decide_route_slot(customer(), [infeasible], _cfg(), choice_fn=boom)
     assert rec.decision is Decision.ESCALATED_NO_FEASIBLE_SLOT
     assert rec.recommended_route_id is None
-
-
-# --- non-JSON reply (prose / tool call): one corrective JSON-only retry ------
-#
-# The sage generic agent tends to answer with prose ("I have analyzed...") or a
-# tool call, so the first reply raises JSONDecodeError before verification. A single
-# corrective retry demanding JSON-only should recover; two non-JSON replies fall back.
-
-
-def test_json_only_directive_is_in_the_prompt():
-    packet = build_route_slot_packet(customer(), _evals(), _cfg(), auto_assign_threshold=0.55)
-    prompt = build_route_slot_decision_prompt(packet)
-    # The forceful directive is present, and it forbids prose and tool calls.
-    assert prompt.startswith("CRITICAL OUTPUT FORMAT")
-    assert "do not call" in prompt.lower()
-    assert prompt.rstrip().endswith("discarded.")  # repeated at the end too
-
-
-def test_prose_first_reply_recovers_on_the_json_retry():
-    calls = {"n": 0}
-
-    def fn(config, prompt):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            # Mimics generate_route_slot_choice raising on a prose reply.
-            raise json.JSONDecodeError("Expecting value", "I have analyzed...", 0)
-        return _recommend(0, runner_up_index=1)
-
-    rec = decide_route_slot(customer(), _evals(), _cfg(), choice_fn=fn)
-    assert rec.decision is Decision.RECOMMENDED
-    assert calls["n"] == 2               # prose, then the JSON-only retry
-    assert not rec.grounded_fallback     # grounded pick shipped, not the fallback
-
-
-def test_two_non_json_replies_fall_back_deterministically():
-    def always_prose(config, prompt):
-        raise json.JSONDecodeError("Expecting value", "prose", 0)
-
-    rec = decide_route_slot(customer(), _evals(), _cfg(), choice_fn=always_prose)
-    assert rec.grounded_fallback is True
-    # Still a valid deterministic recommendation, never worse than the baseline.
-    assert rec.recommended_route_id is not None

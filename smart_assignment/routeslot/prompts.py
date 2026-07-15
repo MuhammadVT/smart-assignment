@@ -6,29 +6,6 @@ import json
 
 from smart_assignment.routeslot.evidence import NUMERIC_FACT_KEYS, RouteSlotPacket
 
-# The sage generic agent is conversational: unless told forcefully, it narrates its
-# reasoning as prose ("I have analyzed the options... I recommend...") or tries to
-# call a tool, and either way the reply isn't the JSON this layer parses. This
-# directive is placed FIRST and LAST in every prompt (primacy + recency) to pin the
-# output to a bare JSON object with no prose and no tool call.
-_JSON_ONLY = """\
-CRITICAL OUTPUT FORMAT -- READ FIRST. Respond with ONE raw JSON object and NOTHING \
-else: the first character of your reply MUST be `{` and the last MUST be `}`. Do not \
-write any prose, preamble, greeting, analysis, or explanation before or after it, and \
-do not wrap it in markdown fences. Do NOT call, invoke, or request any function, tool, \
-or sub-agent -- put your ENTIRE answer inside the JSON object. Any text outside the \
-single JSON object makes the reply unusable and it will be discarded.
-"""
-
-# Corrective note appended on a retry when the previous reply could not be parsed as
-# JSON at all (prose or a tool call) -- distinct from a verification-failure retry.
-_JSON_RETRY_NOTE = """\
-YOUR PREVIOUS REPLY WAS UNUSABLE: it was not a single JSON object -- it contained \
-prose, an explanation, or a tool/function call. Do not narrate and do not call any \
-tool. Reply again with ONLY the JSON object specified above: first character `{`, \
-last character `}`, nothing else.
-"""
-
 _SYSTEM = """\
 You are a Sysco delivery planner. Each option below is a specific (route, TIME \
 SLOT) pairing the prospect could be assigned to -- the SAME route can appear more \
@@ -113,10 +90,7 @@ Rules (STRICT):
 
 def build_route_slot_prompt(packet: RouteSlotPacket) -> str:
     body = json.dumps(packet.as_dict(), indent=2, sort_keys=True)
-    return (
-        f"{_JSON_ONLY}\n{_SYSTEM}\n\nROUTE-SLOT OPTIONS:\n{body}\n\n"
-        f"{_OUTPUT_CONTRACT}\n\n{_JSON_ONLY}"
-    )
+    return f"{_SYSTEM}\n\nROUTE-SLOT OPTIONS:\n{body}\n\n{_OUTPUT_CONTRACT}"
 
 
 def build_route_slot_retry_prompt(packet: RouteSlotPacket, feedback: str) -> str:
@@ -127,11 +101,6 @@ def build_route_slot_retry_prompt(packet: RouteSlotPacket, feedback: str) -> str
         f"verdict consistent with that pick, include the trade-off and runner-up when more "
         f"than one option exists, and cite every number you state."
     )
-
-
-def build_route_slot_json_retry_prompt(packet: RouteSlotPacket) -> str:
-    """Retry after a reply that could not be parsed as JSON (prose or a tool call)."""
-    return f"{build_route_slot_prompt(packet)}\n\n{_JSON_RETRY_NOTE}"
 
 
 # --- Grounded-escalation variant: the model also decides recommend-vs-escalate --
@@ -215,8 +184,8 @@ Rules (STRICT):
 def build_route_slot_decision_prompt(packet: RouteSlotPacket) -> str:
     body = json.dumps(packet.as_dict(), indent=2, sort_keys=True)
     return (
-        f"{_JSON_ONLY}\n{_SYSTEM}\n{_ESCALATE_AUTHORITY}\n\n"
-        f"ROUTE-SLOT OPTIONS:\n{body}\n\n{_DECISION_OUTPUT_CONTRACT}\n\n{_JSON_ONLY}"
+        f"{_SYSTEM}\n{_ESCALATE_AUTHORITY}\n\n"
+        f"ROUTE-SLOT OPTIONS:\n{body}\n\n{_DECISION_OUTPUT_CONTRACT}"
     )
 
 
@@ -228,8 +197,3 @@ def build_route_slot_decision_retry_prompt(packet: RouteSlotPacket, feedback: st
         f"enumerated option index, keep the verdict consistent with that pick, include the "
         f"trade-off and runner-up when more than one option exists, and cite every number."
     )
-
-
-def build_route_slot_decision_json_retry_prompt(packet: RouteSlotPacket) -> str:
-    """Retry after a reply that could not be parsed as JSON (prose or a tool call)."""
-    return f"{build_route_slot_decision_prompt(packet)}\n\n{_JSON_RETRY_NOTE}"
