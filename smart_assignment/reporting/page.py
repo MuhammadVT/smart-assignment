@@ -2181,14 +2181,19 @@ def _fe_unavailable_card(cand: CandidateEvaluation) -> str:
     route = cand.route
     failed = ", ".join(CONSTRAINT_LABEL.get(c.name, c.name) for c in cand.failed_constraints)
     detail = cand.failed_constraints[0].detail if cand.failed_constraints else ""
+    # Selectable like the feasible cards (per request), but clearly an unavailable
+    # route -- selecting it just reflects the choice; the label flags it.
+    when = f"{_esc(_fe_day(route.day.value))} · {_esc(route.route_id)} (unavailable)"
     return (
-        f'<article class="fe-opt dim"><div class="fe-opt-head">'
+        f'<article class="fe-opt dim selectable" data-when="{when}" role="button" tabindex="0" '
+        'aria-pressed="false"><div class="fe-opt-head">'
         f'<div class="fe-radio no" aria-hidden="true"></div>'
         f'<div class="fe-opt-title"><div class="when"><b>{_esc(_fe_day(route.day.value))}</b> · '
         f'<span class="nowrap" style="color:var(--muted);font-weight:500">no slot built</span></div>'
         f'<div class="fe-route">Route <b>{_esc(route.route_id)}</b> · {_esc(route.name)}</div></div>'
         f'<span class="fe-rank no"><span class="d"></span>Unavailable</span></div>'
-        f'<div class="fe-unavail"><span class="x">✗ {_esc(failed)}</span> — {_esc(detail)}</div></article>'
+        f'<div class="fe-unavail"><span class="x">✗ {_esc(failed)}</span> — {_esc(detail)}</div>'
+        '<div class="fe-selrow"><span class="fe-selmark"></span></div></article>'
     )
 
 
@@ -2340,7 +2345,7 @@ def _frontend_panel_html(result: RecommendationResult, config: Config) -> str:
     options, infeasible = _fe_options(result)
 
     # --- left: prospect ---
-    sysco = _esc(c.customer_number) if c.customer_number else "— new prospect (none yet)"
+    sysco = _esc(c.customer_number) if c.customer_number else "— new prospect"
     if c.preferred_slot is not None:
         pref = f"{_fe_day(c.preferred_slot.day.value)} · {_win(fmt_window(c.preferred_slot.window))}"
     else:
