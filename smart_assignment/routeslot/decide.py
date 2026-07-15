@@ -21,6 +21,7 @@ decided before/without the LLM:
 
 from __future__ import annotations
 
+import json
 import logging
 from collections import Counter
 from typing import Callable, Optional
@@ -32,8 +33,10 @@ from smart_assignment.routeslot.evidence import (
 )
 from smart_assignment.routeslot.llm import generate_route_slot_choice
 from smart_assignment.routeslot.prompts import (
+    build_route_slot_decision_json_retry_prompt,
     build_route_slot_decision_prompt,
     build_route_slot_decision_retry_prompt,
+    build_route_slot_json_retry_prompt,
     build_route_slot_prompt,
     build_route_slot_retry_prompt,
 )
@@ -85,6 +88,27 @@ def _route_label(route) -> str:
 # A choice_fn turns (config, prompt) into a raw route-slot-choice dict. Injectable
 # so tests drive the grounded path with a fake and no network/credentials.
 ChoiceFn = Callable[[Config, str], dict]
+
+
+def _choice_with_json_retry(fn, config, packet, prompt, json_retry_builder):
+    """Get one parsed route-slot choice, retrying ONCE if the reply wasn't JSON.
+
+    The sage generic agent is conversational: it often answers a decision prompt with
+    prose or a tool call, so ``fn`` raises ``JSONDecodeError`` before there is anything
+    to verify. A single corrective retry that demands JSON-only recovers the common
+    case; a second non-JSON reply propagates and the caller falls back deterministically.
+    Verification failures are handled separately (a parsed-but-wrong choice never
+    reaches here as a JSONDecodeError). An injected test ``choice_fn`` returns a dict
+    and never raises, so this is a straight pass-through under test."""
+    try:
+        raw = fn(config, prompt)
+    except json.JSONDecodeError:
+        logger.warning(
+            "Grounded route-slot reply was not JSON (prose or tool call); retrying once "
+            "demanding a JSON-only reply."
+        )
+        raw = fn(config, json_retry_builder(packet))
+    return parse_route_slot_choice(raw)
 
 
 def decide_route_slot(
@@ -179,7 +203,10 @@ def _grounded_index(
     (None, None, reason) to signal a deterministic fallback."""
     fn = choice_fn or generate_route_slot_choice
     try:
-        choice = parse_route_slot_choice(fn(config, build_route_slot_prompt(packet)))
+        choice = _choice_with_json_retry(
+            fn, config, packet, build_route_slot_prompt(packet),
+            build_route_slot_json_retry_prompt,
+        )
         result = verify_choice(choice, packet)
         if not result.ok:
             retry = build_route_slot_retry_prompt(packet, result.as_feedback())
@@ -263,7 +290,10 @@ def _verified_sample(
     verification failure; None on any mechanical failure (all logged)."""
     fn = choice_fn or generate_route_slot_choice
     try:
-        choice = parse_route_slot_choice(fn(config, build_route_slot_decision_prompt(packet)))
+        choice = _choice_with_json_retry(
+            fn, config, packet, build_route_slot_decision_prompt(packet),
+            build_route_slot_decision_json_retry_prompt,
+        )
         result = verify_choice(choice, packet)
         if not result.ok:
             retry = build_route_slot_decision_retry_prompt(packet, result.as_feedback())
