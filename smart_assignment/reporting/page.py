@@ -380,10 +380,10 @@ _FE_STYLE = """
   .fe-field .v { font-size: 14px; color: var(--ink); font-weight: 600; margin-top: 2px; }
   .fe-field .v.addr { display: flex; gap: 6px; font-weight: 500; }
   .fe-field .v .pin { color: var(--violet); }
-  /* margin-top:auto pins the note to the bottom of the stretched profile card. */
-  .fe-note { margin-top: auto; background: var(--violet-soft); border: 1px solid #ddd2f4; border-radius: 11px;
+  /* The note follows the profile fields; the stretched card's leftover space
+     falls BELOW it (not between the fields and the note). */
+  .fe-note { margin-top: 18px; background: var(--violet-soft); border: 1px solid #ddd2f4; border-radius: 11px;
     padding: 12px 13px; color: #3a2b6b; font-size: 12px; }
-  .fe-note.gap { margin-top: 18px; }
   .fe-note .h { font-weight: 700; display: flex; gap: 6px; align-items: center; margin-bottom: 3px; }
   .fe-main { display: grid; gap: 14px; }
   .fe-banner { border-radius: var(--radius); padding: 13px 16px; font-size: 13px; font-weight: 600; }
@@ -419,6 +419,16 @@ _FE_STYLE = """
   .fe-rank.no  { background: var(--red-soft); color: var(--red); }
   .fe-rank.no .d  { background: var(--red); }
   .fe-tag { font-size: 10.5px; font-weight: 700; color: var(--muted); margin-left: 8px; white-space: nowrap; }
+  /* An explicit, always-visible select affordance so it's obvious each slot is
+     clickable -- the label flips to "Selected" via the .selected class. */
+  .fe-selrow { display: flex; justify-content: flex-end; margin-top: 14px; }
+  .fe-selmark { display: inline-flex; align-items: center; font-size: 12px; font-weight: 700;
+    color: var(--violet); border: 1px solid #c9bcec; background: #fff; border-radius: 8px; padding: 6px 13px; }
+  .fe-selmark::after { content: "Select this slot"; }
+  .fe-opt.selectable:hover .fe-selmark { background: var(--violet-soft); }
+  .fe-opt.selected .fe-selmark { background: var(--violet); color: #fff; border-color: var(--violet); }
+  .fe-opt.selected .fe-selmark::after { content: "\\2713  Selected"; }
+  .fe-opt.selectable:focus-visible { outline: 2px solid var(--violet); outline-offset: 2px; }
   .fe-why { margin: 12px 0 0; font-size: 13.5px; color: #33415c; line-height: 1.5; }
   .fe-tiles { display: grid; grid-template-columns: repeat(var(--fe-cols, 4), minmax(0,1fr)); gap: 10px; margin-top: 14px; }
   .fe-tile { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px 11px; }
@@ -676,16 +686,27 @@ _FRONTEND_JS = """
   var DATA = JSON.parse(document.getElementById('workflow-data').textContent);
   var keys = Object.keys(DATA);
 
-  // Delegated so it survives host.innerHTML swaps: click a selectable slot card
-  // to select it (and update the confirm bar's "Selected: ..." label).
-  host.addEventListener('click', function (ev) {
-    var card = ev.target.closest ? ev.target.closest('.fe-opt.selectable') : null;
+  // Delegated so it survives host.innerHTML swaps: click (or Enter/Space on) a
+  // selectable slot card to select it and update the confirm bar's label.
+  function selectCard(card) {
     if (!card || !host.contains(card)) { return; }
     var cards = host.querySelectorAll('.fe-opt.selectable');
-    for (var i = 0; i < cards.length; i++) { cards[i].classList.remove('selected'); }
+    for (var i = 0; i < cards.length; i++) {
+      cards[i].classList.remove('selected');
+      cards[i].setAttribute('aria-pressed', 'false');
+    }
     card.classList.add('selected');
+    card.setAttribute('aria-pressed', 'true');
     var sel = host.querySelector('#fe-sel');
     if (sel) { sel.textContent = card.getAttribute('data-when') || sel.textContent; }
+  }
+  host.addEventListener('click', function (ev) {
+    selectCard(ev.target.closest ? ev.target.closest('.fe-opt.selectable') : null);
+  });
+  host.addEventListener('keydown', function (ev) {
+    if (ev.key !== 'Enter' && ev.key !== ' ' && ev.key !== 'Spacebar') { return; }
+    var card = ev.target.closest ? ev.target.closest('.fe-opt.selectable') : null;
+    if (card) { ev.preventDefault(); selectCard(card); }
   });
 
   function show(key, btn) {
@@ -2144,13 +2165,15 @@ def _fe_option_card(o: dict, result: RecommendationResult, config: Config, bar: 
             f'{_esc(rec.key_tradeoff)}</div>'
         )
     # Every feasible option is a real, selectable choice (the rep confirms one).
+    selrow = '<div class="fe-selrow"><span class="fe-selmark"></span></div>'
     return (
-        f'<article class="fe-opt selectable{selected}" data-when="{when}">'
+        f'<article class="fe-opt selectable{selected}" data-when="{when}" role="button" tabindex="0" '
+        f'aria-pressed="{"true" if recommended else "false"}">'
         f'<div class="fe-opt-head"><div class="fe-radio" aria-hidden="true"></div>'
         f'<div class="fe-opt-title"><div class="when"><b>{_esc(_fe_day(route.day.value))}</b> · '
         f'<span class="nowrap">{win}</span></div>'
         f'<div class="fe-route">Route <b>{_esc(route.route_id)}</b> · {_esc(route.name)}</div></div>'
-        f'{badge}</div>{_fe_why(o, bar, recommended)}{_fe_tiles(o["factors"], o["cand"])}{tradeoff}</article>'
+        f'{badge}</div>{_fe_why(o, bar, recommended)}{_fe_tiles(o["factors"], o["cand"])}{tradeoff}{selrow}</article>'
     )
 
 
