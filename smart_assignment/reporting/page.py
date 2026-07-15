@@ -406,7 +406,7 @@ _FE_STYLE = """
   .fe-opt-title .nowrap { white-space: nowrap; }
   .fe-opt-title .fe-route { font-size: 12.5px; color: var(--muted); margin-top: 4px; }
   .fe-opt-title .fe-route b { color: #33415c; font-family: var(--mono); font-weight: 600; }
-  /* Quality-rank chip (replaces raw scores): High confidence / Medium / Low feasible. */
+  /* Quality-rank chip (replaces raw scores): High capacity / Moderate / Low. */
   .fe-rank { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 800;
     padding: 5px 11px; border-radius: 999px; white-space: nowrap; }
   .fe-rank .d { width: 7px; height: 7px; border-radius: 50%; }
@@ -2159,12 +2159,12 @@ def _fe_why(o: dict, bar: float, recommended: bool) -> str:
 def _fe_rank(score: float, bar: float) -> tuple:
     """Map a route-slot score to a rep-facing quality rank (chip class, label),
     banded relative to the auto-assign bar. Replaces the raw numeric score as the
-    headline: >= bar+0.20 is High confidence, >= bar Medium feasible, else Low."""
+    headline: >= bar+0.20 is High capacity, >= bar Moderate, else Low."""
     if score >= bar + 0.20:
-        return "hi", "High confidence"
+        return "hi", "High capacity"
     if score >= bar:
-        return "med", "Medium feasible"
-    return "lo", "Low feasible"
+        return "med", "Moderate"
+    return "lo", "Low"
 
 
 def _fe_option_card(o: dict, result: RecommendationResult, config: Config, bar: float) -> str:
