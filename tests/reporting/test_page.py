@@ -137,10 +137,12 @@ def test_frontend_tab_renders_sc_facing_slot_view_per_prospect():
     assert "High confidence · auto-assign" in joined  # a clean auto-assign
     assert "· needs review" in joined  # low-score escalation, proposed
     assert "No serviceable route" in joined  # no-feasible-slot escalation
-    # Slots are selectable (the rep picks one), and the map carries live-map data.
+    # Slots are selectable (the rep picks one); the map draws a cluster polygon
+    # and a mock Depot (OpCo).
     assert 'class="fe-opt selectable' in joined
     assert "data-when=" in joined
-    assert "fe-mapbox" in joined and "data-femap=" in joined
+    assert "<polygon" in joined
+    assert "Depot (OpCo)" in joined
 
 
 def test_scoring_section_shows_real_formulas():
