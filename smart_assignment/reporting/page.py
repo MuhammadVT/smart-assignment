@@ -367,9 +367,11 @@ _FE_STYLE = """
   .fe-status { display: inline-flex; gap: 8px; align-items: center; font-size: 12px; color: var(--muted);
     background: #eef2f8; border: 1px solid var(--line); border-radius: 999px; padding: 6px 13px; margin: 4px 0 22px; }
   .fe-status b { color: var(--navy); font-weight: 700; }
-  .fe-grid { display: grid; grid-template-columns: 280px minmax(0,1fr) 360px; gap: 24px; align-items: start; }
+  /* align-items: stretch so the left profile column matches the (tall) middle
+     column's height; the map column opts out via align-self so it stays compact. */
+  .fe-grid { display: grid; grid-template-columns: 280px minmax(0,1fr) 360px; gap: 24px; align-items: stretch; }
   .fe-side { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
-    box-shadow: var(--shadow); padding: 20px; position: sticky; top: 70px; }
+    box-shadow: var(--shadow); padding: 20px; display: flex; flex-direction: column; }
   .fe-side h3 { margin: 0 0 2px; font-size: 15px; }
   .fe-side .kicker { color: var(--violet); font-weight: 700; font-size: 11px; letter-spacing: .06em;
     text-transform: uppercase; }
@@ -378,8 +380,10 @@ _FE_STYLE = """
   .fe-field .v { font-size: 14px; color: var(--ink); font-weight: 600; margin-top: 2px; }
   .fe-field .v.addr { display: flex; gap: 6px; font-weight: 500; }
   .fe-field .v .pin { color: var(--violet); }
-  .fe-note { margin-top: 18px; background: var(--violet-soft); border: 1px solid #ddd2f4; border-radius: 11px;
+  /* margin-top:auto pins the note to the bottom of the stretched profile card. */
+  .fe-note { margin-top: auto; background: var(--violet-soft); border: 1px solid #ddd2f4; border-radius: 11px;
     padding: 12px 13px; color: #3a2b6b; font-size: 12px; }
+  .fe-note.gap { margin-top: 18px; }
   .fe-note .h { font-weight: 700; display: flex; gap: 6px; align-items: center; margin-bottom: 3px; }
   .fe-main { display: grid; gap: 14px; }
   .fe-banner { border-radius: var(--radius); padding: 13px 16px; font-size: 13px; font-weight: 600; }
@@ -446,18 +450,11 @@ _FE_STYLE = """
     border-radius: 9px; padding: 11px 22px; cursor: pointer; box-shadow: 0 2px 8px rgba(91,63,176,.3); }
   .fe-btn-primary:disabled { opacity: .5; cursor: default; box-shadow: none; }
   .fe-map { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
-    box-shadow: var(--shadow); padding: 16px; position: sticky; top: 70px; }
+    box-shadow: var(--shadow); padding: 16px; align-self: start; position: sticky; top: 70px; }
   .fe-map .mt { font-size: 13px; font-weight: 700; color: var(--navy); }
   .fe-map .ms { font-size: 11px; color: var(--muted); margin-top: 2px; }
-  /* The map area holds a stylized-SVG fallback and (progressively) a live
-     Leaflet map layered on top; whichever is active is shown. */
-  .fe-mapbox { position: relative; margin-top: 8px; border-radius: 10px; overflow: hidden;
+  .fe-map svg { width: 100%; height: auto; display: block; margin-top: 8px; border-radius: 10px;
     border: 1px solid var(--line); }
-  .fe-map svg { width: 100%; height: auto; display: block; }
-  .fe-leaflet { position: absolute; inset: 0; display: none; }
-  .fe-mapbox.live .fe-leaflet { display: block; }
-  .fe-mapbox.live .fe-svg-fallback { visibility: hidden; }
-  .fe-leaflet .leaflet-container { height: 100%; width: 100%; background: #eef2ec; }
   .fe-legend { display: flex; flex-wrap: wrap; gap: 8px 14px; margin-top: 12px; font-size: 11.5px; color: #33415c; }
   .fe-legend span { display: inline-flex; align-items: center; gap: 6px; }
   .fe-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
@@ -666,12 +663,11 @@ _TABS_JS = """
 })();
 """
 
-# Frontend tab: a prospect picker that swaps the server-rendered SC-facing view,
-# makes the slot cards selectable, and (progressively) upgrades the cluster SVG to
-# a live Leaflet/OpenStreetMap map. Reuses the same #workflow-data payload as the
-# simulator (each entry carries a `frontendHtml`), so it can't drift from the
-# pipeline output. The live map is a pure enhancement: if the Leaflet library or
-# the tiles don't load, the stylized SVG stays -- the page still works offline.
+# Frontend tab: a prospect picker that swaps the server-rendered SC-facing view
+# and makes the slot cards selectable. Reuses the same #workflow-data payload as
+# the simulator (each entry carries a `frontendHtml`), so it can't drift from the
+# pipeline output. Selection uses one delegated listener on the container, so it
+# keeps working after the innerHTML is swapped for a different prospect.
 _FRONTEND_JS = """
 (function () {
   var host = document.getElementById('fe-view');
@@ -679,94 +675,30 @@ _FRONTEND_JS = """
   if (!host || !chipsEl) { return; }
   var DATA = JSON.parse(document.getElementById('workflow-data').textContent);
   var keys = Object.keys(DATA);
-  var LEAF = { tried: false, ready: false };
-  var curMap = null;
-  var TILES = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
 
-  function loadLeaflet() {
-    if (LEAF.tried) { return; }
-    LEAF.tried = true;
-    var css = document.createElement('link');
-    css.rel = 'stylesheet';
-    css.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
-    document.head.appendChild(css);
-    var s = document.createElement('script');
-    s.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
-    s.onload = function () { LEAF.ready = true; initMap(); };
-    document.head.appendChild(s);
-  }
-
-  function initMap() {
-    if (!LEAF.ready || !window.L) { return; }
-    var box = host.querySelector('.fe-mapbox');
-    if (!box) { return; }
-    var el = box.querySelector('.fe-leaflet');
-    if (!el || !el.getAttribute('data-femap')) { return; }
-    if (curMap) { try { curMap.remove(); } catch (e) {} curMap = null; }
-    var d;
-    try { d = JSON.parse(el.getAttribute('data-femap')); } catch (e) { return; }
-    box.classList.add('live');           // size the container (SVG keeps its height)
-    el.innerHTML = '';
-    try {
-      var map = L.map(el, { scrollWheelZoom: false });
-      curMap = map;
-      var committed = false, done = false;
-      var timer = setTimeout(revert, 4000);
-      function revert() { if (committed || done) { return; } done = true; clearTimeout(timer);
-        try { map.remove(); } catch (e) {} curMap = null; box.classList.remove('live'); }
-      var tiles = L.tileLayer(TILES, { maxZoom: 19, attribution: '&copy; OpenStreetMap' });
-      tiles.on('load', function () { committed = true; clearTimeout(timer); });
-      tiles.on('tileerror', revert);
-      tiles.addTo(map);
-      var pts = [];
-      if (d.hull && d.hull.length >= 3) {
-        L.polygon(d.hull, { color: '#1a7f37', weight: 2, fillColor: '#1a7f37', fillOpacity: 0.14 }).addTo(map);
-      }
-      (d.stops || []).forEach(function (s) {
-        L.circleMarker(s, { radius: 5, color: '#fff', weight: 1.5, fillColor: '#1257a6', fillOpacity: 1 }).addTo(map);
-        pts.push(s);
-      });
-      if (d.center) {
-        L.marker(d.center, { icon: L.divIcon({ className: '', iconSize: [14, 14],
-          html: '<div style=\\"width:12px;height:12px;background:#0b2e59;border:2px solid #fff;border-radius:2px\\"></div>' }) }).addTo(map);
-        pts.push(d.center);
-      }
-      if (d.customer) {
-        L.circleMarker(d.customer, { radius: 7, color: '#fff', weight: 2, fillColor: '#5b3fb0', fillOpacity: 1 })
-          .bindTooltip('New stop').addTo(map);
-        pts.push(d.customer);
-      }
-      if (pts.length) { map.fitBounds(pts, { padding: [26, 26], maxZoom: 15 }); }
-      else if (d.center) { map.setView(d.center, 13); }
-    } catch (e) { box.classList.remove('live'); }
-  }
-
-  function bindSlots() {
-    var main = host.querySelector('.fe-main');
-    if (!main) { return; }
+  // Delegated so it survives host.innerHTML swaps: click a selectable slot card
+  // to select it (and update the confirm bar's "Selected: ..." label).
+  host.addEventListener('click', function (ev) {
+    var card = ev.target.closest ? ev.target.closest('.fe-opt.selectable') : null;
+    if (!card || !host.contains(card)) { return; }
+    var cards = host.querySelectorAll('.fe-opt.selectable');
+    for (var i = 0; i < cards.length; i++) { cards[i].classList.remove('selected'); }
+    card.classList.add('selected');
     var sel = host.querySelector('#fe-sel');
-    main.querySelectorAll('.fe-opt.selectable').forEach(function (card) {
-      card.addEventListener('click', function () {
-        main.querySelectorAll('.fe-opt.selectable').forEach(function (c) { c.classList.remove('selected'); });
-        card.classList.add('selected');
-        if (sel) { sel.textContent = card.getAttribute('data-when') || sel.textContent; }
-      });
-    });
-  }
+    if (sel) { sel.textContent = card.getAttribute('data-when') || sel.textContent; }
+  });
 
   function show(key, btn) {
     host.innerHTML = DATA[key].frontendHtml || '';
-    chipsEl.querySelectorAll('.chip-btn').forEach(function (x) { x.classList.remove('selected'); });
+    var chips = chipsEl.querySelectorAll('.chip-btn');
+    for (var i = 0; i < chips.length; i++) { chips[i].classList.remove('selected'); }
     if (btn) { btn.classList.add('selected'); }
-    bindSlots();
-    loadLeaflet();
-    initMap();
   }
 
   keys.forEach(function (key, i) {
     var b = document.createElement('button');
     b.className = 'chip-btn';
-    b.innerHTML = DATA[key].name;
+    b.innerHTML = DATA[key].name;  // server-escaped, so decode entities (e.g. &amp;)
     b.title = DATA[key].address;
     b.addEventListener('click', function () { show(key, b); });
     chipsEl.appendChild(b);
@@ -2291,27 +2223,22 @@ def _fe_focus(result: RecommendationResult):
     return focus
 
 
-# Static, generic street-map backdrop (blocks + roads) the polygon overlays -- the
-# offline fallback shown until (and if) the live Leaflet map loads over it.
+# A clean, light map canvas -- a faint grid, no busy blocks -- so the cluster
+# polygon and markers are the focus.
 _FE_MAP_BACKDROP = (
-    '<rect x="0" y="0" width="300" height="200" fill="#eef2ec"/>'
-    '<g fill="#e4ebe1" opacity="0.7">'
-    '<rect x="18" y="16" width="70" height="46" rx="3"/><rect x="120" y="24" width="80" height="40" rx="3"/>'
-    '<rect x="212" y="18" width="64" height="52" rx="3"/><rect x="24" y="92" width="72" height="52" rx="3"/>'
-    '<rect x="118" y="104" width="74" height="60" rx="3"/><rect x="214" y="96" width="66" height="70" rx="3"/></g>'
-    '<g stroke="#d4dbcf" stroke-width="9" fill="none"><line x1="0" y1="78" x2="300" y2="78"/>'
-    '<line x1="0" y1="168" x2="300" y2="168"/><line x1="104" y1="0" x2="104" y2="200"/>'
-    '<line x1="204" y1="0" x2="204" y2="200"/></g>'
-    '<g stroke="#fbfcfa" stroke-width="5.5" fill="none"><line x1="0" y1="78" x2="300" y2="78"/>'
-    '<line x1="0" y1="168" x2="300" y2="168"/><line x1="104" y1="0" x2="104" y2="200"/>'
-    '<line x1="204" y1="0" x2="204" y2="200"/></g>'
+    '<rect x="0" y="0" width="300" height="210" fill="#f7fafc"/>'
+    '<g stroke="#eaeef4" stroke-width="1">'
+    '<line x1="0" y1="52" x2="300" y2="52"/><line x1="0" y1="105" x2="300" y2="105"/>'
+    '<line x1="0" y1="158" x2="300" y2="158"/><line x1="75" y1="0" x2="75" y2="210"/>'
+    '<line x1="150" y1="0" x2="150" y2="210"/><line x1="225" y1="0" x2="225" y2="210"/></g>'
 )
 
 
 def _fe_cluster_svg(result: RecommendationResult) -> str:
-    """A grounded mini cluster view: the focus route's committed stops + the new
-    prospect, projected from the real geocoded coordinates, with a convex-hull
-    polygon drawn over a schematic street-map backdrop."""
+    """A clean, grounded cluster view: the focus route's committed stops + the new
+    prospect (projected from the real geocoded coordinates) inside a convex-hull
+    polygon, plus a mock Depot (the OpCo the truck leaves from) with a dashed
+    delivery line into the cluster."""
     focus = _fe_focus(result)
     cust = result.customer.location
     if focus is None or cust is None:
@@ -2324,55 +2251,47 @@ def _fe_cluster_svg(result: RecommendationResult) -> str:
             f'center (outside the serviceable radius). Routed to a specialist.</div>'
         )
     route = focus.route
-    ctr = (route.service_center.latitude, route.service_center.longitude)
     cpt = (cust.latitude, cust.longitude)
     stops = [(s.location.latitude, s.location.longitude) for s in route.committed_stops if s.location]
-    proj = _project([cpt, ctr] + stops, w=300, h=200, pad=30)
+    # Mock Depot: place it just outside the cluster (lower-left) so a clean dashed
+    # "truck leaves the OpCo" line runs into the delivery cluster. Illustrative,
+    # not a real coordinate (the whole demo runs on mock data).
+    lats = [la for la, _ in stops] + [cpt[0]]
+    lngs = [ln for _, ln in stops] + [cpt[1]]
+    span_lat = (max(lats) - min(lats)) or 0.01
+    span_lng = (max(lngs) - min(lngs)) or 0.01
+    depot = (min(lats) - 0.42 * span_lat, min(lngs) - 0.42 * span_lng)
+    proj = _project([cpt, depot] + stops, w=300, h=210, pad=32)
     hull = _convex_hull(stops + [cpt])
     poly = " ".join("%s,%s" % proj(la, ln) for (la, ln) in hull)
     cx, cy = proj(*cpt)
-    dx, dy = proj(*ctr)
+    dx, dy = proj(*depot)
     dots = "".join(
         '<circle cx="%s" cy="%s" r="5" fill="#1257a6" stroke="#fff" stroke-width="1.5"/>' % proj(la, ln)
         for (la, ln) in stops
     )
     shape = (
-        f'<polygon points="{poly}" fill="rgba(26,127,55,.14)" stroke="#1a7f37" '
+        f'<polygon points="{poly}" fill="rgba(26,127,55,.13)" stroke="#1a7f37" '
         'stroke-width="1.8" stroke-linejoin="round"/>'
         if len(hull) >= 3
         else f'<polyline points="{poly}" fill="none" stroke="#1a7f37" stroke-width="1.8"/>'
     )
+    depot_marker = (
+        f'<path d="M{dx - 7},{dy - 1} L{dx},{dy - 8} L{dx + 7},{dy - 1} Z" fill="#0b2e59"/>'
+        f'<rect x="{dx - 6}" y="{dy - 1}" width="12" height="9" rx="1" fill="#0b2e59"/>'
+        f'<text x="{dx}" y="{dy + 20}" text-anchor="middle" font-size="8.5" font-weight="700" '
+        f'fill="#0b2e59">Depot (OpCo)</text>'
+    )
     return (
-        f'<svg viewBox="0 0 300 200" role="img" '
-        f'aria-label="Route {_esc(route.route_id)} cluster over a schematic map">'
+        f'<svg viewBox="0 0 300 210" role="img" '
+        f'aria-label="Route {_esc(route.route_id)} delivery cluster with depot">'
         f'{_FE_MAP_BACKDROP}{shape}'
-        f'<path d="M{dx},{dy} L{cx},{cy}" stroke="#5b3fb0" stroke-width="1.4" stroke-dasharray="4 3"/>'
-        f'{dots}'
-        f'<rect x="{dx - 6}" y="{dy - 6}" width="12" height="12" rx="2" fill="#0b2e59"/>'
+        f'<path d="M{dx},{dy} L{cx},{cy}" stroke="#8a93a6" stroke-width="1.3" stroke-dasharray="4 3"/>'
+        f'{dots}{depot_marker}'
         f'<circle cx="{cx}" cy="{cy}" r="7" fill="#5b3fb0" stroke="#fff" stroke-width="2"/>'
-        f'<text x="{cx}" y="{cy - 12}" text-anchor="middle" font-size="9" font-weight="700" '
+        f'<text x="{cx}" y="{cy - 12}" text-anchor="middle" font-size="8.5" font-weight="700" '
         f'fill="#5b3fb0">new stop</text></svg>'
     )
-
-
-def _fe_map_data(result: RecommendationResult) -> Optional[dict]:
-    """Leaflet payload for the live street map (progressive enhancement): the focus
-    route's stops + service center + the new prospect + the cluster hull, in
-    lat/lng. None when there's no serviceable route to centre on."""
-    focus = _fe_focus(result)
-    cust = result.customer.location
-    if focus is None or cust is None:
-        return None
-    route = focus.route
-    stops = [(s.location.latitude, s.location.longitude) for s in route.committed_stops if s.location]
-    hull = _convex_hull(stops + [(cust.latitude, cust.longitude)])
-    return {
-        "route": f"{route.route_id} · {route.name}",
-        "customer": [cust.latitude, cust.longitude],
-        "center": [route.service_center.latitude, route.service_center.longitude],
-        "stops": [list(s) for s in stops],
-        "hull": [list(h) for h in hull],
-    }
 
 
 def _fe_geo_miles(rec) -> Optional[str]:
@@ -2471,24 +2390,21 @@ def _frontend_panel_html(result: RecommendationResult, config: Config) -> str:
 
     main = f'<main class="fe-main">{banner}{cards}{escalate}{confirm}</main>'
 
-    # --- right: cluster map (SVG fallback + a live Leaflet layer when it loads) ---
+    # --- right: clean cluster map (SVG: polygon + stops + new prospect + depot) ---
     focus = _fe_focus(result)
     svg = _fe_cluster_svg(result)
     if focus is not None:
         route = focus.route
         miles = _fe_geo_miles(rec)
         near = f"new stop {miles} mi from the cluster" if miles else "new stop near the existing cluster"
-        data_attr = html.escape(json.dumps(_fe_map_data(result)), quote=True)
         map_card = (
             f'<aside class="fe-map"><div class="mt">{_esc(route.route_id)} · cluster view</div>'
-            f'<div class="ms">{_esc(route.name)} · {near}</div>'
-            f'<div class="fe-mapbox"><div class="fe-svg-fallback">{svg}</div>'
-            f'<div class="fe-leaflet" data-femap="{data_attr}"></div></div>'
+            f'<div class="ms">{_esc(route.name)} · {near}</div>{svg}'
             '<div class="fe-legend">'
             '<span><i class="fe-dot" style="background:#1257a6"></i>Existing stops</span>'
             '<span><i class="fe-dot" style="background:#5b3fb0"></i>New prospect</span>'
-            '<span><i class="fe-dot" style="background:#0b2e59;border-radius:2px"></i>Service center</span>'
-            '<span><i class="fe-dot" style="background:rgba(26,127,55,.4);'
+            '<span><i class="fe-dot" style="background:#0b2e59;border-radius:2px"></i>Depot (OpCo)</span>'
+            '<span><i class="fe-dot" style="background:rgba(26,127,55,.35);'
             'border:1px solid #1a7f37;border-radius:2px"></i>Route cluster</span>'
             '</div><div class="fe-gain">▲ Adds density without extending route time</div></aside>'
         )
