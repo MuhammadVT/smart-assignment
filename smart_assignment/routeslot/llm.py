@@ -8,10 +8,13 @@ no network.
 from __future__ import annotations
 
 import json
+import logging
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from smart_assignment.shared.config import Config
+
+logger = logging.getLogger(__name__)
 
 
 def _extract_json(text: str) -> dict:
@@ -35,4 +38,12 @@ def generate_route_slot_choice(config: "Config", prompt: str) -> dict:
     from smart_assignment.shared.config import ROLE_JUDGMENT
     from smart_assignment.shared.llm import generate_text
 
-    return _extract_json(generate_text(config.for_role(ROLE_JUDGMENT), prompt))
+    raw = generate_text(config.for_role(ROLE_JUDGMENT), prompt)
+    try:
+        return _extract_json(raw)
+    except json.JSONDecodeError:
+        # Surface WHAT the backend returned (empty, prose, an error string) so a
+        # parse failure is diagnosable instead of just "JSONDecodeError". Truncated
+        # to keep the log readable; the caller still falls back deterministically.
+        logger.warning("Route-slot LLM reply was not JSON (len=%d): %r", len(raw), raw[:500])
+        raise

@@ -7,10 +7,13 @@ tests drive the resolver with a fake and no network.
 from __future__ import annotations
 
 import json
+import logging
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from smart_assignment.shared.config import Config
+
+logger = logging.getLogger(__name__)
 
 
 def _extract_json(text: str) -> dict:
@@ -34,4 +37,11 @@ def generate_address_choice(config: "Config", prompt: str) -> dict:
     from smart_assignment.shared.config import ROLE_ADDRESS_RESOLVE
     from smart_assignment.shared.llm import generate_text
 
-    return _extract_json(generate_text(config.for_role(ROLE_ADDRESS_RESOLVE), prompt))
+    raw = generate_text(config.for_role(ROLE_ADDRESS_RESOLVE), prompt)
+    try:
+        return _extract_json(raw)
+    except json.JSONDecodeError:
+        # Log the raw reply (empty, prose, an error string) so a parse failure is
+        # diagnosable; the caller still falls back deterministically.
+        logger.warning("Address-resolve LLM reply was not JSON (len=%d): %r", len(raw), raw[:500])
+        raise
