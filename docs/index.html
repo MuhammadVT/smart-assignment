@@ -1041,15 +1041,23 @@
     if (btn) { btn.classList.add('selected'); }
   }
 
-  keys.forEach(function (key, i) {
+  // Default to Woodlands Fresh Cafe (two feasible slots -> best shows off the
+  // slot picker); fall back to the first prospect if it isn't in the set.
+  var defaultKey = keys[0];
+  for (var k = 0; k < keys.length; k++) {
+    if ((DATA[keys[k]].name || '').indexOf('Woodlands') !== -1) { defaultKey = keys[k]; break; }
+  }
+  var defaultBtn = null;
+  keys.forEach(function (key) {
     var b = document.createElement('button');
     b.className = 'chip-btn';
     b.innerHTML = DATA[key].name;  // server-escaped, so decode entities (e.g. &amp;)
     b.title = DATA[key].address;
     b.addEventListener('click', function () { show(key, b); });
     chipsEl.appendChild(b);
-    if (i === 0) { show(key, b); }
+    if (key === defaultKey) { defaultBtn = b; }
   });
+  show(defaultKey, defaultBtn);
 })();
 </script>
 </body>
