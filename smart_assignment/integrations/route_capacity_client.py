@@ -369,6 +369,14 @@ def _mock_routes() -> list[Route]:
                 RouteStop("067-011012", GeoPoint(29.7620, -95.3720), delivery_time_window=(time(7, 0), time(10, 0)), customer_tier="Perks"),
                 RouteStop("067-011013", GeoPoint(29.7480, -95.3810), delivery_time_window=(time(10, 30), time(12, 30)), customer_tier="4"),
                 RouteStop("067-011014", GeoPoint(29.7700, -95.3900), delivery_time_window=(time(10, 30), time(12, 30)), customer_tier="5"),
+                # Additional downtown stops (all >1.6 mi from the demo prospect, so
+                # its nearest-3 -- and thus its slot windows/clustering -- are
+                # unchanged; they just fill out the route's delivery cluster).
+                RouteStop("067-011015", GeoPoint(29.7850, -95.3450), delivery_time_window=(time(7, 0), time(10, 0)), customer_tier="4"),
+                RouteStop("067-011016", GeoPoint(29.7350, -95.3480), delivery_time_window=(time(7, 0), time(10, 0)), customer_tier="Other"),
+                RouteStop("067-011017", GeoPoint(29.7400, -95.3980), delivery_time_window=(time(10, 30), time(12, 30)), customer_tier="5"),
+                RouteStop("067-011018", GeoPoint(29.7880, -95.3950), delivery_time_window=(time(10, 30), time(12, 30)), customer_tier="Perks"),
+                RouteStop("067-011019", GeoPoint(29.7720, -95.3380), delivery_time_window=(time(7, 0), time(10, 0)), customer_tier="Other"),
             ],
         ),
         Route(
@@ -388,6 +396,13 @@ def _mock_routes() -> list[Route]:
                 RouteStop("067-022021", GeoPoint(29.7450, -95.4700), delivery_time_window=(time(7, 30), time(11, 0)), customer_tier="Perks"),
                 RouteStop("067-022022", GeoPoint(29.7600, -95.5200), delivery_time_window=(time(7, 30), time(11, 0)), customer_tier="4"),
                 RouteStop("067-022023", GeoPoint(29.7830, -95.6350), delivery_time_window=(time(12, 0), time(14, 0)), customer_tier="5"),
+                # Additional Energy-Corridor stops clustered around the route's
+                # western service center (far from the demo prospect on the eastern
+                # edge, so its clustering/escalation are unchanged).
+                RouteStop("067-022024", GeoPoint(29.7950, -95.6250), delivery_time_window=(time(7, 30), time(11, 0)), customer_tier="4"),
+                RouteStop("067-022025", GeoPoint(29.7720, -95.6300), delivery_time_window=(time(7, 30), time(11, 0)), customer_tier="5"),
+                RouteStop("067-022026", GeoPoint(29.8050, -95.6050), delivery_time_window=(time(12, 0), time(14, 0)), customer_tier="Perks"),
+                RouteStop("067-022027", GeoPoint(29.7900, -95.6500), delivery_time_window=(time(12, 0), time(14, 0)), customer_tier="Other"),
             ],
         ),
         Route(
@@ -406,6 +421,12 @@ def _mock_routes() -> list[Route]:
             committed_stops=[
                 RouteStop("067-033031", GeoPoint(30.1600, -95.4550), delivery_time_window=(time(8, 0), time(12, 0)), customer_tier="4"),
                 RouteStop("067-033032", GeoPoint(30.1720, -95.4700), delivery_time_window=(time(13, 0), time(15, 0)), customer_tier="Other"),
+                # More Woodlands-area stops so the cluster is representative.
+                RouteStop("067-033033", GeoPoint(30.1780, -95.4460), delivery_time_window=(time(8, 0), time(12, 0)), customer_tier="5"),
+                RouteStop("067-033034", GeoPoint(30.1490, -95.4720), delivery_time_window=(time(8, 0), time(12, 0)), customer_tier="Perks"),
+                RouteStop("067-033035", GeoPoint(30.1850, -95.4820), delivery_time_window=(time(13, 0), time(15, 0)), customer_tier="4"),
+                RouteStop("067-033036", GeoPoint(30.1440, -95.4500), delivery_time_window=(time(8, 0), time(12, 0)), customer_tier="Other"),
+                RouteStop("067-033037", GeoPoint(30.1910, -95.4560), delivery_time_window=(time(13, 0), time(15, 0)), customer_tier="5"),
             ],
         ),
         Route(
@@ -424,6 +445,11 @@ def _mock_routes() -> list[Route]:
             committed_stops=[
                 RouteStop("067-044041", GeoPoint(29.6200, -95.6300), delivery_time_window=(time(6, 0), time(9, 0)), customer_tier="5"),
                 RouteStop("067-044042", GeoPoint(29.6100, -95.6500), delivery_time_window=(time(9, 30), time(12, 0)), customer_tier="Perks"),
+                # More Sugar Land stops for a representative cluster.
+                RouteStop("067-044043", GeoPoint(29.6320, -95.6180), delivery_time_window=(time(6, 0), time(9, 0)), customer_tier="4"),
+                RouteStop("067-044044", GeoPoint(29.5980, -95.6470), delivery_time_window=(time(9, 30), time(12, 0)), customer_tier="5"),
+                RouteStop("067-044045", GeoPoint(29.6380, -95.6520), delivery_time_window=(time(6, 0), time(9, 0)), customer_tier="Other"),
+                RouteStop("067-044046", GeoPoint(29.6030, -95.6220), delivery_time_window=(time(9, 30), time(12, 0)), customer_tier="Perks"),
             ],
         ),
     ]
