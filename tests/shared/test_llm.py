@@ -15,6 +15,9 @@ from unittest.mock import MagicMock, patch
 
 from smart_assignment.shared.config import Config
 from smart_assignment.shared.llm import (
+    _SAGE_ERROR_SENTINEL,
+    _install_sage_response_diagnostic,
+    _maybe_install_sage_response_diagnostic,
     _run_coro_blocking,
     generate_text,
     get_llm,
@@ -252,3 +255,84 @@ def test_generate_text_sage_end_to_end_from_offloaded_tool(monkeypatch):
         return await offload_to_worker_thread(sync_tool_body)
 
     assert asyncio.run(server_turn()) == '{"decision": "RECOMMEND"}'
+
+
+# --- Sage response diagnostic (Plan A: reveal the SDK's masked reply) ---------
+#
+# The Sage SDK replaces the model's real answer with a fixed "Something went wrong"
+# sentinel whenever the agent returns a tool call the grounded path didn't offer.
+# _install_sage_response_diagnostic wraps the extractor to log the TRUE
+# agent_response in that case, without changing the returned value.
+
+
+class _FakeSageResponse:
+    def __init__(self, agent_response):
+        self.data = {"responses": {"agent_response": agent_response}}
+
+
+class _FakeSageLiteLlm:
+    """Mimics the SDK: returns the sentinel for a function call not in `tools`."""
+
+    @staticmethod
+    def _extract_response(response, tools):
+        ar = response.data["responses"]["agent_response"]
+        if isinstance(ar, dict) and ar.get("function_call"):
+            name = ar["function_call"].get("name")
+            if not any(t == name for t in (tools or [])):
+                return {}, _SAGE_ERROR_SENTINEL
+        return {}, (ar.get("text") if isinstance(ar, dict) else ar)
+
+
+def _fresh_fake_sage_cls():
+    # A subclass so each test wraps a pristine, un-wrapped _extract_response.
+    return type("FakeSage", (_FakeSageLiteLlm,), {})
+
+
+def test_diagnostic_logs_the_real_agent_response_on_the_sentinel(caplog):
+    cls = _fresh_fake_sage_cls()
+    _install_sage_response_diagnostic(cls)
+    resp = _FakeSageResponse({"function_call": {"name": "lookup_customer", "args": {}}})
+
+    with caplog.at_level("WARNING"):
+        function_call, text = cls._extract_response(resp, [])
+
+    # The returned value is unchanged (still the sentinel, so the caller falls back)...
+    assert text == _SAGE_ERROR_SENTINEL
+    # ...but the real agent_response is now visible in the logs.
+    assert "lookup_customer" in caplog.text
+    assert "real" in caplog.text.lower()
+
+
+def test_diagnostic_is_silent_on_a_normal_text_reply(caplog):
+    cls = _fresh_fake_sage_cls()
+    _install_sage_response_diagnostic(cls)
+    resp = _FakeSageResponse({"text": '{"chosen_index": 0}'})
+
+    with caplog.at_level("WARNING"):
+        _, text = cls._extract_response(resp, [])
+
+    assert text == '{"chosen_index": 0}'
+    assert caplog.text == ""
+
+
+def test_diagnostic_install_is_idempotent():
+    cls = _fresh_fake_sage_cls()
+    _install_sage_response_diagnostic(cls)
+    wrapped_once = cls._extract_response
+    _install_sage_response_diagnostic(cls)
+    assert cls._extract_response is wrapped_once  # not double-wrapped
+
+
+def test_maybe_install_is_a_noop_when_flag_off(monkeypatch):
+    # Flag off -> must not even try to import the SDK.
+    def _boom():
+        raise AssertionError("should not import the SDK when the flag is off")
+
+    monkeypatch.setattr("builtins.__import__", _boom, raising=False)
+    # Should simply return without raising.
+    _maybe_install_sage_response_diagnostic(Config(debug_sage_raw_response=False))
+
+
+def test_maybe_install_survives_missing_sdk(monkeypatch):
+    # Flag on but the Sage SDK isn't importable (this offline suite) -> no crash.
+    _maybe_install_sage_response_diagnostic(Config(debug_sage_raw_response=True))
