@@ -133,9 +133,14 @@ def test_frontend_tab_renders_sc_facing_slot_view_per_prospect():
         assert f"{c.order_quantity_cases} cases" in fe
 
     joined = " ".join(payload[c.lookup_key]["frontendHtml"] for c in SAMPLE_CUSTOMERS)
-    assert "Recommended · auto-assign" in joined  # a clean auto-assign
-    assert "Proposed · needs review" in joined  # low-score escalation
+    # Raw scores are shown as quality ranks; the recommended one auto-assigns.
+    assert "High confidence · auto-assign" in joined  # a clean auto-assign
+    assert "· needs review" in joined  # low-score escalation, proposed
     assert "No serviceable route" in joined  # no-feasible-slot escalation
+    # Slots are selectable (the rep picks one), and the map carries live-map data.
+    assert 'class="fe-opt selectable' in joined
+    assert "data-when=" in joined
+    assert "fe-mapbox" in joined and "data-femap=" in joined
 
 
 def test_scoring_section_shows_real_formulas():
