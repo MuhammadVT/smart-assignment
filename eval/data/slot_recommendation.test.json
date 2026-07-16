@@ -1,19 +1,189 @@
 {
-  "eval_set_id": "slot_recommendation_basic",
-  "name": "Slot recommendation: basic feasible-option ranking",
-  "description": "[PLACEHOLDER] Golden dataset for the slot_recommendation workflow. Replace eval_cases below with real customer profiles + mocked route data + the known-good expected recommendation, captured via the ADK Web UI's trajectory recording feature once real route data is available. See README.md and https://google.github.io/adk-docs/evaluate/ for the full workflow.",
+  "eval_set_id": "slot_recommendation_golden",
+  "name": "Slot recommendation: agent trajectory over the mock fixtures",
+  "description": "Golden dataset for the conversational slot-recommendation agent, built deterministically from smart_assignment.mock_customers by eval/build_evalset.py. Phase 2a scores TOOL TRAJECTORY only (see eval/data/test_config.json); the expected final responses are captured with a live backend in Phase 2b. Regenerate with:  python3 -m eval.build_evalset",
   "eval_cases": [
     {
-      "eval_case_id": "placeholder_case_1",
-      "comment": "[ASSUMPTION] Not a real eval case yet -- no real route/capacity data was available to build a golden dataset against. This file exists to establish the expected eval/ structure; populate before relying on automated regression detection.",
-      "prompt": {
-        "role": "user",
-        "parts": [
-          {
-            "text": "New customer: Riverside Diner, 150 cases/week, mixed temp zone, prefers Tue/Wed mornings."
+      "eval_id": "bayou_city_bistro_recommend",
+      "conversation": [
+        {
+          "invocation_id": "bayou_city_bistro_recommend",
+          "user_content": {
+            "role": "user",
+            "parts": [
+              {
+                "text": "New prospect Bayou City Bistro at 1200 McKinney St, Houston, TX 77010. About 90 cases a week. They'd like Tuesday mornings, 7 to 10am."
+              }
+            ]
+          },
+          "final_response": null,
+          "intermediate_data": {
+            "tool_uses": [
+              {
+                "name": "intake_customer",
+                "args": {
+                  "address": "1200 McKinney St, Houston, TX 77010",
+                  "order_quantity_cases": 90,
+                  "name": "Bayou City Bistro",
+                  "preferred_day": "TUE",
+                  "preferred_window_start": "07:00",
+                  "preferred_window_end": "10:00"
+                }
+              },
+              {
+                "name": "find_candidate_routes",
+                "args": {}
+              },
+              {
+                "name": "evaluate_and_score_routes",
+                "args": {}
+              },
+              {
+                "name": "recommend_or_escalate",
+                "args": {}
+              }
+            ]
           }
-        ]
-      }
+        }
+      ],
+      "session_input": null,
+      "creation_timestamp": 0.0
+    },
+    {
+      "eval_id": "galleria_grill_escalate_low_score",
+      "conversation": [
+        {
+          "invocation_id": "galleria_grill_escalate_low_score",
+          "user_content": {
+            "role": "user",
+            "parts": [
+              {
+                "text": "Set up Galleria Grill & Catering, 5085 Westheimer Rd, Houston, TX 77056. Large catering account, 400 cases. No particular day or time preference."
+              }
+            ]
+          },
+          "final_response": null,
+          "intermediate_data": {
+            "tool_uses": [
+              {
+                "name": "intake_customer",
+                "args": {
+                  "address": "5085 Westheimer Rd, Houston, TX 77056",
+                  "order_quantity_cases": 400,
+                  "name": "Galleria Grill & Catering"
+                }
+              },
+              {
+                "name": "find_candidate_routes",
+                "args": {}
+              },
+              {
+                "name": "evaluate_and_score_routes",
+                "args": {}
+              },
+              {
+                "name": "recommend_or_escalate",
+                "args": {}
+              }
+            ]
+          }
+        }
+      ],
+      "session_input": null,
+      "creation_timestamp": 0.0
+    },
+    {
+      "eval_id": "katy_prairie_escalate_out_of_range",
+      "conversation": [
+        {
+          "invocation_id": "katy_prairie_escalate_out_of_range",
+          "user_content": {
+            "role": "user",
+            "parts": [
+              {
+                "text": "New customer Katy Prairie Steakhouse, 5000 Katy Mills Cir, Katy, TX 77494. 260 cases. Prefers Tuesday early morning, 6 to 8am."
+              }
+            ]
+          },
+          "final_response": null,
+          "intermediate_data": {
+            "tool_uses": [
+              {
+                "name": "intake_customer",
+                "args": {
+                  "address": "5000 Katy Mills Cir, Katy, TX 77494",
+                  "order_quantity_cases": 260,
+                  "name": "Katy Prairie Steakhouse",
+                  "preferred_day": "TUE",
+                  "preferred_window_start": "06:00",
+                  "preferred_window_end": "08:00"
+                }
+              },
+              {
+                "name": "find_candidate_routes",
+                "args": {}
+              },
+              {
+                "name": "evaluate_and_score_routes",
+                "args": {}
+              },
+              {
+                "name": "recommend_or_escalate",
+                "args": {}
+              }
+            ]
+          }
+        }
+      ],
+      "session_input": null,
+      "creation_timestamp": 0.0
+    },
+    {
+      "eval_id": "woodlands_fresh_cafe_recommend",
+      "conversation": [
+        {
+          "invocation_id": "woodlands_fresh_cafe_recommend",
+          "user_content": {
+            "role": "user",
+            "parts": [
+              {
+                "text": "Onboard Woodlands Fresh Cafe at 1201 Lake Woodlands Dr, The Woodlands, TX 77380. 150 cases. Thursday late morning, 9am to noon works."
+              }
+            ]
+          },
+          "final_response": null,
+          "intermediate_data": {
+            "tool_uses": [
+              {
+                "name": "intake_customer",
+                "args": {
+                  "address": "1201 Lake Woodlands Dr, The Woodlands, TX 77380",
+                  "order_quantity_cases": 150,
+                  "name": "Woodlands Fresh Cafe",
+                  "preferred_day": "THU",
+                  "preferred_window_start": "09:00",
+                  "preferred_window_end": "12:00"
+                }
+              },
+              {
+                "name": "find_candidate_routes",
+                "args": {}
+              },
+              {
+                "name": "evaluate_and_score_routes",
+                "args": {}
+              },
+              {
+                "name": "recommend_or_escalate",
+                "args": {}
+              }
+            ]
+          }
+        }
+      ],
+      "session_input": null,
+      "creation_timestamp": 0.0
     }
-  ]
+  ],
+  "creation_timestamp": 0.0
 }
