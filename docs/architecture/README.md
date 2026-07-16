@@ -477,6 +477,77 @@ No image file is included in this package — generate one (e.g. via the
 ADK Web UI's trace view, or any diagramming tool) and drop it here as
 `smart_assignment.png` once available.
 
+## Tracing & observability (`shared/tracing.py`, opt-in)
+
+The grounded decision layers already produce an auditable *record* of every
+choice (evidence packet in, cited choice out, verifier verdict, fallback
+reason). This layer makes that record *observable at runtime* by emitting an
+OpenTelemetry span per LLM call, exportable to a self-hosted trace backend
+(the chosen stack is a self-hosted Langfuse instance) so a human can inspect
+production decisions in a UI instead of only in logs.
+
+It is deliberately the thinnest possible seam, and holds the repo's standard
+guarantees:
+
+- **Opt-in, default off.** Gated by `Config.use_tracing` (env
+  `SMART_ASSIGNMENT_USE_TRACING`). With it off, no OpenTelemetry SDK is imported
+  and behavior is byte-identical to before.
+- **Never worse than the baseline.** Tracing *observes*; it never changes a value
+  a decision layer acts on. Every failure path — SDK not installed, no exporter
+  configured, backend unreachable, span machinery erroring — degrades to a silent
+  no-op (`llm_span` yields a `_NoopSpan`), so a broken trace backend can never
+  break a decision. A caller exception still propagates unchanged (and is recorded
+  on the span when one is active).
+- **Credential-free import.** The SDK, exporter, and instrumentor are imported
+  lazily inside a once-per-process `_configure`, so importing the package needs
+  neither the `observability` extra nor any credentials (the same discipline as
+  the lazy Sage/backend construction elsewhere).
+
+**Two span sources, one connected trace.** Setup is `configure_tracing(config)`
+(idempotent, once per process), called from `_build_root_agent` (`agent.py`)
+*before* the agent runs — the one entry point every agent-serving surface
+(`adk web`/`adk deploy`, the web app) shares — and lazily by `llm_span` for
+non-agent paths. It installs a **global** `TracerProvider` + OTLP exporter and
+the Google ADK OpenTelemetry instrumentor, so both span sources land in one
+trace tree:
+
+```
+configure_tracing(config)                          [shared/tracing.py]
+  ├─ global TracerProvider + OTLP exporter   (non-clobbering: attaches to an
+  │                                            existing provider if one is set)
+  └─ GoogleADKInstrumentor().instrument()    (agent turns + tool calls)
+
+root_agent turn  ─►  tool call (recommend_or_escalate, …)   [ADK spans]
+                        └─ generate_text(config, prompt, role)     [shared/llm.py]
+                             └─ llm_span(...)  backend/model/role/prompt_chars…
+                                (nests UNDER the ADK tool span)    [our span]
+        · flag off -> nullcontext(_NoopSpan)   (no import, no-op)
+```
+
+**Why a global provider (the Phase 0.5 promotion).** Phase 0 deliberately used a
+*local* `TracerProvider` to avoid claiming the process-global one before the ADK
+instrumentor existed. ADK's built-in tracing emits against the **global**
+provider, so capturing agent/tool spans *and* connecting them to our
+grounded-call spans requires sharing it. `_install_provider` claims the global
+provider when none is set, and otherwise **attaches its exporter to whatever
+provider is already there** rather than replacing it (OpenTelemetry forbids
+re-setting a real provider, and clobbering would drop the other side's spans) —
+robust in a deployment that already configured its own tracing.
+
+**Generic spans only, by design.** It records backend, model, an optional
+`role` label, prompt/response sizes, latency, and error status — but **not**
+prompt or response text, which can carry customer PII (an evidence packet
+contains an address). Richer, per-layer payloads are an intentional per-call-site
+decision for a later phase, not a global default here.
+
+**Exporter is vendor-neutral.** The target comes from the environment, not from
+code: standard `OTEL_EXPORTER_OTLP_ENDPOINT` (+ `OTEL_EXPORTER_OTLP_HEADERS`)
+takes precedence, keeping the backend swappable; as a convenience, the
+`LANGFUSE_HOST`/`LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` trio is turned into an
+OTLP endpoint + Basic-auth header (Langfuse ingests OpenTelemetry directly). So
+pointing dev at `localhost:3000` vs. prod at a Cloud Run instance is pure config.
+Install with the `observability` extra (`pip install -e ".[observability]"`).
+
 ## Step 5, two ways: weighted-sum vs. grounded LLM judgment
 
 Step 5 (recommend-or-escalate) has two interchangeable *decision strategies*
