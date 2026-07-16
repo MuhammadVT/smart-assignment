@@ -2,11 +2,13 @@
 Generate the GitHub Pages overview site (``docs/index.html``) directly from
 live workflow output, so the content can never drift from the code.
 
-The page is a three-tab single-page site:
+The page is a four-tab single-page site:
   1. Overview     — what the agent does, the steps, the rules, the outcomes.
   2. Architecture — the agentic workflow diagram + how the pieces fit.
   3. Simulator    — how scoring is computed (with the real formulas), plus an
                     interactive runner and the per-customer results.
+  4. Frontend     — the Salesforce-embedded "Choose a delivery slot" view a sales
+                    consultant confirms (a prospect picker over the same output).
 
 All example/interactive data is precomputed here from the real pipeline
 (``mock_customers.SAMPLE_CUSTOMERS``) and embedded as JSON, so the static site
@@ -20,6 +22,7 @@ from __future__ import annotations
 
 import html
 import json
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -351,6 +354,133 @@ _STYLE = """
   }
 """
 
+# Styles for the Frontend tab -- the Salesforce-embedded "Choose a delivery slot"
+# view a sales consultant confirms. Kept separate from _STYLE for readability;
+# concatenated into the same <style>. Uses the site's tokens so it reads native,
+# with violet as the agent accent (matches the LLM colour used elsewhere).
+_FE_STYLE = """
+  /* The Frontend tab breaks out of the site's 1080px .wrap to a wider container
+     so the three columns aren't cramped. */
+  .fe-wrap { max-width: 1320px; margin: 0 auto; padding: 0 24px; }
+  .fe-eyebrow { color: var(--violet); font-weight: 800; font-size: 12px; letter-spacing: .12em;
+    text-transform: uppercase; }
+  .fe-status { display: inline-flex; gap: 8px; align-items: center; font-size: 12px; color: var(--muted);
+    background: #eef2f8; border: 1px solid var(--line); border-radius: 999px; padding: 6px 13px; margin: 4px 0 22px; }
+  .fe-status b { color: var(--navy); font-weight: 700; }
+  /* align-items: stretch so the left profile column matches the (tall) middle
+     column's height; the map column opts out via align-self so it stays compact. */
+  .fe-grid { display: grid; grid-template-columns: 280px minmax(0,1fr) 360px; gap: 24px; align-items: stretch; }
+  .fe-side { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+    box-shadow: var(--shadow); padding: 20px; display: flex; flex-direction: column; }
+  .fe-side h3 { margin: 0 0 2px; font-size: 15px; }
+  .fe-side .kicker { color: var(--violet); font-weight: 700; font-size: 11px; letter-spacing: .06em;
+    text-transform: uppercase; }
+  .fe-field { margin-top: 14px; }
+  .fe-field .l { font-size: 11px; color: var(--muted); font-weight: 600; letter-spacing: .02em; }
+  .fe-field .v { font-size: 14px; color: var(--ink); font-weight: 600; margin-top: 2px; }
+  .fe-field .v.addr { display: flex; gap: 6px; font-weight: 500; }
+  .fe-field .v .pin { color: var(--violet); }
+  /* The note follows the profile fields; the stretched card's leftover space
+     falls BELOW it (not between the fields and the note). */
+  .fe-note { margin-top: 18px; background: var(--violet-soft); border: 1px solid #ddd2f4; border-radius: 11px;
+    padding: 12px 13px; color: #3a2b6b; font-size: 12px; }
+  .fe-note .h { font-weight: 700; display: flex; gap: 6px; align-items: center; margin-bottom: 3px; }
+  .fe-main { display: grid; gap: 14px; }
+  .fe-banner { border-radius: var(--radius); padding: 13px 16px; font-size: 13px; font-weight: 600; }
+  .fe-banner.warn { background: var(--amber-soft); border: 1px solid #f2e2bd; color: #7a5c12; }
+  .fe-banner.stop { background: var(--red-soft); border: 1px solid #f2cfc9; color: #7a2b22; }
+  .fe-opt { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+    box-shadow: var(--shadow); padding: 18px 20px; transition: box-shadow .15s, border-color .15s; }
+  .fe-opt.selectable { cursor: pointer; }
+  .fe-opt.selectable:hover { border-color: #c9bcec; }
+  .fe-opt.selected { border: 2px solid var(--violet); box-shadow: 0 0 0 4px rgba(91,63,176,.10), var(--shadow); }
+  .fe-opt.dim { opacity: .92; }
+  .fe-opt-head { display: flex; align-items: flex-start; gap: 12px; }
+  .fe-radio { width: 20px; height: 20px; border-radius: 50%; border: 2px solid #cdd6e4; flex: none; margin-top: 2px; }
+  .fe-opt.selected .fe-radio { border-color: var(--violet);
+    background: radial-gradient(circle at center, var(--violet) 0 6px, #fff 7px 20px); }
+  .fe-radio.no { border-color: #e0b6b0; }
+  .fe-opt-title { flex: 1; min-width: 0; }
+  .fe-opt-title .when { font-size: 16.5px; font-weight: 700; color: var(--ink); }
+  .fe-opt-title .when b { color: var(--navy); }
+  .fe-opt-title .nowrap { white-space: nowrap; }
+  .fe-opt-title .fe-route { font-size: 12.5px; color: var(--muted); margin-top: 4px; }
+  .fe-opt-title .fe-route b { color: #33415c; font-family: var(--mono); font-weight: 600; }
+  /* Quality-rank chip (replaces raw scores): High capacity / Moderate / Low. */
+  .fe-rank { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 800;
+    padding: 5px 11px; border-radius: 999px; white-space: nowrap; }
+  .fe-rank .d { width: 7px; height: 7px; border-radius: 50%; }
+  .fe-rank.hi  { background: var(--green-soft); color: var(--green); }
+  .fe-rank.hi .d  { background: var(--green); }
+  .fe-rank.med { background: var(--blue-soft); color: var(--blue); }
+  .fe-rank.med .d { background: var(--blue); }
+  .fe-rank.lo  { background: var(--amber-soft); color: var(--amber); }
+  .fe-rank.lo .d  { background: var(--amber); }
+  .fe-rank.no  { background: var(--red-soft); color: var(--red); }
+  .fe-rank.no .d  { background: var(--red); }
+  .fe-tag { font-size: 10.5px; font-weight: 700; color: var(--muted); margin-left: 8px; white-space: nowrap; }
+  /* An explicit, always-visible select affordance so it's obvious each slot is
+     clickable -- the label flips to "Selected" via the .selected class. */
+  .fe-selrow { display: flex; justify-content: flex-end; margin-top: 14px; }
+  .fe-selmark { display: inline-flex; align-items: center; font-size: 12px; font-weight: 700;
+    color: var(--violet); border: 1px solid #c9bcec; background: #fff; border-radius: 8px; padding: 6px 13px; }
+  .fe-selmark::after { content: "Select this slot"; }
+  .fe-opt.selectable:hover .fe-selmark { background: var(--violet-soft); }
+  .fe-opt.selected .fe-selmark { background: var(--violet); color: #fff; border-color: var(--violet); }
+  .fe-opt.selected .fe-selmark::after { content: "\\2713  Selected"; }
+  .fe-opt.selectable:focus-visible { outline: 2px solid var(--violet); outline-offset: 2px; }
+  .fe-why { margin: 12px 0 0; font-size: 13.5px; color: #33415c; line-height: 1.5; }
+  .fe-tiles { display: grid; grid-template-columns: repeat(var(--fe-cols, 4), minmax(0,1fr)); gap: 10px; margin-top: 14px; }
+  .fe-tile { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px 11px; }
+  .fe-tile .tl { font-size: 10.5px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .03em; }
+  .fe-tile .tv { font-size: 15px; font-weight: 700; color: var(--navy); margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .fe-tile .ts { font-size: 10.5px; color: var(--muted); margin-top: 3px; }
+  .fe-tile .fs { display: inline-block; font-family: var(--mono); font-size: 10px; font-weight: 700; color: var(--violet);
+    background: var(--violet-soft); border-radius: 5px; padding: 1px 5px; margin-top: 5px; }
+  .fe-tile.miss .tv { color: var(--amber); }
+  .fe-unavail { margin-top: 10px; font-size: 13px; color: #7a2b22; background: var(--red-soft);
+    border: 1px solid #f2cfc9; border-radius: 9px; padding: 10px 12px; }
+  .fe-unavail .x { color: var(--red); font-weight: 800; }
+  .fe-tradeoff { margin-top: 12px; font-size: 12.5px; color: #5b4a1f; background: #fff8ec;
+    border: 1px solid #f2e2bd; border-radius: 9px; padding: 9px 12px; }
+  .fe-tradeoff b { color: #7a5c12; }
+  .fe-escalate { background: var(--violet-soft); border: 1px solid #ddd2f4; border-radius: var(--radius); padding: 16px 18px; }
+  .fe-escalate h4 { margin: 0 0 4px; font-size: 14px; color: #3a2b6b; }
+  .fe-escalate p { margin: 0 0 12px; font-size: 12.5px; color: #4a3b7b; }
+  .fe-escalate button { background: #fff; border: 1px solid #c9bcec; color: var(--violet); font-weight: 700;
+    font-size: 13px; border-radius: 9px; padding: 9px 15px; cursor: pointer; }
+  .fe-confirm { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; justify-content: space-between;
+    background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 16px 18px; }
+  .fe-confirm .log { font-size: 12.5px; color: var(--muted); max-width: 480px; }
+  .fe-confirm .log b { color: var(--navy); }
+  .fe-confirm .btns { display: flex; gap: 10px; }
+  .fe-btn-ghost { background: #fff; border: 1px solid var(--line); color: var(--ink); font-weight: 700;
+    font-size: 14px; border-radius: 9px; padding: 10px 18px; cursor: pointer; }
+  .fe-btn-primary { background: var(--violet); border: 0; color: #fff; font-weight: 700; font-size: 14px;
+    border-radius: 9px; padding: 11px 22px; cursor: pointer; box-shadow: 0 2px 8px rgba(91,63,176,.3); }
+  .fe-btn-primary:disabled { opacity: .5; cursor: default; box-shadow: none; }
+  .fe-map { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+    box-shadow: var(--shadow); padding: 16px; align-self: start; position: sticky; top: 70px; }
+  .fe-map .mt { font-size: 13px; font-weight: 700; color: var(--navy); }
+  .fe-map .ms { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .fe-map svg { width: 100%; height: auto; display: block; margin-top: 8px; border-radius: 10px;
+    border: 1px solid var(--line); }
+  .fe-legend { display: flex; flex-wrap: wrap; gap: 8px 14px; margin-top: 12px; font-size: 11.5px; color: #33415c; }
+  .fe-legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .fe-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+  .fe-gain { margin-top: 10px; font-size: 12px; color: var(--green); font-weight: 700; }
+  .fe-map .nomap { font-size: 12.5px; color: var(--muted); margin-top: 10px; line-height: 1.5; }
+  .fe-picker { margin: 0 0 20px; padding: 14px 16px; border: 1px dashed #c7d6ea; border-radius: 11px; background: #fbfcfe; }
+  .fe-picker .picker-label { display: block; font-size: 12.5px; color: var(--muted); font-weight: 600; margin-bottom: 10px; }
+  @media (max-width: 1040px) {
+    .fe-grid { grid-template-columns: 1fr; }
+    .fe-side, .fe-map { position: static; }
+    /* Set the property directly (not the --fe-cols var) so it wins over the
+       inline var each tile row carries. */
+    .fe-tiles { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  }
+"""
+
 # Static architecture diagram (SVG). No curly braces -> safe inside the f-string.
 _ARCH_SVG = """
 <svg viewBox="0 0 980 668" role="img" aria-label="Agentic workflow architecture diagram">
@@ -518,7 +648,7 @@ _TABS_JS = """
 (function () {
   var btns = document.querySelectorAll('.tabbtn');
   var panels = document.querySelectorAll('.tabpanel');
-  var valid = { overview: 1, architecture: 1, simulator: 1 };
+  var valid = { overview: 1, architecture: 1, simulator: 1, frontend: 1 };
   function activate(name, scroll) {
     btns.forEach(function (b) {
       var on = b.getAttribute('data-tab') === name;
@@ -540,6 +670,83 @@ _TABS_JS = """
   });
   var initial = (location.hash || '').replace('#', '');
   if (valid[initial]) { activate(initial, false); }
+})();
+"""
+
+# Frontend tab: a prospect picker that swaps the server-rendered SC-facing view
+# and makes the slot cards selectable. Reuses the same #workflow-data payload as
+# the simulator (each entry carries a `frontendHtml`), so it can't drift from the
+# pipeline output. Selection uses one delegated listener on the container, so it
+# keeps working after the innerHTML is swapped for a different prospect.
+_FRONTEND_JS = """
+(function () {
+  var host = document.getElementById('fe-view');
+  var chipsEl = document.getElementById('fe-chips');
+  if (!host || !chipsEl) { return; }
+  var DATA = JSON.parse(document.getElementById('workflow-data').textContent);
+  var keys = Object.keys(DATA);
+
+  // Delegated so it survives host.innerHTML swaps: click (or Enter/Space on) a
+  // selectable slot card to select it and update the confirm bar's label.
+  function selectCard(card) {
+    if (!card || !host.contains(card)) { return; }
+    var cards = host.querySelectorAll('.fe-opt.selectable');
+    for (var i = 0; i < cards.length; i++) {
+      cards[i].classList.remove('selected');
+      cards[i].setAttribute('aria-pressed', 'false');
+    }
+    card.classList.add('selected');
+    card.setAttribute('aria-pressed', 'true');
+    var sel = host.querySelector('#fe-sel');
+    if (sel) { sel.textContent = card.getAttribute('data-when') || sel.textContent; }
+    // Switch the cluster map to the selected slot's route (when it has its own body).
+    var rid = card.getAttribute('data-route');
+    var bodies = host.querySelectorAll('.fe-mapbody');
+    if (rid && bodies.length) {
+      var match = false;
+      for (var j = 0; j < bodies.length; j++) {
+        if (bodies[j].getAttribute('data-route') === rid) { match = true; }
+      }
+      if (match) {
+        for (var m = 0; m < bodies.length; m++) {
+          bodies[m].hidden = (bodies[m].getAttribute('data-route') !== rid);
+        }
+      }
+    }
+  }
+  host.addEventListener('click', function (ev) {
+    selectCard(ev.target.closest ? ev.target.closest('.fe-opt.selectable') : null);
+  });
+  host.addEventListener('keydown', function (ev) {
+    if (ev.key !== 'Enter' && ev.key !== ' ' && ev.key !== 'Spacebar') { return; }
+    var card = ev.target.closest ? ev.target.closest('.fe-opt.selectable') : null;
+    if (card) { ev.preventDefault(); selectCard(card); }
+  });
+
+  function show(key, btn) {
+    host.innerHTML = DATA[key].frontendHtml || '';
+    var chips = chipsEl.querySelectorAll('.chip-btn');
+    for (var i = 0; i < chips.length; i++) { chips[i].classList.remove('selected'); }
+    if (btn) { btn.classList.add('selected'); }
+  }
+
+  // Default to Woodlands Fresh Cafe (two feasible slots -> best shows off the
+  // slot picker); fall back to the first prospect if it isn't in the set.
+  var defaultKey = keys[0];
+  for (var k = 0; k < keys.length; k++) {
+    if ((DATA[keys[k]].name || '').indexOf('Woodlands') !== -1) { defaultKey = keys[k]; break; }
+  }
+  var defaultBtn = null;
+  keys.forEach(function (key) {
+    var b = document.createElement('button');
+    b.className = 'chip-btn';
+    b.innerHTML = DATA[key].name;  // server-escaped, so decode entities (e.g. &amp;)
+    b.title = DATA[key].address;
+    b.addEventListener('click', function () { show(key, b); });
+    chipsEl.appendChild(b);
+    if (key === defaultKey) { defaultBtn = b; }
+  });
+  show(defaultKey, defaultBtn);
 })();
 """
 
@@ -1824,6 +2031,423 @@ def build_map_data(result: RecommendationResult, config: Optional[Config] = None
     }
 
 
+# ---------------------------------------------------------------------------
+# Frontend tab: the Salesforce-embedded "Choose a delivery slot" view a sales
+# consultant confirms. Rendered per prospect from the same RecommendationResult
+# the rest of the page uses, so it can never drift from the pipeline output. The
+# rep only ever CONFIRMS one of the agent's enumerated options -- no free-text
+# entry -- which is the frontend face of the "select from a valid set" guarantee.
+# ---------------------------------------------------------------------------
+
+_FE_FACTOR_TILE = {
+    FACTOR_GEO_CLUSTERING: "Geo clustering",
+    FACTOR_CAPACITY_BUFFER: "Capacity after add",
+    FACTOR_WINDOW_MATCH: "Slot match",
+    FACTOR_SLOT_AVAILABILITY: "Slot openness",
+}
+_DAY_FULL = {
+    "MON": "Monday", "TUE": "Tuesday", "WED": "Wednesday", "THU": "Thursday",
+    "FRI": "Friday", "SAT": "Saturday", "SUN": "Sunday",
+}
+
+
+def _fe_day(day_value: str) -> str:
+    return _DAY_FULL.get(day_value, day_value)
+
+
+def _fe_options(result: RecommendationResult):
+    """Flatten the feasible candidates into ranked (route, slot) options plus the
+    infeasible routes. Works on the route-slot path (per-slot scores) and the
+    route-only path (one option per route from its chosen window)."""
+    rec = result.recommendation
+    feasible = list(result.ranked_feasible)
+    options = []
+    if any(e.scored_slots for e in feasible):
+        for e in feasible:
+            for ss in e.scored_slots:
+                options.append(
+                    {"cand": e, "window": ss.slot.window, "score": ss.total_score,
+                     "factors": ss.factor_scores}
+                )
+    else:
+        for e in feasible:
+            if e.chosen_window:
+                options.append(
+                    {"cand": e, "window": e.chosen_window, "score": e.total_score,
+                     "factors": e.factor_scores}
+                )
+    options.sort(key=lambda o: o["score"], reverse=True)
+    for o in options:
+        o["recommended"] = (
+            o["cand"].route.route_id == rec.recommended_route_id
+            and fmt_window(o["window"]) == (rec.recommended_window or "")
+        )
+    infeasible = [e for e in result.candidates_considered if not e.feasible]
+    return options, infeasible
+
+
+def _fe_tile(label: str, big: str, sub: str, score: float, miss: bool = False) -> str:
+    cls = "fe-tile miss" if miss else "fe-tile"
+    return (
+        f'<div class="{cls}"><div class="tl">{_esc(label)}</div>'
+        f'<div class="tv">{_esc(big)}</div><div class="ts">{_esc(sub)}</div>'
+        f'<span class="fs">{score:.2f}</span></div>'
+    )
+
+
+def _fe_tiles(factors, cand: CandidateEvaluation) -> str:
+    """One metric tile per scored factor, in canonical order: the concrete
+    operational value the rep cares about (miles, % full, minutes matched, stops
+    overlapping) plus the 0-1 factor score. Concrete numbers come from the model
+    (utilization/headroom) or the factor's own grounded detail string."""
+    by = {f.name: f for f in factors}
+    tiles = []
+    for name in _RS_FACTOR_ORDER:
+        f = by.get(name)
+        if f is None:
+            continue
+        label = _FE_FACTOR_TILE.get(name, name)
+        d = f.detail or ""
+        if name == FACTOR_GEO_CLUSTERING:
+            m = re.search(r"avg\s+([\d.]+)\s*mi", d)
+            big = f"{m.group(1)} mi" if m else f"{f.value:.2f}"
+            tiles.append(_fe_tile(label, big, "avg to existing stops", f.value))
+        elif name == FACTOR_CAPACITY_BUFFER:
+            tiles.append(
+                _fe_tile(label, f"{cand.utilization_after:.0%}",
+                         f"{cand.remaining_capacity_after} cases headroom", f.value)
+            )
+        elif name == FACTOR_WINDOW_MATCH:
+            if f.value <= 0.001:
+                tiles.append(_fe_tile(label, "misses pref.", "wrong hours", f.value, miss=True))
+            else:
+                m = re.search(r"covers\s+(\d+)\s+of\s+the\s+(\d+)", d)
+                big = f"{m.group(1)}/{m.group(2)} min" if m else f"{f.value:.2f}"
+                tiles.append(_fe_tile(label, big, "of preferred window", f.value))
+        else:  # slot availability (openness)
+            m = re.search(r"\((\d+)\s+overlap", d)
+            if m:
+                n = int(m.group(1))
+                sub = f"{n} committed stop overlaps" if n != 1 else "1 committed stop overlaps"
+            else:
+                sub = "tier-weighted openness"
+            tiles.append(_fe_tile(label, f"{f.value:.2f}", sub, f.value))
+    cols = max(1, len(tiles))
+    return f'<div class="fe-tiles" style="--fe-cols:{cols}">{"".join(tiles)}</div>'
+
+
+def _fe_why(o: dict, bar: float, recommended: bool) -> str:
+    """A short, grounded 'why' line for one option, composed from the factors'
+    own detail strings (never free text)."""
+    by = {f.name: f for f in o["factors"]}
+    parts = []
+    g = by.get(FACTOR_GEO_CLUSTERING)
+    if g and g.detail:
+        parts.append(g.detail.rstrip("."))
+    w = by.get(FACTOR_WINDOW_MATCH)
+    if w is not None and w.value > 0.001 and w.detail:
+        parts.append(w.detail.rstrip("."))
+    elif w is not None and w.value <= 0.001:
+        parts.append("but it misses the preferred hours")
+    clears = "clears" if o["score"] >= bar else "is below"
+    lead = "Strongest route-slot overall — " if recommended else ""
+    body = "; ".join(parts)
+    tail = f'Route-slot score <b>{o["score"]:.2f}</b> {clears} the {bar:.0%} auto-assign bar.'
+    return f'<p class="fe-why">{lead}{_esc(body)}. {tail}</p>'
+
+
+def _fe_rank(score: float, bar: float) -> tuple:
+    """Map a route-slot score to a rep-facing quality rank (chip class, label),
+    banded relative to the auto-assign bar. Replaces the raw numeric score as the
+    headline: >= bar+0.20 is High capacity, >= bar Moderate, else Low."""
+    if score >= bar + 0.20:
+        return "hi", "High capacity"
+    if score >= bar:
+        return "med", "Moderate"
+    return "lo", "Low"
+
+
+def _fe_option_card(o: dict, result: RecommendationResult, config: Config, bar: float) -> str:
+    rec = result.recommendation
+    route = o["cand"].route
+    win = _win(fmt_window(o["window"]))
+    recommended = o["recommended"]
+    rank_cls, rank_label = _fe_rank(o["score"], bar)
+    if recommended and rec.decision == Decision.RECOMMENDED:
+        rank_label += " · auto-assign"
+    elif recommended:  # escalated low score -> the strongest, proposed for review
+        rank_label += " · needs review"
+    selected = " selected" if recommended else ""
+    badge = f'<span class="fe-rank {rank_cls}"><span class="d"></span>{rank_label}</span>'
+    when = f"{_esc(_fe_day(route.day.value))} · {win}"
+    tradeoff = ""
+    if recommended and rec.key_tradeoff:
+        tradeoff = (
+            f'<div class="fe-tradeoff"><b>Why this over the alternative:</b> '
+            f'{_esc(rec.key_tradeoff)}</div>'
+        )
+    # Every feasible option is a real, selectable choice (the rep confirms one).
+    # data-route lets the map switch to this option's route when it's selected.
+    selrow = '<div class="fe-selrow"><span class="fe-selmark"></span></div>'
+    return (
+        f'<article class="fe-opt selectable{selected}" data-when="{when}" '
+        f'data-route="{_esc(route.route_id)}" role="button" tabindex="0" '
+        f'aria-pressed="{"true" if recommended else "false"}">'
+        f'<div class="fe-opt-head"><div class="fe-radio" aria-hidden="true"></div>'
+        f'<div class="fe-opt-title"><div class="when"><b>{_esc(_fe_day(route.day.value))}</b> · '
+        f'<span class="nowrap">{win}</span></div>'
+        f'<div class="fe-route">Route <b>{_esc(route.route_id)}</b> · {_esc(route.name)}</div></div>'
+        f'{badge}</div>{_fe_why(o, bar, recommended)}{_fe_tiles(o["factors"], o["cand"])}{tradeoff}{selrow}</article>'
+    )
+
+
+def _project(points, w=268, h=180, pad=28):
+    lats = [p[0] for p in points]
+    lngs = [p[1] for p in points]
+    minlat, maxlat = min(lats), max(lats)
+    minlng, maxlng = min(lngs), max(lngs)
+    dlat = (maxlat - minlat) or 1e-6
+    dlng = (maxlng - minlng) or 1e-6
+
+    def proj(lat, lng):
+        x = pad + (lng - minlng) / dlng * (w - 2 * pad)
+        y = pad + (maxlat - lat) / dlat * (h - 2 * pad)  # invert: north is up
+        return round(x, 1), round(y, 1)
+
+    return proj
+
+
+def _convex_hull(pts: list) -> list:
+    """Convex hull (Andrew's monotone chain) of (lat, lng) points, returned as an
+    ordered ring. <= 2 unique points are returned as-is (no polygon)."""
+    pts = sorted(set(pts))
+    if len(pts) <= 2:
+        return pts
+
+    def cross(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+    lower: list = []
+    for p in pts:
+        while len(lower) >= 2 and cross(lower[-2], lower[-1], p) <= 0:
+            lower.pop()
+        lower.append(p)
+    upper: list = []
+    for p in reversed(pts):
+        while len(upper) >= 2 and cross(upper[-2], upper[-1], p) <= 0:
+            upper.pop()
+        upper.append(p)
+    return lower[:-1] + upper[:-1]
+
+
+# A clean, light map canvas -- a faint grid, no busy blocks -- so the cluster
+# polygon and markers are the focus.
+_FE_MAP_BACKDROP = (
+    '<rect x="0" y="0" width="300" height="210" fill="#f7fafc"/>'
+    '<g stroke="#eaeef4" stroke-width="1">'
+    '<line x1="0" y1="52" x2="300" y2="52"/><line x1="0" y1="105" x2="300" y2="105"/>'
+    '<line x1="0" y1="158" x2="300" y2="158"/><line x1="75" y1="0" x2="75" y2="210"/>'
+    '<line x1="150" y1="0" x2="150" y2="210"/><line x1="225" y1="0" x2="225" y2="210"/></g>'
+)
+
+
+def _fe_nomap(result: RecommendationResult) -> str:
+    """The map placeholder when there's no serviceable route to centre on."""
+    nearest = min(result.candidates_considered, key=lambda c: c.distance_miles, default=None)
+    if nearest is None:
+        return '<div class="nomap">No candidate routes to display.</div>'
+    return (
+        f'<div class="nomap">No serviceable route near this address — the nearest, '
+        f'<b>{_esc(nearest.route.route_id)}</b>, is {nearest.distance_miles:.0f} mi from its service '
+        f'center (outside the serviceable radius). Routed to a specialist.</div>'
+    )
+
+
+def _fe_route_cluster_svg(route, cust) -> str:
+    """A clean, grounded cluster view for one route: its committed stops + the new
+    prospect (projected from the real geocoded coordinates) inside a convex-hull
+    polygon, plus a mock Depot (the OpCo the truck leaves from) with a dashed
+    delivery line into the cluster."""
+    cpt = (cust.latitude, cust.longitude)
+    stops = [(s.location.latitude, s.location.longitude) for s in route.committed_stops if s.location]
+    # Mock Depot: place it just outside the cluster (lower-left) so a clean dashed
+    # "truck leaves the OpCo" line runs into the delivery cluster. Illustrative,
+    # not a real coordinate (the whole demo runs on mock data).
+    lats = [la for la, _ in stops] + [cpt[0]]
+    lngs = [ln for _, ln in stops] + [cpt[1]]
+    span_lat = (max(lats) - min(lats)) or 0.01
+    span_lng = (max(lngs) - min(lngs)) or 0.01
+    depot = (min(lats) - 0.42 * span_lat, min(lngs) - 0.42 * span_lng)
+    proj = _project([cpt, depot] + stops, w=300, h=210, pad=32)
+    hull = _convex_hull(stops + [cpt])
+    poly = " ".join("%s,%s" % proj(la, ln) for (la, ln) in hull)
+    cx, cy = proj(*cpt)
+    dx, dy = proj(*depot)
+    dots = "".join(
+        '<circle cx="%s" cy="%s" r="5" fill="#1257a6" stroke="#fff" stroke-width="1.5"/>' % proj(la, ln)
+        for (la, ln) in stops
+    )
+    shape = (
+        f'<polygon points="{poly}" fill="rgba(26,127,55,.13)" stroke="#1a7f37" '
+        'stroke-width="1.8" stroke-linejoin="round"/>'
+        if len(hull) >= 3
+        else f'<polyline points="{poly}" fill="none" stroke="#1a7f37" stroke-width="1.8"/>'
+    )
+    depot_marker = (
+        f'<path d="M{dx - 7},{dy - 1} L{dx},{dy - 8} L{dx + 7},{dy - 1} Z" fill="#0b2e59"/>'
+        f'<rect x="{dx - 6}" y="{dy - 1}" width="12" height="9" rx="1" fill="#0b2e59"/>'
+        f'<text x="{dx}" y="{dy + 20}" text-anchor="middle" font-size="8.5" font-weight="700" '
+        f'fill="#0b2e59">Depot (OpCo)</text>'
+    )
+    return (
+        f'<svg viewBox="0 0 300 210" role="img" '
+        f'aria-label="Route {_esc(route.route_id)} delivery cluster with depot">'
+        f'{_FE_MAP_BACKDROP}{shape}'
+        f'<path d="M{dx},{dy} L{cx},{cy}" stroke="#8a93a6" stroke-width="1.3" stroke-dasharray="4 3"/>'
+        f'{dots}{depot_marker}'
+        f'<circle cx="{cx}" cy="{cy}" r="7" fill="#5b3fb0" stroke="#fff" stroke-width="2"/>'
+        f'<text x="{cx}" y="{cy - 12}" text-anchor="middle" font-size="8.5" font-weight="700" '
+        f'fill="#5b3fb0">new stop</text></svg>'
+    )
+
+
+def _fe_geo_miles(factors) -> Optional[str]:
+    """The 'avg X mi to existing stops' figure from a route-slot's geo factor, for
+    the map subtitle; None if unavailable."""
+    for f in factors or []:
+        if f.name == FACTOR_GEO_CLUSTERING and f.detail:
+            m = re.search(r"avg\s+([\d.]+)\s*mi", f.detail)
+            if m:
+                return m.group(1)
+    return None
+
+
+def _frontend_panel_html(result: RecommendationResult, config: Config) -> str:
+    """The full SC-facing 'Choose a delivery slot' view for one prospect."""
+    c = result.customer
+    rec = result.recommendation
+    bar = (
+        config.route_slot_score_threshold
+        if config.use_route_slot_scoring
+        else config.total_score_threshold
+    )
+    options, _infeasible = _fe_options(result)
+
+    # --- left: prospect ---
+    sysco = _esc(c.customer_number) if c.customer_number else "— new prospect"
+    if c.preferred_slot is not None:
+        pref = f"{_fe_day(c.preferred_slot.day.value)} · {_win(fmt_window(c.preferred_slot.window))}"
+    else:
+        pref = "No stated preference"
+    side = (
+        '<aside class="fe-side"><div class="kicker">New prospect · onboarding</div>'
+        f'<h3>{_esc(c.name)}</h3>'
+        f'<div class="fe-field"><div class="l">Sysco account #</div><div class="v">{sysco}</div></div>'
+        '<div class="fe-field"><div class="l">Delivery address <span style="font-weight:400">· primary '
+        f'identifier</span></div><div class="v addr"><span class="pin">📍</span>{_esc(c.address)}</div></div>'
+        f'<div class="fe-field"><div class="l">Order quantity</div><div class="v">{c.order_quantity_cases} cases</div></div>'
+        '<div class="fe-field"><div class="l">Preferred slot <span style="font-weight:400">· soft '
+        f'preference</span></div><div class="v">{_esc(pref)}</div></div>'
+        '<div class="fe-note"><div class="h">🛡️ How these options are built</div>'
+        'Hard rules (serviceability, capacity) and the factor scoring run in deterministic code. The LLM '
+        'ranks only the feasible options and cites the facts; on any failure it falls back to the '
+        'deterministic pick. Escalation routes to a routing specialist — not a hard block.</div></aside>'
+    )
+
+    # --- center: banner + option cards + escalation + confirm ---
+    banner = ""
+    if rec.decision == Decision.ESCALATED_LOW_SCORE:
+        banner = (
+            f'<div class="fe-banner warn">⚠ The agent escalated this — no option cleared the {bar:.0%} '
+            'auto-assign bar. The strongest is proposed below for a specialist to confirm.</div>'
+        )
+    elif rec.decision == Decision.ESCALATED_NO_FEASIBLE_SLOT:
+        banner = (
+            '<div class="fe-banner stop">✖ No serviceable route — every candidate failed a hard rule, so '
+            'there is nothing to auto-assign. Routed to a routing specialist.</div>'
+        )
+
+    # Only the feasible options are shown as slot cards (no "Unavailable" cards).
+    cards = "".join(_fe_option_card(o, result, config, bar) for o in options)
+
+    escalate = (
+        '<div class="fe-escalate"><h4>None of these work for the customer?</h4>'
+        '<p>Request a specialist review. It routes to a routing specialist with the full evaluation attached '
+        'as a handoff brief (composed by the escalation-triage agent) — a queue, not a hard block.</p>'
+        '<button type="button">Request specialist review →</button></div>'
+    )
+
+    # The slot the rep currently has selected (the recommended one to start); the
+    # JS updates <b id="fe-sel"> as the rep clicks other options.
+    sel_when = ""
+    chosen = next((o for o in options if o["recommended"]), options[0] if options else None)
+    if chosen is not None:
+        sel_when = f"{_fe_day(chosen['cand'].route.day.value)} · {_win(fmt_window(chosen['window']))}"
+
+    if rec.decision == Decision.RECOMMENDED:
+        confirm = (
+            '<div class="fe-confirm"><div class="log">Selected: <b id="fe-sel">' + sel_when + '</b> · logged '
+            'with the rep and the facts the agent cited — fully auditable.</div><div class="btns">'
+            '<button type="button" class="fe-btn-ghost">Cancel</button>'
+            '<button type="button" class="fe-btn-primary">Confirm slot</button></div></div>'
+        )
+    elif rec.decision == Decision.ESCALATED_LOW_SCORE:
+        confirm = (
+            '<div class="fe-confirm"><div class="log">Selected: <b id="fe-sel">' + sel_when + '</b> — below '
+            'the auto-assign bar; confirming logs the rep’s override, or send it to a specialist.</div>'
+            '<div class="btns"><button type="button" class="fe-btn-ghost">Confirm proposed slot</button>'
+            '<button type="button" class="fe-btn-primary">Send to specialist</button></div></div>'
+        )
+    else:  # no feasible slot
+        confirm = (
+            '<div class="fe-confirm"><div class="log">No assignable slot — this must go to a routing '
+            'specialist.</div><div class="btns">'
+            '<button type="button" class="fe-btn-primary" disabled>Confirm slot</button></div></div>'
+        )
+
+    main = f'<main class="fe-main">{banner}{cards}{escalate}{confirm}</main>'
+
+    # --- right: cluster map, one body per feasible route. The selected slot's
+    #     route is shown; clicking a slot on a different route switches the map. ---
+    cust = c.location
+    if options and cust is not None:
+        by_route: dict = {}
+        route_order: list = []
+        for o in options:
+            rid = o["cand"].route.route_id
+            if rid not in by_route:
+                by_route[rid] = o
+                route_order.append(rid)
+        initial = rec.recommended_route_id if rec.recommended_route_id in by_route else route_order[0]
+        bodies = []
+        for rid in route_order:
+            o = by_route[rid]
+            route = o["cand"].route
+            miles = _fe_geo_miles(o["factors"])
+            near = f"new stop {miles} mi from the cluster" if miles else "new stop near the existing cluster"
+            hidden = "" if rid == initial else " hidden"
+            bodies.append(
+                f'<div class="fe-mapbody" data-route="{_esc(rid)}"{hidden}>'
+                f'<div class="mt">{_esc(route.route_id)} · cluster view</div>'
+                f'<div class="ms">{_esc(route.name)} · {near}</div>'
+                f'{_fe_route_cluster_svg(route, cust)}</div>'
+            )
+        map_card = (
+            f'<aside class="fe-map">{"".join(bodies)}'
+            '<div class="fe-legend">'
+            '<span><i class="fe-dot" style="background:#1257a6"></i>Existing stops</span>'
+            '<span><i class="fe-dot" style="background:#5b3fb0"></i>New prospect</span>'
+            '<span><i class="fe-dot" style="background:#0b2e59;border-radius:2px"></i>Depot (OpCo)</span>'
+            '<span><i class="fe-dot" style="background:rgba(26,127,55,.35);'
+            'border:1px solid #1a7f37;border-radius:2px"></i>Route cluster</span>'
+            '</div><div class="fe-gain">▲ Adds density without extending route time</div></aside>'
+        )
+    else:
+        map_card = f'<aside class="fe-map"><div class="mt">Proximity</div>{_fe_nomap(result)}</aside>'
+
+    return f'<div class="fe-grid">{side}{main}{map_card}</div>'
+
+
 def build_workflow_payload(
     result: RecommendationResult,
     config: Config,
@@ -1850,6 +2474,8 @@ def build_workflow_payload(
         # the map in the web app) so it can be a rich, default-open section.
         "resultHtml": _example_card(result, include_routes=False, reasoning_override=reasoning_override),
         "routesHtml": _route_cards(result, config),
+        # The SC-facing "Choose a delivery slot" view for the Frontend tab.
+        "frontendHtml": _frontend_panel_html(result, config),
         "map": build_map_data(result, config),
         # UI banners (e.g. grounded reasoning fell back to deterministic). Empty
         # for the normal deterministic/weighted path, so the published static
@@ -1879,6 +2505,7 @@ def _payload_notices(result: RecommendationResult) -> list[dict]:
 def build_page(results: list[RecommendationResult], config: Config) -> str:
     """Render the full three-tab overview HTML from live workflow results."""
     threshold = f"{config.total_score_threshold:.0%}"
+    fe_bar = f"{(config.route_slot_score_threshold if config.use_route_slot_scoring else config.total_score_threshold):.0%}"
     top_n = config.top_n_candidate_routes
     cards = "".join(_example_card(r) for r in results)
     payload = {r.customer.lookup_key: build_workflow_payload(r, config) for r in results}
@@ -1887,7 +2514,7 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
         + json.dumps(payload, ensure_ascii=False)
         + "</script>"
     )
-    js_block = "<script>" + _SIM_JS + _TABS_JS + "</script>"
+    js_block = "<script>" + _SIM_JS + _TABS_JS + _FRONTEND_JS + "</script>"
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -1897,7 +2524,7 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
 <title>Smart Assignment — AI Agent for Delivery Slot Recommendation</title>
 <meta name="description" content="An AI agent that autonomously assigns delivery slots for new Sysco customers. Explore the agentic workflow, architecture, and run it live on mock data." />
 <!-- GENERATED by scripts/generate_page.py from live workflow output. Do not edit by hand. -->
-<style>{_STYLE}</style>
+<style>{_STYLE}{_FE_STYLE}</style>
 </head>
 <body>
 
@@ -1925,6 +2552,7 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
     <button class="tabbtn active" data-tab="overview" role="tab" aria-selected="true">Overview</button>
     <button class="tabbtn" data-tab="architecture" role="tab" aria-selected="false">Architecture</button>
     <button class="tabbtn" data-tab="simulator" role="tab" aria-selected="false">Simulator</button>
+    <button class="tabbtn" data-tab="frontend" role="tab" aria-selected="false">Frontend</button>
   </div>
 </nav>
 
@@ -2100,6 +2728,26 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
         weights, and thresholds are illustrative starting points — not validated Sysco policy. The route
         source and geocoder are designed to be swapped for real systems without changing the agent's logic.
       </div>
+    </div>
+  </section>
+</div>
+
+<div class="tabpanel" id="tab-frontend" role="tabpanel">
+  <section>
+    <div class="fe-wrap">
+      <div class="fe-eyebrow">Salesforce Lightning component · preview</div>
+      <h2>Choose a delivery slot</h2>
+      <p class="sub">The Salesforce-embedded view a sales consultant sees. Agent-ranked delivery slots for a new
+        prospect, grounded in route capacity, geographic clustering, slot match, and openness. The rep
+        <b>selects one of the agent's options</b> — no free-text entry, so no slot is ever invented.</p>
+      <div class="fe-status">🛰️ <span><b>Grounded</b> on Houston route data · hard rules &amp; scoring are
+        <b>deterministic</b> · options ranked by the <b>LLM</b> and verified in code · auto-assign bar
+        <b>{fe_bar}</b></span></div>
+      <div class="fe-picker">
+        <span class="picker-label">Sample prospects — click one to load their delivery-slot view:</span>
+        <div class="chips" id="fe-chips"></div>
+      </div>
+      <div id="fe-view"></div>
     </div>
   </section>
 </div>

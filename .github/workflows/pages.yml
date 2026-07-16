@@ -1,11 +1,14 @@
 name: Deploy GitHub Pages
 
 # Publishes the static site in docs/ (the Smart Assignment overview page) to
-# GitHub Pages. Trigger manually from Actions -> Deploy GitHub Pages -> Run workflow.
+# GitHub Pages. Runs automatically on every merge/push to main, and can also be
+# triggered manually from Actions -> Deploy GitHub Pages -> Run workflow.
 # One-time setup: in the repo, go to Settings -> Pages and set
 # "Build and deployment" -> Source to "GitHub Actions".
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
