@@ -1,10 +1,12 @@
 """
 Optional, opt-in OpenTelemetry tracing seam for the LLM-backed decision layers.
 
-This module is *additive and defensive*: it exports one context manager,
-``llm_span``, that wraps a unit of LLM work in an OpenTelemetry span when
-tracing is enabled, and is a complete no-op otherwise. It follows the same
-guarantees the rest of this repo holds itself to (see CLAUDE.md):
+This module is *additive and defensive*. It exports ``configure_tracing`` (a
+one-time, global-provider setup called from an agent-serving entry point) and
+``llm_span`` (a context manager that wraps a unit of LLM work in an
+OpenTelemetry span when tracing is enabled, and is a complete no-op otherwise).
+It follows the same guarantees the rest of this repo holds itself to (see
+CLAUDE.md):
 
 * **Opt-in, default off.** Nothing happens unless ``Config.use_tracing`` is on
   (env ``SMART_ASSIGNMENT_USE_TRACING``). Flag-off reproduces prior behavior
@@ -26,8 +28,17 @@ variables are set instead, the OTLP endpoint and Basic-auth header are derived
 from them -- Langfuse ingests OpenTelemetry directly, so this is just standard
 OTLP with a computed endpoint and header, not a Langfuse-specific dependency.
 
-Phase 0 records only *generic* span attributes (backend, model, role label,
-prompt/response sizes, latency, error status). Deliberately, it does NOT record
+Two span sources share one global provider, so they form a single connected
+trace: the Google ADK OpenTelemetry instrumentor (the conversational agent's
+turns and tool calls) and this module's own ``llm_span`` (the grounded
+``generate_text`` decision calls, which nest under the tool span that triggered
+them). Using the *global* provider is required for that -- ADK's built-in
+tracing emits against it -- so ``_install_provider`` claims the global provider
+when none is set, and otherwise attaches to whatever is already there rather than
+clobbering it.
+
+Span attributes are deliberately *generic* (backend, model, role label,
+prompt/response sizes, latency, error status). This module does NOT record
 prompt or response *text*: those can carry customer PII (an evidence packet
 includes an address), and richer per-layer payloads are an intentional,
 per-call-site decision for a later phase -- not something to leak globally here.
@@ -135,19 +146,81 @@ def _build_exporter() -> Any:
     return None
 
 
+def _install_provider(exporter: Any) -> Any:
+    """Install our OTLP exporter on a *global* ``TracerProvider`` and return a
+    Tracer from it, so that both our own ``llm_span`` calls and the ADK
+    instrumentor's agent/tool spans (which use the global provider) land in one
+    connected trace.
+
+    Robust and non-clobbering: if a real SDK ``TracerProvider`` is already the
+    global one -- installed by the deployment, or by anything else -- we attach
+    our exporter to it rather than replacing it (which OpenTelemetry forbids and
+    would silently drop the other side's spans). Only when no real provider is
+    set do we create and install our own.
+    """
+    from opentelemetry import trace
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+    current = trace.get_tracer_provider()
+    if isinstance(current, TracerProvider):
+        # A real provider is already installed; respect it and just add our export
+        # path so our spans still reach the backend.
+        current.add_span_processor(BatchSpanProcessor(exporter))
+        logger.info("Attached the OTLP exporter to the existing global TracerProvider.")
+        provider = current
+    else:
+        provider = TracerProvider(resource=Resource.create({"service.name": _service_name()}))
+        provider.add_span_processor(BatchSpanProcessor(exporter))
+        trace.set_tracer_provider(provider)
+        logger.info("Installed a global TracerProvider for smart-assignment tracing.")
+    return provider.get_tracer("smart_assignment.tracing")
+
+
+def _instrument_adk() -> None:
+    """Best-effort install of the Google ADK OpenTelemetry instrumentor, so the
+    conversational agent's turns and tool calls become spans on the same global
+    provider -- nesting the grounded ``generate_text`` spans under the tool span
+    that triggered them.
+
+    A no-op (logged) when the instrumentor isn't installed, and idempotent, so it
+    can never break agent construction; grounded-call spans still export without
+    it. Called after the provider is installed.
+    """
+    try:
+        from openinference.instrumentation.google_adk import GoogleADKInstrumentor
+    except Exception:  # noqa: BLE001 - instrumentor not installed / import error
+        logger.info(
+            "The Google ADK OpenTelemetry instrumentor is not installed; agent-level "
+            "tracing is skipped (grounded-call spans still export). Add the "
+            "'observability' extra to enable it."
+        )
+        return
+    try:
+        instrumentor = GoogleADKInstrumentor()
+        if not instrumentor.is_instrumented_by_opentelemetry:
+            instrumentor.instrument()
+            logger.info("Installed the Google ADK OpenTelemetry instrumentor.")
+    except Exception:  # noqa: BLE001 - never let instrumentation break agent build
+        logger.warning(
+            "Could not install the ADK instrumentor; continuing with grounded-call "
+            "tracing only.",
+            exc_info=True,
+        )
+
+
 def _configure() -> Any:
     """Attempt one-time tracing setup; return a Tracer or ``None`` on any failure.
 
-    Uses a *local* ``TracerProvider`` rather than the global
-    ``trace.set_tracer_provider`` so this seam does not claim the process-global
-    provider. That keeps the door open for Phase 0.5 (the ADK OpenTelemetry
-    instrumentor, which drives the global provider) to coexist without either
-    side clobbering the other.
+    Installs a *global* ``TracerProvider`` + OTLP exporter (see
+    ``_install_provider``) and the ADK instrumentor, so agent/tool spans and our
+    grounded-call spans form a single trace. The global provider is the deliberate
+    Phase 0.5 promotion of Phase 0's local one -- ADK's built-in tracing emits
+    against the global provider, so the two must share it to connect.
     """
     try:
-        from opentelemetry.sdk.resources import Resource
-        from opentelemetry.sdk.trace import TracerProvider
-        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+        from opentelemetry.sdk.trace import TracerProvider  # noqa: F401 - availability probe
     except Exception:  # noqa: BLE001 - SDK not installed / import error
         logger.warning(
             "SMART_ASSIGNMENT_USE_TRACING is on but the OpenTelemetry SDK is not "
@@ -160,20 +233,26 @@ def _configure() -> Any:
         return None
 
     try:
-        provider = TracerProvider(resource=Resource.create({"service.name": _service_name()}))
-        provider.add_span_processor(BatchSpanProcessor(exporter))
-        return provider.get_tracer("smart_assignment.tracing")
+        tracer = _install_provider(exporter)
     except Exception:  # noqa: BLE001 - never let setup raise into a caller
         logger.warning("Failed to initialize the tracer; tracing disabled.", exc_info=True)
         return None
 
+    _instrument_adk()
+    return tracer
 
-def _get_tracer(config: "Config") -> Any:
-    """Return the configured Tracer, or ``None`` if tracing is off or unavailable.
 
-    Off-by-flag returns ``None`` before touching any OpenTelemetry import, so the
-    disabled path stays free of side effects. When enabled, configuration is
-    attempted exactly once per process under a lock and the result cached.
+def configure_tracing(config: "Config") -> Any:
+    """Idempotent, once-per-process tracing setup. Returns the Tracer, or ``None``
+    when tracing is off or unavailable.
+
+    Safe to call from multiple entry points -- it runs the real setup exactly once
+    and caches the result. Call it from an agent-serving entry point (see
+    ``agent._build_root_agent``) *before* the agent runs, so the ADK instrumentor
+    is in place for the first turn; ``llm_span`` also calls it lazily so non-agent
+    paths (e.g. the offline pipeline with the flag on) still get grounded-call
+    spans. Off-by-flag returns ``None`` before touching any OpenTelemetry import,
+    so the disabled path stays free of side effects.
     """
     if not getattr(config, "use_tracing", False):
         return None
@@ -187,6 +266,12 @@ def _get_tracer(config: "Config") -> Any:
         _TRACER = _configure()
         _INIT_DONE = True
         return _TRACER
+
+
+def _get_tracer(config: "Config") -> Any:
+    """The Tracer for span creation -- a thin alias over ``configure_tracing`` so
+    the first ``llm_span`` on a non-agent path still lazily sets tracing up."""
+    return configure_tracing(config)
 
 
 def _start_span(config: "Config", name: str, attributes: Dict[str, Any]) -> Any:
