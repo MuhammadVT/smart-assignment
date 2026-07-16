@@ -36,13 +36,19 @@ def _fake_fn(config, prompt):
     with a recognizable rationale, so we can prove the grounded path ran."""
     body = prompt.split("EVIDENCE PACKET:", 1)[1].split("Reply with a SINGLE", 1)[0]
     packet = json.loads(body.strip())
-    fid = packet["feasible_candidates"][0]["route_id"]
+    first = packet["feasible_candidates"][0]
     return {
         "decision": "RECOMMEND",
         "confidence": "HIGH",
-        "recommended_route_id": fid,
+        "recommended_route_id": first["route_id"],
         "rationale": _MARKER,
-        "citations": [],
+        "citations": [
+            {
+                "route_id": first["route_id"],
+                "field": "utilization_after",
+                "value": first["facts"]["utilization_after"],
+            }
+        ],
     }
 
 

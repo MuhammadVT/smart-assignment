@@ -27,13 +27,58 @@ generate_text(config, prompt)
 from __future__ import annotations
 
 import asyncio
+import contextvars
+import logging
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional, TypeVar
 
 if TYPE_CHECKING:
+    from asyncio import AbstractEventLoop
+
     from smart_assignment.shared.config import Config
+
+logger = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
+
+# The web app serves each turn on an event loop (uvicorn's), and drives the ADK
+# agent + the synchronous pipeline on it. The sage backend is async and its
+# aiohttp ``ClientSession`` (inside the Sage SDK's process-global litellm handler)
+# is bound to the FIRST event loop that touches it -- the server loop. So a
+# synchronous grounded call (``generate_text`` -> sage) MUST run its coroutine on
+# that same loop, or aiohttp raises "loop <...> is not the running loop".
+#
+# A tool cannot both block the server loop (running synchronous pipeline code) and
+# run a coroutine on it. The fix: tools offload their blocking body to a worker
+# thread (freeing the loop), and record the server loop here so the nested sage
+# call can submit its coroutine back to it via ``run_coroutine_threadsafe``. A
+# ContextVar is the channel because ``asyncio.to_thread`` copies the context into
+# the worker thread. ``None`` (the default) means "no host loop" -- the CLI/offline
+# case, where ``asyncio.run`` is correct.
+_HOST_EVENT_LOOP: "contextvars.ContextVar[Optional[AbstractEventLoop]]" = (
+    contextvars.ContextVar("smart_assignment_host_event_loop", default=None)
+)
+
+
+async def offload_to_worker_thread(
+    func: Callable[..., _T], /, *args: Any, **kwargs: Any
+) -> _T:
+    """Run a blocking, synchronous callable off the current event loop.
+
+    Use this to wrap synchronous pipeline work (an ADK tool body, a
+    re-run-for-visualization) that is invoked from async web-app code. It records
+    the running loop as the *host loop* so a nested synchronous sage call
+    (``generate_text``) can hand its coroutine back to that loop -- keeping the
+    sage aiohttp session on the one loop it is bound to -- then runs the callable
+    in a worker thread so the host loop stays free to service that coroutine.
+    ``asyncio.to_thread`` copies the context, so the recorded loop is visible in
+    the worker thread.
+    """
+    _HOST_EVENT_LOOP.set(asyncio.get_running_loop())
+    return await asyncio.to_thread(func, *args, **kwargs)
 
 # ---------------------------------------------------------------------------
 # Internal: Sage SDK bootstrap (lazy, cached, runs once per process)
@@ -110,12 +155,75 @@ def _check_sage_env_vars() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Diagnostic: reveal the real sage reply the SDK hides behind its error string
+# ---------------------------------------------------------------------------
+
+# The Sage SDK's ``SageLiteLlm._extract_response`` replaces the model's real answer
+# with this exact sentinel whenever the agent returns a tool/function call whose
+# name isn't in the tools we passed (the grounded path passes none), or an
+# unexpected shape. Downstream we then only see an empty/"Something went wrong"
+# reply and a JSONDecodeError -- with no clue what the agent actually did.
+_SAGE_ERROR_SENTINEL = "Something went wrong, Please try again later"
+
+
+def _install_sage_response_diagnostic(sage_litellm_cls: Any) -> None:
+    """Wrap a ``SageLiteLlm``-like class's ``_extract_response`` so that whenever it
+    returns the generic error sentinel, the REAL ``agent_response`` (a function call
+    and its name, or the raw shape) is logged. Idempotent; never alters the returned
+    value, so it can't change any decision or fallback -- it only adds a log line."""
+    original = sage_litellm_cls._extract_response
+    if getattr(original, "_sa_diagnostic", False):
+        return
+
+    def _logged_extract_response(response: Any, tools: Any):
+        result = original(response, tools)
+        try:
+            _, text_response = result
+            if text_response == _SAGE_ERROR_SENTINEL:
+                data = getattr(response, "data", None) or {}
+                agent_response = (data.get("responses") or {}).get("agent_response")
+                logger.warning(
+                    "Sage masked the reply with its generic error string; the real "
+                    "agent_response (tools offered=%d) was: %r",
+                    len(tools or []),
+                    repr(agent_response)[:1000],
+                )
+        except Exception as exc:  # noqa: BLE001 - a diagnostic must never break the call
+            logger.warning("Sage response diagnostic could not read agent_response: %s", exc)
+        return result
+
+    _logged_extract_response._sa_diagnostic = True  # type: ignore[attr-defined]
+    sage_litellm_cls._extract_response = staticmethod(_logged_extract_response)
+
+
+def _maybe_install_sage_response_diagnostic(config: "Config") -> None:
+    """Install the diagnostic above when ``config.debug_sage_raw_response`` is on.
+    A no-op otherwise, and silently skipped if the Sage SDK isn't importable, so it
+    never affects the standard backend or offline imports."""
+    if not getattr(config, "debug_sage_raw_response", False):
+        return
+    try:
+        from sage_core import SageLiteLlm  # type: ignore[import-untyped]
+    except Exception:  # noqa: BLE001 - diagnostic is best-effort only
+        return
+    _install_sage_response_diagnostic(SageLiteLlm)
+
+
+# ---------------------------------------------------------------------------
 # Internal: async content generation through ADK BaseLlm
 # ---------------------------------------------------------------------------
 
 
 async def _generate_via_sage_async(llm: Any, prompt: str) -> str:
-    """Drive one content-generation turn through an ADK BaseLlm object."""
+    """Drive one content-generation turn through an ADK BaseLlm object.
+
+    ADK's ``LlmResponse`` has no flat ``.text`` attribute (that was an incorrect
+    assumption that raised ``AttributeError: 'LlmResponse' object has no attribute
+    'text'`` on the first real sage reply); the generated text lives in
+    ``response.content.parts[i].text``. Concatenate those, skip empty/tool-only
+    parts, and raise on an error response so the caller falls back deterministically
+    with a clear reason rather than silently returning "".
+    """
     from google.adk.models.llm_request import LlmRequest  # ADK 2.x
     from google.genai import types
 
@@ -124,9 +232,55 @@ async def _generate_via_sage_async(llm: Any, prompt: str) -> str:
     )
     chunks: list[str] = []
     async for response in llm.generate_content_async(request, stream=False):
-        if response.text:
-            chunks.append(response.text)
+        error_code = getattr(response, "error_code", None)
+        if error_code:
+            message = getattr(response, "error_message", None) or ""
+            raise RuntimeError(f"Sage backend returned an error: {error_code} {message}".strip())
+        content = getattr(response, "content", None)
+        for part in getattr(content, "parts", None) or []:
+            text = getattr(part, "text", None)
+            if text:
+                chunks.append(text)
     return "".join(chunks)
+
+
+def _run_coro_blocking(coro: "Coroutine[Any, Any, str]") -> str:
+    """Drive an async coroutine to completion from *synchronous* code, choosing
+    the right loop for wherever the caller happens to be running.
+
+    ``generate_text`` is a synchronous API. It is reached from three contexts:
+
+    1. **The CLI / offline pipeline** -- no event loop on this thread. Just
+       ``asyncio.run``.
+    2. **A web-app tool offloaded to a worker thread** -- a host loop is recorded
+       (see ``offload_to_worker_thread``) and running on another thread. The sage
+       aiohttp session is bound to that host loop, so we submit the coroutine to
+       it via ``run_coroutine_threadsafe`` and block for the result. Running it on
+       any other loop raises "loop <...> is not the running loop"; a fresh
+       ``asyncio.run`` loop would be closed after the call and break the next one.
+    3. **Directly on a running loop's thread with no host loop recorded** -- a
+       last-resort worker loop. Correct for loop-agnostic backends (litellm /
+       genai) and strictly better than raising; the sage backend is kept out of
+       this case by offloading its call sites.
+    """
+    try:
+        running = asyncio.get_running_loop()
+    except RuntimeError:
+        running = None
+
+    host = _HOST_EVENT_LOOP.get()
+    if host is not None and host.is_running() and host is not running:
+        # Case 2: run on the host loop (where the sage session lives), from here.
+        return asyncio.run_coroutine_threadsafe(coro, host).result()
+
+    if running is None:
+        # Case 1: no loop on this thread.
+        return asyncio.run(coro)
+
+    # Case 3: a loop runs on THIS thread and there's no usable host loop; run the
+    # coroutine on a throwaway loop in a worker thread so we don't nest asyncio.run.
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, coro).result()
 
 
 # ---------------------------------------------------------------------------
@@ -151,7 +305,9 @@ def get_llm(config: "Config") -> Any:
     """
     if config.llm_backend == "sage":
         _check_sage_env_vars()
-        return _load_sage_registry().get_llm(config.sage_model)
+        registry = _load_sage_registry()
+        _maybe_install_sage_response_diagnostic(config)
+        return registry.get_llm(config.sage_model)
     if _is_litellm_model(config.model):
         from google.adk.models.lite_llm import LiteLlm  # requires the `litellm` extra
 
@@ -170,14 +326,17 @@ def generate_text(config: "Config", prompt: str) -> str:
 
     Raises on failure; callers should guard with ``except Exception``.
 
-    Note: the sage path uses ``asyncio.run()``, which requires no running event
-    loop.  LLMReasoner is called from the synchronous pipeline so this is safe;
-    if the pipeline is ever made async, replace with an ``await`` call instead.
+    Note: the sage path is async under the hood. ``_run_coro_blocking`` drives it
+    to completion whether or not a loop is already running, so this stays a safe
+    synchronous call both from the CLI pipeline and from the web app's async
+    request handlers (where a bare ``asyncio.run`` would raise).
     """
     if config.llm_backend == "sage":
         _check_sage_env_vars()
-        llm = _load_sage_registry().get_llm(config.sage_model)
-        return asyncio.run(_generate_via_sage_async(llm, prompt))
+        registry = _load_sage_registry()
+        _maybe_install_sage_response_diagnostic(config)
+        llm = registry.get_llm(config.sage_model)
+        return _run_coro_blocking(_generate_via_sage_async(llm, prompt))
 
     if _is_litellm_model(config.model):
         import litellm  # requires the `litellm` extra

@@ -14,8 +14,9 @@ from smart_assignment.address_resolve.evidence import NUMERIC_ADDRESS_FIELDS, Ad
 from smart_assignment.address_resolve.schema import AddressChoice
 
 # similarity is rounded to 4dp; this absorbs rounding without admitting a
-# genuinely different number.
-_TOL = 0.02
+# genuinely different number (0.02 would let a citation of one candidate's
+# similarity pass against a neighboring candidate's).
+_TOL = 0.005
 
 
 @dataclass

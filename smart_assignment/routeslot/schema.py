@@ -34,6 +34,7 @@ verifier's job (`verifier.py`).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Optional
 
 
@@ -46,6 +47,20 @@ class RouteSlotChoiceParseError(ValueError):
 VERDICT_AGREE = "AGREE"
 VERDICT_DIVERGE = "DIVERGE"
 VALID_VERDICTS = (VERDICT_AGREE, VERDICT_DIVERGE)
+
+
+class RSDecision(str, Enum):
+    """The model's own recommend-vs-escalate call (only consulted when
+    `Config.use_grounded_route_slot_escalation` is on). Kept local so the
+    routeslot package stays decoupled from the judgment package."""
+
+    RECOMMEND = "RECOMMEND"
+    ESCALATE = "ESCALATE"
+
+
+class RSConfidence(str, Enum):
+    HIGH = "HIGH"
+    LOW = "LOW"
 
 
 @dataclass(frozen=True)
@@ -82,6 +97,14 @@ class RouteSlotChoice:
     runner_up: Optional[RunnerUp] = None
     vs_deterministic_default: Optional[DefaultComparison] = None
     citations: list[RouteSlotCitation] = field(default_factory=list)
+    # The model's own recommend-vs-escalate call + confidence. Only meaningful on
+    # the grounded-escalation path (Config.use_grounded_route_slot_escalation);
+    # they default to a confident RECOMMEND so the pick-only path (and its prompt,
+    # which doesn't ask for them) is unaffected. ``chosen_index`` is always the
+    # best option -- on ESCALATE it is the strongest-but-insufficient one the
+    # specialist reviews.
+    decision: RSDecision = RSDecision.RECOMMEND
+    confidence: RSConfidence = RSConfidence.HIGH
 
     def prose_fields(self) -> list[str]:
         """Every free-text field the verifier's prose scan must ground -- so a
@@ -178,6 +201,20 @@ def _parse_citations(raw: object) -> list[RouteSlotCitation]:
     return citations
 
 
+def _parse_enum(raw: object, enum_cls, default, where: str):
+    """Read an optional enum field. Absent/blank -> default (so the pick-only path,
+    whose prompt doesn't ask for it, is unaffected); a present-but-invalid value is
+    a shape error."""
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return default
+    token = str(raw).strip().upper()
+    _require(
+        token in enum_cls.__members__,
+        f"{where} must be one of {list(enum_cls.__members__)}, got {token!r}",
+    )
+    return enum_cls[token]
+
+
 def parse_route_slot_choice(raw: object) -> RouteSlotChoice:
     _require(isinstance(raw, dict), "route-slot choice must be a JSON object")
     _require("chosen_index" in raw, "missing 'chosen_index'")
@@ -191,4 +228,8 @@ def parse_route_slot_choice(raw: object) -> RouteSlotChoice:
         runner_up=_parse_runner_up(raw.get("runner_up")),
         vs_deterministic_default=_parse_default_comparison(raw.get("vs_deterministic_default")),
         citations=_parse_citations(raw.get("citations")),
+        decision=_parse_enum(raw.get("decision"), RSDecision, RSDecision.RECOMMEND, "decision"),
+        confidence=_parse_enum(
+            raw.get("confidence"), RSConfidence, RSConfidence.HIGH, "confidence"
+        ),
     )

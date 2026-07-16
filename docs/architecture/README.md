@@ -158,29 +158,40 @@ build_route_slot_packet   flatten all feasible route-slots into one indexed menu
                           the deterministic best index
         |
         v
-decide_route_slot         recommend-vs-escalate is a DETERMINISTIC threshold
- (routeslot/decide.py)    (route_slot_score_threshold); the LLM reasons only over
-                          the route-slots that already clear it. Branches:
+decide_route_slot         non-feasible cases ALWAYS escalate deterministically; for
+ (routeslot/decide.py)    the feasible ones the recommend-vs-escalate call depends on
+                          Config.use_grounded_route_slot_escalation. Branches:
                             · no feasible route            -> ESCALATED_NO_FEASIBLE_SLOT
                             · feasible route, no slot built -> ESCALATED_NO_FEASIBLE_SLOT
                                                               (distinct review_reason)
-                            · feasible slots, none ≥ bar    -> ESCALATED_LOW_SCORE
-                                                              (deterministic best proposed;
-                                                               NO llm call)
-                            · ≥1 slot ≥ bar                 -> RECOMMENDED: LLM picks among
-                                                              the eligible (above-bar) menu
-                                                              (constrained + cited + verified,
-                                                              one retry, deterministic fallback);
-                                                              ABSORBS the slotpick pass.
+                            · feasible route-slots:
+                               – flag ON (default): the LLM decides over ALL feasible
+                                 route-slots (see below)
+                               – flag OFF (rollback): the 0.55 bar gates it; none ≥ bar
+                                 -> ESCALATED_LOW_SCORE (deterministic best proposed, NO
+                                 llm call); ≥1 ≥ bar -> RECOMMENDED, LLM picks among the
+                                 eligible (above-bar) menu. ABSORBS the slotpick pass.
 ```
 
-Because the LLM's menu is filtered to the **above-threshold** options, its pick is
-always auto-assignable — it can never *cause* an escalation, and no grounded call
-is spent on cases that were going to escalate anyway. The recommend/escalate
-boundary stays a deterministic, reproducible threshold, so the high-stakes
-auto-assign gate remains auditable. (Whether the LLM should additionally
-*re-decide* marginal escalations with k-sample resampling, as `judgment/` does, is
-a deferred option; today it only selects among the recommendable route-slots.)
+**LLM-decided escalation (`use_grounded_route_slot_escalation`, default on).** The
+LLM makes the recommend-vs-escalate call *itself* over **all** feasible route-slots
+— the `route_slot_score_threshold` bar does **not** gate it (it rides along in the
+packet as a reference `auto_assign_threshold` + per-option `meets_auto_assign_bar`,
+and stays the fallback). The output adds `decision` (RECOMMEND | ESCALATE) and
+`confidence` (HIGH | LOW) to the same grounded, cited, verified choice; `chosen_index`
+is always the strongest option (on an ESCALATE it's the best-but-insufficient one the
+specialist reviews). Because the bar no longer binds it, the model **may escalate an
+above-bar option** (it judges even the best isn't good enough) or **recommend a
+below-bar one** — so the k-try guardrail matters: a confident RECOMMEND ships on one
+verified call; an ESCALATE or a LOW-confidence RECOMMEND is resampled
+`judgment_sample_count` times and must reach `judgment_consensus` (unanimous/majority)
+to auto-assign, else it escalates (`ESCALATED_LOW_SCORE`, distinct review_reason,
+strongest option proposed, all reasoned takes in `alternative_takes`). This is the
+same sampling+consensus machinery as `judgment/`, applied to the route-slot unit. On
+**any** mechanical/verification failure it falls back to the deterministic threshold
+decision, so it is never worse than the bar-gated baseline. Set the flag off to
+reproduce the prior threshold-gated behavior exactly (the LLM then only picks among
+above-bar options, as the box's rollback branch describes).
 
 This is the same **constrained-option + grounded + deterministic-fallback**
 pattern as judgment/triage/slotpick, applied to the route-slot unit; the weighted
@@ -191,8 +202,11 @@ the flag is off — flag-off reproduces prior output exactly.
 **Structured explanation (`routeslot/schema.py`).** A one-line rationale can't
 carry the *trade-off* an ops manager needs to trust an auto-assign, so on a
 RECOMMENDED pick the model returns a decomposed explanation rather than a
-sentence: `decision_summary` (the action line), `primary_reasons[]` (the decisive
-factors, each with its number), `key_tradeoff` (what the winner gives up vs. the
+sentence: `decision_summary` (the action line), `primary_reasons[]` (a
+comprehensive read — one line per scored factor, each with its number:
+geographic fit, capacity headroom, preferred-window match when a preference was
+stated, and slot openness — so no factor is silently dropped), `key_tradeoff`
+(what the winner gives up vs. the
 runner-up and why that's acceptable), `runner_up {index, why_not}`, and
 `vs_deterministic_default {verdict, note}` (an explicit AGREE/DIVERGE against the
 weighted blend). Only `chosen_index` is *actionable* — a real index from the
@@ -203,8 +217,9 @@ the flat `reasoning` line when the structured fields are absent.
 
 **Deterministic floor, grounded enrichment.** The structured fields are *always*
 populated on a RECOMMENDED route-slot — first deterministically from the score
-breakdown (`_apply_deterministic_narrative`: `decision_summary`, the top-weighted
-`primary_reasons` with their numbers, the score-ranked `runner_up`, and a
+breakdown (`_apply_deterministic_narrative`: `decision_summary`, a `primary_reasons`
+line for *every* scored factor in the breakdown's canonical order (not just the
+top two), the score-ranked `runner_up`, and a
 `key_tradeoff` naming the one factor the runner-up actually leads on), then, when
 the grounded LLM produced a *verified* choice, overwritten by its reasoned prose
 and AGREE/DIVERGE `default_comparison`. So the explanation is never a bare
@@ -221,15 +236,27 @@ one-sentence verdict.
 Because this rides on `use_route_slot_scoring` (opt-in, default off), the flag-off
 route-only path never populates these fields and its output is unchanged.
 
+**Naming routes.** Everywhere a route is named to the user — the deterministic
+narrative (`decision_summary`, `runner_up`, `reasoning`, the rejected/infeasible
+lines via `_route_label`), the grounded route-slot prose, the `root_agent`
+conversation, and the triage brief — it is written as `<route id> - <route name>`
+(e.g. `RTE-4100 - Central Houston`), so the stable id and the human-readable name
+always travel together. The deterministic sites enforce it; the prompts instruct
+the LLM-authored ones.
+
 The verifier (`routeslot/verifier.py`) gains two checks beyond the structured
 citations: it rejects a **dishonest self-assessment** (verdict must match whether
 the pick actually equals the deterministic default; a DIVERGE needs a note; the
 trade-off and a valid, distinct runner-up are required whenever more than one
 option is offered), and it runs a **tolerant prose scan** (mirroring
-`triage/verifier.py`) so *every* number stated in any free-text field must be a
-real fact the packet contains — not just the ones in the citation list. Any
-failure feeds the single corrective retry, then the deterministic fallback: never
-worse than before, only — on success — better explained.
+`triage/verifier.py`) so *every* number (including `"1,234"`-style thousands),
+route-id or `"route N"` mention, day name, and HH:MM time stated in any free-text
+field must be grounded in the packet — not just the values in the citation list.
+Percent phrasings normalize only against fraction-scale facts and never for
+unit-bearing tokens ("84 miles" can't launder through a stored 0.84), and small
+integers carrying a unit or percent sign are checked. Any failure feeds the
+single corrective retry, then the deterministic fallback: never worse than
+before, only — on success — better explained.
 
 **Threshold.** `route_slot_score_threshold` defaults to `0.55`, a touch below the
 route-only `0.60`: dropping the 0.6 window neutral and adding availability shifts
@@ -360,18 +387,53 @@ The two functions that actually talk to a backend (`shared/llm.get_llm` and
 `generate_text`) are unchanged — each caller simply hands them
 `config.for_role(<its role>)`.
 
+`generate_text` is a **synchronous** API, but the sage backend it fronts is async
+and its aiohttp `ClientSession` (inside the Sage SDK's process-global litellm
+handler) is **bound to the first event loop that touches it** — under the web app
+that is uvicorn's server loop, where the agent's own turns run. Two facts collide
+there:
+
+- ADK invokes a synchronous `FunctionTool` **inline on the server loop thread**, so
+  the pipeline these tools drive blocks that loop while running.
+- The sage coroutine `generate_text` must run has to execute **on that same loop**
+  (its session lives there); a bare `asyncio.run()` raises `asyncio.run() cannot be
+  called from a running event loop`, and running it on any *other* loop raises
+  `loop <...> is not the running loop`.
+
+You cannot both block the server loop and run a coroutine on it. The resolution is
+a two-part cooperation:
+
+1. **The tools offload their blocking body off the loop.** `agent.py` wraps each
+   pipeline `FunctionTool` with `_offloaded_tool`, making it an `async` tool that
+   runs its synchronous work in a worker thread via `offload_to_worker_thread`
+   (`shared/llm.py`). That frees the server loop. The web app's
+   `_visualization_from_state` re-run is offloaded the same way. `functools.wraps`
+   keeps the tool's name/signature/declaration identical, so ADK's `tool_context`
+   injection is unchanged.
+2. **The grounded call hands its coroutine back to the server loop.**
+   `offload_to_worker_thread` records the server loop in a `ContextVar` (which
+   `asyncio.to_thread` copies into the worker thread); `_run_coro_blocking` then
+   submits the sage coroutine to that recorded *host loop* via
+   `asyncio.run_coroutine_threadsafe(...).result()` — so it runs where the session
+   is bound. With no host loop recorded (the CLI/offline case) it just uses
+   `asyncio.run()`. This keeps the grounded path working in both worlds instead of
+   silently falling back to the deterministic result.
+
 ### Brief groundedness verification
 
 The triage brief is free text, so — unlike the grounded-judgment layer, which
 verifies structured citations — its numbers are checked by a prose scan
 (`triage/verifier.py`, deterministic, no LLM). `verify_brief` confirms every
-figure and route-id in the brief is grounded in the escalation context;
-`collect_grounding` stashes the groundable facts in session state when
+figure, route-id, day name, and HH:MM time in the brief is grounded in the
+escalation context; `collect_grounding` stashes the groundable facts (numbers,
+route-ids, days, windows, scrub-labels) in session state when
 `get_escalation_context` runs. It's tolerant by design — route-ids, route
 names, and the customer name (any of which may carry digits, e.g. a numeric
-route-id `3170` or a name `BT149361-[…]`) and clock times are scrubbed first,
-percent-vs-fraction is normalized, small bare counts are ignored — so faithful
-prose passes and only genuinely invented figures are flagged.
+route-id `3170` or a name `BT149361-[…]`) are scrubbed first,
+percent-vs-fraction is normalized (only against fraction-scale values, and
+never for a unit-bearing figure like "84 miles"), small bare counts without a
+unit are ignored — so faithful prose passes and only genuinely invented
+figures are flagged.
 
 Two enforcement points:
 
@@ -463,9 +525,16 @@ Grounded Judgment call x1  (llm.py -> shared/llm.generate_text)
         |
         v
 Structured-Citation Verifier (verifier.py, deterministic -- no model call)
-  1. pick must be in the feasible set (hard safety net on top of the schema)
-  2. every fact/comparison citation must resolve + match the packet exactly
-  3. tolerant prose scan: numbers/route-ids in the rationale must be grounded
+  1. pick must be in the feasible set (hard safety net on top of the schema),
+     and a RECOMMEND must be backed by >=1 citation on a route-varying fact of
+     the picked route (no citation-padding via other routes / shared constants)
+  2. every fact citation must resolve + match the packet (percent form allowed
+     only for fraction-valued fields, so a figure can't shift magnitude 100x);
+     every comparison must name two different routes and be arithmetically true
+  3. tolerant prose scan: numbers (incl. "1,234" thousands), route-ids,
+     "route N" mentions, day names, and HH:MM times in the rationale must all
+     be grounded; unit-bearing figures ("84 miles") can't launder through
+     percent normalization, and small counts with a unit ("5 cases") are checked
         | pass                                    | fail
         v                                         v
   first sample confident recommend?          one corrective retry -> still

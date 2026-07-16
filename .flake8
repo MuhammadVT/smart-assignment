@@ -8,3 +8,5 @@ exclude = .git,__pycache__,build,dist,.venv,venv
 per-file-ignores =
     smart_assignment/reporting/page.py:E501
     smart_assignment/webapp/app.py:E402
+    # The mock route table is one RouteStop(...) data literal per line.
+    smart_assignment/integrations/route_capacity_client.py:E501

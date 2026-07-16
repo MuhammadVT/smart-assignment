@@ -1,5 +1,8 @@
-"""The route-slot decision: deterministic best, escalation gate, grounded pick,
-and fallback. Offline -- the LLM is an injected fake."""
+"""The route-slot decision on the THRESHOLD path (the rollback: the 0.55 bar gates
+recommend-vs-escalate and the LLM only picks among above-bar options). These pin
+``use_grounded_route_slot_escalation=False``; the grounded-escalation path (the
+default, where the LLM decides recommend-vs-escalate itself) is covered in
+test_grounded_escalation.py. Offline -- the LLM is an injected fake."""
 
 from __future__ import annotations
 
@@ -8,6 +11,11 @@ from smart_assignment.shared.config import Config
 from smart_assignment.shared.models import Decision
 
 from .conftest import AFTERNOON, MORNING, choice_dict, customer, scored_eval, scored_slot
+
+
+def _cfg(**kw):
+    """A route-slot config pinned to the THRESHOLD (flag-off) rollback path."""
+    return Config(use_route_slot_scoring=True, use_grounded_route_slot_escalation=False, **kw)
 
 
 def _evals():
@@ -20,7 +28,7 @@ def _evals():
 
 
 def test_deterministic_picks_the_highest_total_route_slot():
-    rec = decide_route_slot(customer(), _evals(), Config(use_route_slot_scoring=True))
+    rec = decide_route_slot(customer(), _evals(), _cfg())
     assert rec.decision is Decision.RECOMMENDED
     assert rec.recommended_route_id == "RTE-A"
     assert rec.total_score == 0.80
@@ -28,9 +36,17 @@ def test_deterministic_picks_the_highest_total_route_slot():
     assert "strongest route-slot overall" in rec.reasoning
     # ...but the deterministic structured floor is always populated, so a user
     # (or the agent narration) gets the reasons + trade-off, not a one-liner.
-    assert rec.decision_summary and "RTE-A".lower() not in rec.decision_summary.lower()
-    assert rec.recommended_route_name == "Alpha" and "Alpha" in rec.decision_summary
-    assert len(rec.primary_reasons) == 2
+    # Routes are named as "<route id> - <route name>" -- both id and name together.
+    assert rec.decision_summary and "RTE-A - Alpha" in rec.decision_summary
+    assert rec.recommended_route_name == "Alpha"
+    assert "strongest route-slot overall" in rec.reasoning and "RTE-A - Alpha" in rec.reasoning
+    # primary_reasons comprehensively covers EVERY scored factor (here geo,
+    # capacity, window-match, slot-openness), in the breakdown's canonical order --
+    # so slot openness and window match are never dropped.
+    assert len(rec.primary_reasons) == len(_evals()[0].scored_slots[0].factor_scores)
+    joined = " ".join(rec.primary_reasons)
+    assert "Slot openness" in joined and "Preferred-window match" in joined
+    assert "Geographic fit" in joined and "Capacity headroom" in joined
     assert rec.runner_up and rec.key_tradeoff
     assert rec.default_comparison is None  # only the grounded self-assessment sets this
 
@@ -38,28 +54,30 @@ def test_deterministic_picks_the_highest_total_route_slot():
 def test_deterministic_floor_tradeoff_names_the_runner_up_advantage():
     # RTE-A morning wins overall (0.80) but its slot is tight (avail 0.33); the
     # runner-up RTE-B is more open (0.90) -> the trade-off should call that out.
-    rec = decide_route_slot(customer(), _evals(), Config(use_route_slot_scoring=True))
+    rec = decide_route_slot(customer(), _evals(), _cfg())
     assert "0.80 vs" in rec.key_tradeoff        # the winner's score edge
     assert "slot openness" in rec.key_tradeoff  # the factor the runner-up leads on
-    assert "Bravo" in rec.runner_up
+    assert "RTE-B - Bravo" in rec.runner_up     # runner-up named as <id> - <name>
 
 
 def test_escalates_when_best_route_slot_is_below_threshold():
     evals = [scored_eval("RTE-A", "Alpha", [scored_slot(MORNING, avail=0.3, total=0.40)])]
-    cfg = Config(use_route_slot_scoring=True, route_slot_score_threshold=0.55)
+    cfg = _cfg(route_slot_score_threshold=0.55)
     rec = decide_route_slot(customer(), evals, cfg)
     assert rec.decision is Decision.ESCALATED_LOW_SCORE
 
 
 def test_no_feasible_route_escalates():
-    infeasible = scored_eval("RTE-X", "X", [], feasible=False)
-    rec = decide_route_slot(customer(), [infeasible], Config(use_route_slot_scoring=True))
+    infeasible = scored_eval("RTE-X", "Xavier", [], feasible=False)
+    rec = decide_route_slot(customer(), [infeasible], _cfg())
     assert rec.decision is Decision.ESCALATED_NO_FEASIBLE_SLOT
     assert rec.recommended_route_id is None
+    # Infeasible routes are named as "<route id> - <route name>" too.
+    assert any("RTE-X - Xavier" in line for line in rec.rejected_alternatives)
 
 
 def test_grounded_pick_diverges_to_a_more_open_slot():
-    cfg = Config(use_route_slot_scoring=True, use_grounded_judgment=True)
+    cfg = _cfg(use_grounded_judgment=True)
 
     # Options are sorted by descending total: idx0=RTE-A morning (0.80),
     # idx1=RTE-B morning (0.66, openness 0.90), idx2=RTE-A afternoon (0.60).
@@ -83,7 +101,7 @@ def test_grounded_pick_diverges_to_a_more_open_slot():
 
 
 def test_grounded_falls_back_to_deterministic_on_backend_error():
-    cfg = Config(use_route_slot_scoring=True, use_grounded_judgment=True)
+    cfg = _cfg(use_grounded_judgment=True)
 
     def boom(config, prompt):
         raise RuntimeError("SAGE_CLIENT_ID missing")
@@ -95,7 +113,7 @@ def test_grounded_falls_back_to_deterministic_on_backend_error():
 
 
 def test_grounded_falls_back_on_persistently_ungrounded_choice():
-    cfg = Config(use_route_slot_scoring=True, use_grounded_judgment=True)
+    cfg = _cfg(use_grounded_judgment=True)
 
     def liar(config, prompt):
         # Well-formed shape, but a fabricated citation (idx1 openness is 0.90).
@@ -121,8 +139,7 @@ def test_llm_menu_excludes_below_threshold_route_slots():
         scored_slot(MORNING, avail=0.7, total=0.80),
         scored_slot(AFTERNOON, avail=0.3, total=0.50),
     ])]
-    cfg = Config(use_route_slot_scoring=True, use_grounded_judgment=True,
-                 route_slot_score_threshold=0.55)
+    cfg = _cfg(use_grounded_judgment=True, route_slot_score_threshold=0.55)
     seen = {}
 
     def capture(config, prompt):
@@ -143,8 +160,7 @@ def test_llm_menu_excludes_below_threshold_route_slots():
 
 def test_low_score_escalation_never_calls_the_llm():
     evals = [scored_eval("RTE-A", "Alpha", [scored_slot(MORNING, avail=0.3, total=0.40)])]
-    cfg = Config(use_route_slot_scoring=True, use_grounded_judgment=True,
-                 route_slot_score_threshold=0.55)
+    cfg = _cfg(use_grounded_judgment=True, route_slot_score_threshold=0.55)
 
     def boom(config, prompt):
         raise AssertionError("LLM must not be consulted when nothing clears the bar")
@@ -157,7 +173,7 @@ def test_low_score_escalation_never_calls_the_llm():
 def test_feasible_route_with_no_slots_has_its_own_reason():
     # Feasible on hard constraints, but zero candidate slots could be built.
     empty = scored_eval("RTE-A", "Alpha", [], feasible=True)
-    rec = decide_route_slot(customer(), [empty], Config(use_route_slot_scoring=True))
+    rec = decide_route_slot(customer(), [empty], _cfg())
     assert rec.decision is Decision.ESCALATED_NO_FEASIBLE_SLOT
     assert rec.recommended_route_id is None
     # Distinct from the no-feasible-route reason.
