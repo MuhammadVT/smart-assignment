@@ -1,21 +1,26 @@
 """
 Runs the smart_assignment conversational agent's golden dataset through
-ADK's AgentEvaluator. This tests TRAJECTORY (did the agent call its tools
-in the right order, e.g. intake_customer before recommend_or_escalate) and
-FINAL RESPONSE quality (does the recommendation match expectations), not
-just whether the code runs.
+ADK's AgentEvaluator. It REPLAYS each scripted intake conversation against the
+real ``root_agent`` -- so it needs a live LLM backend -- and scores TRAJECTORY
+(did the agent drive the pipeline in the right order: intake_customer ->
+find_candidate_routes -> evaluate_and_score_routes -> recommend_or_escalate).
+
+Phase 2a scores trajectory ONLY (see eval/data/test_config.json). The dataset is
+generated deterministically from the repo's mock fixtures by
+``eval/build_evalset.py`` (regenerate with ``python3 -m eval.build_evalset``);
+its expected final responses are captured against a real backend and
+final-response scoring is enabled in Phase 2b.
 
 [VERIFIED against installed google-adk 2.3.0] AgentEvaluator.evaluate()
 auto-discovers eval criteria from a `test_config.json` file located in
 the SAME FOLDER as the `.test.json` dataset file (see
 eval/data/test_config.json) -- it is not passed as an explicit argument.
 
-[ASSUMPTION] eval/data/slot_recommendation.test.json is currently a
-placeholder -- no real route/capacity data was available to build a
-genuine golden dataset. Populate it with real captured trajectories
-(via the ADK Web UI) before relying on this for regression detection.
+This file is NOT part of the hermetic unit suite (pyproject sets
+``testpaths = ["tests"]``); it runs only when explicitly targeted -- locally, or
+in the advisory ``agent-eval`` CI job -- because it requires model credentials.
 
-Run with: pytest eval/test_eval.py
+Run with (needs a configured LLM backend): pytest eval/test_eval.py
 """
 
 from __future__ import annotations
