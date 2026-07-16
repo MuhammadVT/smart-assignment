@@ -477,6 +477,64 @@ No image file is included in this package — generate one (e.g. via the
 ADK Web UI's trace view, or any diagramming tool) and drop it here as
 `smart_assignment.png` once available.
 
+## Tracing & observability (`shared/tracing.py`, opt-in)
+
+The grounded decision layers already produce an auditable *record* of every
+choice (evidence packet in, cited choice out, verifier verdict, fallback
+reason). This layer makes that record *observable at runtime* by emitting an
+OpenTelemetry span per LLM call, exportable to a self-hosted trace backend
+(the chosen stack is a self-hosted Langfuse instance) so a human can inspect
+production decisions in a UI instead of only in logs.
+
+It is deliberately the thinnest possible seam, and holds the repo's standard
+guarantees:
+
+- **Opt-in, default off.** Gated by `Config.use_tracing` (env
+  `SMART_ASSIGNMENT_USE_TRACING`). With it off, no OpenTelemetry SDK is imported
+  and behavior is byte-identical to before.
+- **Never worse than the baseline.** Tracing *observes*; it never changes a value
+  a decision layer acts on. Every failure path — SDK not installed, no exporter
+  configured, backend unreachable, span machinery erroring — degrades to a silent
+  no-op (`llm_span` yields a `_NoopSpan`), so a broken trace backend can never
+  break a decision. A caller exception still propagates unchanged (and is recorded
+  on the span when one is active).
+- **Credential-free import.** The SDK and exporter are imported lazily inside a
+  once-per-process `_configure`, so importing the package needs neither the
+  `observability` extra nor any credentials (the same discipline as the lazy
+  Sage/backend construction elsewhere).
+
+```
+generate_text(config, prompt, role=None)          [shared/llm.py]
+  └─ tracing.llm_span(config, "llm.generate_text",  backend/model/role/
+     prompt_chars, …)                               [shared/tracing.py]
+        · flag off  -> nullcontext(_NoopSpan)  (no import, no-op)
+        · flag on   -> OTLP span via a LOCAL TracerProvider
+                       (not the process-global one, so the Phase 0.5 ADK
+                        OpenTelemetry instrumentor can coexist)
+```
+
+**One instrumentation point.** Only `generate_text` is wrapped — the choke point
+for the grounded decision calls (`judgment`, `slotpick`, `routeslot`,
+`reasoning`). The conversational `root_agent` and the `triage` sub-agent run
+inside ADK's own runner (via `get_llm`) and are **not** covered here; tracing
+those is a follow-up (Phase 0.5) using the ADK OpenTelemetry instrumentor, which
+is why this seam keeps a *local* `TracerProvider` rather than claiming the global
+one.
+
+**Generic spans only, by design.** Phase 0 records backend, model, an optional
+`role` label, prompt/response sizes, latency, and error status — but **not**
+prompt or response text, which can carry customer PII (an evidence packet
+contains an address). Richer, per-layer payloads are an intentional per-call-site
+decision for a later phase, not a global default here.
+
+**Exporter is vendor-neutral.** The target comes from the environment, not from
+code: standard `OTEL_EXPORTER_OTLP_ENDPOINT` (+ `OTEL_EXPORTER_OTLP_HEADERS`)
+takes precedence, keeping the backend swappable; as a convenience, the
+`LANGFUSE_HOST`/`LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` trio is turned into an
+OTLP endpoint + Basic-auth header (Langfuse ingests OpenTelemetry directly). So
+pointing dev at `localhost:3000` vs. prod at a Cloud Run instance is pure config.
+Install with the `observability` extra (`pip install -e ".[observability]"`).
+
 ## Step 5, two ways: weighted-sum vs. grounded LLM judgment
 
 Step 5 (recommend-or-escalate) has two interchangeable *decision strategies*

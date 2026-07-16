@@ -51,6 +51,14 @@ analysis = [
     "streamlit>=1.32",
     "plotly>=5.18",
 ]
+# Opt-in OpenTelemetry tracing (smart_assignment/shared/tracing.py). Kept OUT of
+# `dev` so the test suite never requires it and imports stay credential-free:
+# with SMART_ASSIGNMENT_USE_TRACING off (the default) none of this is imported.
+# Exports OTLP spans to any OTLP backend -- e.g. a self-hosted Langfuse instance.
+observability = [
+    "opentelemetry-sdk>=1.24",
+    "opentelemetry-exporter-otlp-proto-http>=1.24",
+]
 
 [tool.setuptools.packages.find]
 include = ["smart_assignment*"]
