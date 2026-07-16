@@ -139,3 +139,64 @@ def test_service_name_defaults_and_override(monkeypatch):
     assert tracing._service_name() == "smart-assignment"
     monkeypatch.setenv("OTEL_SERVICE_NAME", "smart-assignment-dev")
     assert tracing._service_name() == "smart-assignment-dev"
+
+
+# --- configure_tracing: one-time, flag-gated setup ------------------------------
+
+
+def test_configure_tracing_is_noop_when_flag_off(monkeypatch):
+    # Flag off -> must return None WITHOUT running the real setup.
+    monkeypatch.setattr(
+        tracing, "_configure", lambda: pytest.fail("must not configure when flag off")
+    )
+    assert tracing.configure_tracing(Config(use_tracing=False)) is None
+
+
+def test_configure_tracing_runs_setup_exactly_once(monkeypatch):
+    calls = {"n": 0}
+
+    def _fake_configure():
+        calls["n"] += 1
+        return "TRACER"
+
+    monkeypatch.setattr(tracing, "_configure", _fake_configure)
+    config = Config(use_tracing=True)
+
+    assert tracing.configure_tracing(config) == "TRACER"
+    assert tracing.configure_tracing(config) == "TRACER"  # cached, no re-run
+    assert calls["n"] == 1
+
+
+# --- _instrument_adk: best-effort, never raises ---------------------------------
+
+
+def test_instrument_adk_is_noop_without_the_instrumentor():
+    # The openinference ADK instrumentor is not installed in the dev/CI env, so
+    # the import fails internally and this must simply return, never raise.
+    tracing._instrument_adk()
+
+
+# --- agent wiring: root_agent build installs tracing ----------------------------
+
+
+def test_build_root_agent_installs_tracing(monkeypatch):
+    """``_build_root_agent`` must call ``configure_tracing`` so the ADK instrumentor
+    is in place before the agent runs. Uses a credential-free standard/Gemini
+    config with the sub-agents off, so a real LlmAgent builds offline."""
+    import smart_assignment.agent as agent_mod
+
+    cfg = Config(
+        llm_backend="standard",
+        model="gemini-2.5-flash",
+        use_escalation_triage=False,
+        use_address_resolution=False,
+    )
+    monkeypatch.setattr(agent_mod, "DEFAULT_CONFIG", cfg)
+
+    seen = {}
+    monkeypatch.setattr(
+        agent_mod.tracing, "configure_tracing", lambda c: seen.setdefault("config", c)
+    )
+
+    agent_mod._build_root_agent()
+    assert seen["config"] is cfg

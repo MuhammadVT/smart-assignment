@@ -55,9 +55,13 @@ analysis = [
 # `dev` so the test suite never requires it and imports stay credential-free:
 # with SMART_ASSIGNMENT_USE_TRACING off (the default) none of this is imported.
 # Exports OTLP spans to any OTLP backend -- e.g. a self-hosted Langfuse instance.
+# openinference-instrumentation-google-adk turns the conversational agent's turns
+# and tool calls into spans on the same provider (agent-level tracing); without it
+# only the grounded generate_text calls are traced.
 observability = [
     "opentelemetry-sdk>=1.24",
     "opentelemetry-exporter-otlp-proto-http>=1.24",
+    "openinference-instrumentation-google-adk>=0.1",
 ]
 
 [tool.setuptools.packages.find]
