@@ -300,6 +300,17 @@ class Config:
     # fallback; it only makes an opaque sage failure legible. Off by default.
     debug_sage_raw_response: bool = False
 
+    # --- Observability (opt-in, off by default) ---
+    # When True, LLM calls are wrapped in an OpenTelemetry span and exported to a
+    # configured OTLP backend (e.g. a self-hosted Langfuse instance) -- see
+    # shared/tracing.py. Purely additive: tracing observes, it never changes a
+    # value a decision layer acts on, and every failure path (SDK missing, no
+    # exporter, backend unreachable) degrades to a silent no-op. Off by default,
+    # and flag-off imports no OpenTelemetry SDK and reproduces prior behavior
+    # exactly. The exporter target comes from the environment (standard
+    # OTEL_EXPORTER_OTLP_* vars, or the LANGFUSE_* trio), not from this flag.
+    use_tracing: bool = False
+
     def tier_harm_weight(self, tier: Optional[str]) -> float:
         """Harm weight for crowding a committed stop of the given Sysco tier --
         how much to protect it when scoring slot openness. Unknown/absent tiers
@@ -388,6 +399,7 @@ class Config:
             sage_model=os.environ.get("SMART_ASSIGNMENT_SAGE_MODEL", "sage-gemini-2.5-flash"),
             role_models=_role_models_from_env(),
             debug_sage_raw_response=_bool_env("SMART_ASSIGNMENT_DEBUG_SAGE_RESPONSE", False),
+            use_tracing=_bool_env("SMART_ASSIGNMENT_USE_TRACING", False),
         )
 
 

@@ -35,6 +35,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional, TypeVar
 
+from smart_assignment.shared import tracing
+
 if TYPE_CHECKING:
     from asyncio import AbstractEventLoop
 
@@ -315,7 +317,7 @@ def get_llm(config: "Config") -> Any:
     return config.model
 
 
-def generate_text(config: "Config", prompt: str) -> str:
+def generate_text(config: "Config", prompt: str, role: Optional[str] = None) -> str:
     """
     One-shot content generation that honours the backend toggle.
 
@@ -326,11 +328,36 @@ def generate_text(config: "Config", prompt: str) -> str:
 
     Raises on failure; callers should guard with ``except Exception``.
 
+    ``role`` is an optional label (e.g. one of the ``Config.ROLE_*`` names) used
+    only to annotate the tracing span; it does not affect model selection, which
+    the caller has already applied via ``config.for_role(...)``.
+
     Note: the sage path is async under the hood. ``_run_coro_blocking`` drives it
     to completion whether or not a loop is already running, so this stays a safe
     synchronous call both from the CLI pipeline and from the web app's async
     request handlers (where a bare ``asyncio.run`` would raise).
+
+    When ``config.use_tracing`` is on, the whole call is wrapped in an
+    OpenTelemetry span (see ``shared/tracing.py``); when off, ``llm_span`` is a
+    transparent no-op, so this path is unchanged.
     """
+    active_model = config.sage_model if config.llm_backend == "sage" else config.model
+    with tracing.llm_span(
+        config,
+        "llm.generate_text",
+        backend=config.llm_backend,
+        model=active_model,
+        role=role or "",
+        prompt_chars=len(prompt),
+    ) as span:
+        result = _generate_text_impl(config, prompt)
+        span.set_attribute("smart_assignment.response_chars", len(result))
+        return result
+
+
+def _generate_text_impl(config: "Config", prompt: str) -> str:
+    """The backend-routing body of ``generate_text``, kept separate so the public
+    function owns the tracing span and this stays pure LLM-dispatch logic."""
     if config.llm_backend == "sage":
         _check_sage_env_vars()
         registry = _load_sage_registry()
