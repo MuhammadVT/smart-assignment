@@ -63,3 +63,13 @@ Edit `golden_cases.py`, then `python3 -m eval.build_evalset` to regenerate the
 JSON, and commit both. `tests/eval/test_build_evalset.py` asserts the committed
 JSON stays in sync with the builder and is schema-valid, so a stale hand-edit is
 caught by the hermetic suite.
+
+## Human feedback on top of eval runs
+
+Trajectory scoring above is automated and deterministic; it can't judge things
+like "was this escalation brief actually useful" or "is the final message
+clear." For that, point a run of this suite at a self-hosted Langfuse instance
+(`SMART_ASSIGNMENT_USE_TRACING=true` + `LANGFUSE_*`, see `.env.example`) so each
+replayed case's agent turns and decisions land as a trace, then have a human
+score those traces in Langfuse's Annotation Queues. See
+`deployment/langfuse/README.md` for the full loop (Podman setup included).
