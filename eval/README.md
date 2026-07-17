@@ -68,8 +68,12 @@ caught by the hermetic suite.
 
 Trajectory scoring above is automated and deterministic; it can't judge things
 like "was this escalation brief actually useful" or "is the final message
-clear." For that, point a run of this suite at a self-hosted Langfuse instance
-(`SMART_ASSIGNMENT_USE_TRACING=true` + `LANGFUSE_*`, see `.env.example`) so each
-replayed case's agent turns and decisions land as a trace, then have a human
-score those traces in Langfuse's Annotation Queues. See
-`deployment/langfuse/README.md` for the full loop (Podman setup included).
+clear." For that, point a run of this suite at a self-hosted trace backend
+(`SMART_ASSIGNMENT_USE_TRACING=true` + an OTLP endpoint, see `.env.example`) so
+each replayed case's agent turns and decisions land as a trace, then have a
+human score those traces. Two backend options, same workflow either way:
+
+- `deployment/langfuse/README.md` — self-hosted Langfuse via Podman, with
+  structured Annotation Queues for batch review.
+- `deployment/phoenix/README.md` — self-hosted Arize Phoenix, no container
+  runtime required; good when Podman/Docker isn't available.

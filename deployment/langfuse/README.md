@@ -4,6 +4,10 @@ This guide shows how to stand up a **self-hosted Langfuse** instance with
 **Podman**, point the agent's eval runs at it, and then have a human **score the
 resulting traces** — closing an *automated eval → human feedback* loop.
 
+> No Podman/Docker available, or fighting a locked-down laptop? See
+> `deployment/phoenix/README.md` for the same loop against a self-hosted
+> **Arize Phoenix** instance instead — no container runtime required.
+
 Nothing here changes the product. It reuses the repo's existing, opt-in tracing
 seam (`smart_assignment/shared/tracing.py`): with the flag on and the
 `LANGFUSE_*` env set, every agent turn, tool call, and grounded decision is
