@@ -51,3 +51,49 @@ jobs:
 
       - name: Run tests
         run: python3 -m pytest -q
+
+  # Agent-level evaluation (ADK AgentEvaluator): replays scripted intake
+  # conversations against the real root_agent and scores tool trajectory. Unlike
+  # the hermetic `test` job it needs a live LLM backend, so it runs separately and
+  # is ADVISORY for now -- it reports regressions but never blocks a PR while the
+  # thresholds are being calibrated (Phase 2a). Flip to a required check (drop
+  # continue-on-error) once trajectory scores prove stable over a few real PRs.
+  #
+  # NOTE: configured for the Sage backend (sage-gemini-2.5-flash). That backend
+  # needs the Sage SDK and enterprise network access, so this job is meant to run
+  # on a runner that has them (e.g. a self-hosted runner); on a stock runner
+  # without SAGE_* secrets it skips cleanly and never fails the PR. To run it
+  # against a public model instead, swap the env below for
+  # SMART_ASSIGNMENT_LLM_BACKEND=standard + a GOOGLE_API_KEY secret.
+  agent-eval:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - name: Install the local ds-utils-lite dependency
+        run: pip install -e smart_assignment/ds_utils_lite
+
+      - name: Install package with dev dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Run agent trajectory eval (skips cleanly without credentials)
+        env:
+          SMART_ASSIGNMENT_LLM_BACKEND: sage
+          SMART_ASSIGNMENT_SAGE_MODEL: sage-gemini-2.5-flash
+          SAGE_CLIENT_ID: ${{ secrets.SAGE_CLIENT_ID }}
+          SAGE_CLIENT_SECRET: ${{ secrets.SAGE_CLIENT_SECRET }}
+          SAGE_ENVIRONMENT: ${{ secrets.SAGE_ENVIRONMENT }}
+        run: |
+          if [ -z "$SAGE_CLIENT_ID" ]; then
+            echo "No SAGE_* credentials configured; skipping agent eval (advisory)."
+            exit 0
+          fi
+          python3 -m pytest eval/test_eval.py -q
