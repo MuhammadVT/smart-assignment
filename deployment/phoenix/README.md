@@ -65,15 +65,22 @@ same eval run at either, or swap later, with zero code changes.
   ```bash
   pip install -e ".[observability]"
   ```
-- Phoenix itself. Two ways to install it, same discipline either way — it's an
-  external observability backend, not a `smart_assignment` dependency, so keep
-  it out of `pyproject.toml`:
-  - **Separate venv** (mirrors Langfuse being an external service): `python3
-    -m venv ~/.venvs/phoenix && ~/.venvs/phoenix/bin/pip install arize-phoenix`.
-  - **Into this repo's existing venv** (simpler if you already run everything
-    through one `.venv`/`uv` environment): `uv pip install arize-phoenix`.
-    `phoenix.sh`/`phoenix.ps1` (below) auto-install here if `phoenix` isn't
-    found anywhere, so on Windows+uv this step can be skipped entirely.
+- Phoenix itself, in its **own** virtualenv — it's an external observability
+  backend, not a `smart_assignment` dependency, so keep it out of the project
+  venv and `pyproject.toml`. On Windows+uv, `phoenix.ps1` (below) creates this
+  venv for you, so you can skip this step entirely:
+  ```bash
+  python3 -m venv ~/.venvs/phoenix && ~/.venvs/phoenix/bin/pip install arize-phoenix
+  ```
+
+> **Windows + Python 3.14 gotcha.** Phoenix needs `sqlean-py` (import name
+> `sqlean`), which has **no Windows wheel for Python 3.14** — installing Phoenix
+> into a 3.14 venv fails at `import sqlean` with `ModuleNotFoundError`. (And
+> `sqlean` on PyPI is a *different, wrong* package — don't install that.) Because
+> Phoenix talks to the agent over OTLP HTTP, its interpreter is independent of
+> the project's: run Phoenix from a venv on **Python 3.13** (which does have the
+> wheel) and leave the project on 3.14. `phoenix.ps1` does exactly this by
+> default (`uv venv --python 3.13`, which uv downloads on demand).
 
 ---
 
@@ -91,27 +98,31 @@ cd deployment/phoenix
 **Windows (PowerShell):**
 ```powershell
 cd deployment\phoenix
-.\phoenix.ps1 up               # installs arize-phoenix into the repo .venv (uv) if missing, then starts it
+.\phoenix.ps1 up               # creates a dedicated Phoenix venv (Python 3.13, via uv) if missing, then starts it
 .\phoenix.ps1 status            # check it's running + show the data dir
 .\phoenix.ps1 logs -Follow      # follow server logs
 .\phoenix.ps1 down              # stop; add -Purge to also delete local trace data
 ```
 `phoenix.ps1` needs no container runtime and no manual `pip install` step —
-`up` resolves `phoenix` on `PATH`, then this repo's `.venv\Scripts\phoenix.exe`,
-then `~\.venvs\phoenix`, and if none exist it runs `uv pip install
-arize-phoenix` into this repo's `.venv` for you. Re-running `up` later reuses
-that install. Override with `$env:PHOENIX_BIN` to point at a specific
-executable instead.
+`up` resolves `phoenix` from `$env:PHOENIX_BIN`, then a dedicated Phoenix venv
+(`.venvs\phoenix` beside the project `.venv`), then `PATH`, then the repo
+`.venv`; if none exist it runs `uv venv --python 3.13 .venvs\phoenix` + `uv pip
+install arize-phoenix` for you. It installs into that **dedicated 3.13 venv, not
+the project `.venv`** — see
+the Windows+3.14 gotcha above for why. Re-running `up` reuses the install.
+Override the venv location, its Python, or the binary with `$env:PHOENIX_VENV`,
+`$env:PHOENIX_PYTHON`, or `$env:PHOENIX_BIN`.
 
 Prefer to do it by hand? That's all the scripts do:
 
 ```bash
-source ~/.venvs/phoenix/bin/activate   # or: your repo venv, if installed there
+source ~/.venvs/phoenix/bin/activate
 PHOENIX_WORKING_DIR=./deployment/phoenix/.data phoenix serve
 ```
 ```powershell
+# from the repo root, with .venvs\phoenix already created (see the gotcha above)
 $env:PHOENIX_WORKING_DIR = ".\deployment\phoenix\.data"
-uv run phoenix serve
+& ".\.venvs\phoenix\Scripts\phoenix.exe" serve
 ```
 
 When it's up, the **UI is at http://localhost:6006**. No sign-up, org, or API

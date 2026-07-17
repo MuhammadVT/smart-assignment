@@ -6,8 +6,17 @@
 
     Unlike deployment/langfuse/, this needs NO container runtime -- Phoenix runs
     as a single Python process (`phoenix serve`). Unlike phoenix.sh, `up` will
-    auto-install arize-phoenix into this repo's .venv (via uv) if it isn't
-    present yet, so there's no separate manual setup step on a fresh machine.
+    auto-install arize-phoenix (via uv) if it isn't present yet, so there's no
+    separate manual setup step on a fresh machine.
+
+    It installs into a DEDICATED Phoenix venv (default <repo>\.venvs\phoenix, i.e.
+    right next to the project's .venv), NOT the project's .venv itself, and pins
+    that venv to Python 3.13 by default. This is on
+    purpose: Phoenix needs `sqlean-py`, which has no Windows wheel for Python
+    3.14, so installing Phoenix into a 3.14 project venv fails at `import
+    sqlean`. Phoenix is an external backend that talks to the agent over OTLP
+    HTTP -- its interpreter is independent of the project's, so running it on
+    3.13 keeps the project on 3.14 untouched. uv downloads 3.13 automatically.
 
 .USAGE
     .\phoenix.ps1 up               # install (if needed) + start the server in the background
@@ -19,7 +28,11 @@
 
 .ENV OVERRIDES
     PHOENIX_BIN           path to the `phoenix` executable (default: resolved via PATH,
-                          then this repo's .venv, then ~\.venvs\phoenix)
+                          then the dedicated Phoenix venv, then this repo's .venv)
+    PHOENIX_VENV          dedicated venv dir to install/run Phoenix from
+                          (default: <repo>\.venvs\phoenix, beside the project .venv)
+    PHOENIX_PYTHON        Python version for the dedicated venv when auto-installing
+                          (default: 3.13 -- has prebuilt sqlean-py Windows wheels)
     PHOENIX_WORKING_DIR   where Phoenix stores its local SQLite trace data
                           (default: .\.data next to this script)
     PHOENIX_PORT          UI + OTLP/HTTP port (default: Phoenix's own default, 6006)
@@ -40,6 +53,8 @@ $ScriptPath = $MyInvocation.MyCommand.Path
 $ScriptDir = Split-Path -Parent $ScriptPath
 $RepoRoot  = Resolve-Path (Join-Path $ScriptDir '..\..')
 $RepoVenv  = Join-Path $RepoRoot '.venv'
+$PhoenixVenv   = if ($env:PHOENIX_VENV)   { $env:PHOENIX_VENV }   else { Join-Path $RepoRoot '.venvs\phoenix' }
+$PhoenixPython = if ($env:PHOENIX_PYTHON) { $env:PHOENIX_PYTHON } else { '3.13' }
 $RunDir    = Join-Path $ScriptDir '.run'
 $DataDir   = if ($env:PHOENIX_WORKING_DIR) { $env:PHOENIX_WORKING_DIR } else { Join-Path $ScriptDir '.data' }
 $PidFile   = Join-Path $RunDir 'phoenix.pid'
@@ -67,42 +82,54 @@ function Get-RunningPid {
 function Resolve-PhoenixBin {
     if ($env:PHOENIX_BIN -and (Test-Path $env:PHOENIX_BIN)) { return $env:PHOENIX_BIN }
 
+    # Dedicated Phoenix venv first: it's pinned to a Python that has prebuilt
+    # sqlean-py wheels, so it's preferred over the project .venv, which may be on
+    # a newer Python (e.g. 3.14) that has none on Windows and would fail to run.
+    $dedicatedBin = Join-Path $PhoenixVenv 'Scripts\phoenix.exe'
+    if (Test-Path $dedicatedBin) { return $dedicatedBin }
+
     $onPath = Get-Command phoenix -ErrorAction SilentlyContinue
     if ($onPath) { return $onPath.Source }
 
+    # Last resort: a phoenix already installed into the project .venv (fine when
+    # that venv's Python has sqlean-py wheels; auto-install never puts it here).
     $repoVenvBin = Join-Path $RepoVenv 'Scripts\phoenix.exe'
     if (Test-Path $repoVenvBin) { return $repoVenvBin }
-
-    $userVenvBin = Join-Path $HOME '.venvs\phoenix\Scripts\phoenix.exe'
-    if (Test-Path $userVenvBin) { return $userVenvBin }
 
     return $null
 }
 
 function Install-PhoenixIfMissing {
-    $bin = Resolve-PhoenixBin
-    if ($bin) { return $bin }
+    # Honor an explicit override, an already-installed dedicated venv, or a
+    # phoenix on PATH. Deliberately do NOT accept a project-.venv install here:
+    # that venv may be on a Python (e.g. 3.14) with no sqlean-py Windows wheel,
+    # so a phoenix.exe sitting there can still be broken -- we'd rather build the
+    # dedicated venv than short-circuit to it.
+    if ($env:PHOENIX_BIN -and (Test-Path $env:PHOENIX_BIN)) { return $env:PHOENIX_BIN }
+    $dedicatedBin = Join-Path $PhoenixVenv 'Scripts\phoenix.exe'
+    if (Test-Path $dedicatedBin) { return $dedicatedBin }
+    $onPath = Get-Command phoenix -ErrorAction SilentlyContinue
+    if ($onPath) { return $onPath.Source }
 
     $uv = Get-Command uv -ErrorAction SilentlyContinue
     if (-not $uv) {
+        $py = Join-Path $PhoenixVenv 'Scripts\python.exe'
         $msg = "'phoenix' executable not found and 'uv' isn't on PATH to auto-install it. " + `
-            "Install manually: uv venv `"$RepoVenv`"; uv pip install --python `"$RepoVenv\Scripts\python.exe`" arize-phoenix"
-        Die $msg
-    }
-    if (-not (Test-Path $RepoVenv)) {
-        $msg = "'phoenix' executable not found and no .venv at '$RepoVenv' to install into. " + `
-            "Run 'uv venv' in the repo root first, or set `$env:PHOENIX_BIN to an existing install."
+            "Install manually: uv venv --python $PhoenixPython `"$PhoenixVenv`"; uv pip install --python `"$py`" arize-phoenix"
         Die $msg
     }
 
-    Write-Log "arize-phoenix not found -- installing into $RepoVenv (one-time)..."
-    & uv pip install --python (Join-Path $RepoVenv 'Scripts\python.exe') arize-phoenix
+    # Create a dedicated venv pinned to a Python that has sqlean-py wheels (uv
+    # downloads it if absent), keeping the project's interpreter untouched.
+    Write-Log "arize-phoenix not found -- creating a dedicated Phoenix venv at $PhoenixVenv (Python $PhoenixPython) and installing (one-time)..."
+    & uv venv --python $PhoenixPython $PhoenixVenv
+    if ($LASTEXITCODE -ne 0) { Die "uv venv --python $PhoenixPython '$PhoenixVenv' failed (exit $LASTEXITCODE)." }
+    & uv pip install --python (Join-Path $PhoenixVenv 'Scripts\python.exe') arize-phoenix
     if ($LASTEXITCODE -ne 0) { Die "uv pip install arize-phoenix failed (exit $LASTEXITCODE)." }
 
-    $bin = Resolve-PhoenixBin
-    if (-not $bin) { Die "Installed arize-phoenix but still can't find phoenix.exe under $RepoVenv\Scripts." }
-    Write-Log "Installed. Using $bin"
-    return $bin
+    if (-not (Test-Path $dedicatedBin)) { Die "Installed arize-phoenix but phoenix.exe not found under $PhoenixVenv\Scripts." }
+    Write-Log "Installed. Using $dedicatedBin"
+    return $dedicatedBin
 }
 
 function Cmd-Up {
@@ -182,8 +209,12 @@ function Cmd-Down {
 }
 
 function Show-Usage {
-    Get-Content $ScriptPath | Select-Object -First 26 | Select-Object -Skip 1 | ForEach-Object {
-        $_ -replace '^\.', ''
+    # Print the leading <# ... #> comment block (minus its delimiters).
+    $inBlock = $false
+    foreach ($line in Get-Content $ScriptPath) {
+        if ($line -match '^\s*<#') { $inBlock = $true; continue }
+        if ($line -match '^\s*#>') { break }
+        if ($inBlock) { $line -replace '^\.', '' }
     }
 }
 
