@@ -105,9 +105,10 @@ cd deployment\phoenix
 ```
 `phoenix.ps1` needs no container runtime and no manual `pip install` step —
 `up` resolves `phoenix` from `$env:PHOENIX_BIN`, then a dedicated Phoenix venv
-(`~\.venvs\phoenix`), then `PATH`, then the repo `.venv`; if none exist it runs
-`uv venv --python 3.13 ~\.venvs\phoenix` + `uv pip install arize-phoenix` for
-you. It installs into that **dedicated 3.13 venv, not the project `.venv`** — see
+(`.venvs\phoenix` beside the project `.venv`), then `PATH`, then the repo
+`.venv`; if none exist it runs `uv venv --python 3.13 .venvs\phoenix` + `uv pip
+install arize-phoenix` for you. It installs into that **dedicated 3.13 venv, not
+the project `.venv`** — see
 the Windows+3.14 gotcha above for why. Re-running `up` reuses the install.
 Override the venv location, its Python, or the binary with `$env:PHOENIX_VENV`,
 `$env:PHOENIX_PYTHON`, or `$env:PHOENIX_BIN`.
@@ -119,8 +120,9 @@ source ~/.venvs/phoenix/bin/activate
 PHOENIX_WORKING_DIR=./deployment/phoenix/.data phoenix serve
 ```
 ```powershell
+# from the repo root, with .venvs\phoenix already created (see the gotcha above)
 $env:PHOENIX_WORKING_DIR = ".\deployment\phoenix\.data"
-& "$HOME\.venvs\phoenix\Scripts\phoenix.exe" serve
+& ".\.venvs\phoenix\Scripts\phoenix.exe" serve
 ```
 
 When it's up, the **UI is at http://localhost:6006**. No sign-up, org, or API
