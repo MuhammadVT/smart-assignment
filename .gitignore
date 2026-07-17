@@ -27,6 +27,10 @@ htmlcov/
 .adk/
 *.session.json
 
+# Local Phoenix observability instance (traces, pid/log files)
+deployment/phoenix/.data/
+deployment/phoenix/.run/
+
 # IDE
 .vscode/
 .idea/
