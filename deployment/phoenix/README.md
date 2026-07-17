@@ -65,20 +65,21 @@ same eval run at either, or swap later, with zero code changes.
   ```bash
   pip install -e ".[observability]"
   ```
-- Phoenix itself, in a **separate** virtual environment (it is an external
-  observability backend, not a dependency of `smart_assignment` — same
-  discipline as Langfuse being an external service rather than a library):
-  ```bash
-  python3 -m venv ~/.venvs/phoenix
-  source ~/.venvs/phoenix/bin/activate
-  pip install arize-phoenix
-  deactivate
-  ```
+- Phoenix itself. Two ways to install it, same discipline either way — it's an
+  external observability backend, not a `smart_assignment` dependency, so keep
+  it out of `pyproject.toml`:
+  - **Separate venv** (mirrors Langfuse being an external service): `python3
+    -m venv ~/.venvs/phoenix && ~/.venvs/phoenix/bin/pip install arize-phoenix`.
+  - **Into this repo's existing venv** (simpler if you already run everything
+    through one `.venv`/`uv` environment): `uv pip install arize-phoenix`.
+    `phoenix.sh`/`phoenix.ps1` (below) auto-install here if `phoenix` isn't
+    found anywhere, so on Windows+uv this step can be skipped entirely.
 
 ---
 
 ## 1. Start Phoenix
 
+**macOS/Linux:**
 ```bash
 cd deployment/phoenix
 ./phoenix.sh up        # starts `phoenix serve` in the background
@@ -87,11 +88,30 @@ cd deployment/phoenix
 ./phoenix.sh down      # stop; add --purge to also delete local trace data
 ```
 
-Prefer to do it by hand? That's all the script does:
+**Windows (PowerShell):**
+```powershell
+cd deployment\phoenix
+.\phoenix.ps1 up               # installs arize-phoenix into the repo .venv (uv) if missing, then starts it
+.\phoenix.ps1 status            # check it's running + show the data dir
+.\phoenix.ps1 logs -Follow      # follow server logs
+.\phoenix.ps1 down              # stop; add -Purge to also delete local trace data
+```
+`phoenix.ps1` needs no container runtime and no manual `pip install` step —
+`up` resolves `phoenix` on `PATH`, then this repo's `.venv\Scripts\phoenix.exe`,
+then `~\.venvs\phoenix`, and if none exist it runs `uv pip install
+arize-phoenix` into this repo's `.venv` for you. Re-running `up` later reuses
+that install. Override with `$env:PHOENIX_BIN` to point at a specific
+executable instead.
+
+Prefer to do it by hand? That's all the scripts do:
 
 ```bash
-source ~/.venvs/phoenix/bin/activate
+source ~/.venvs/phoenix/bin/activate   # or: your repo venv, if installed there
 PHOENIX_WORKING_DIR=./deployment/phoenix/.data phoenix serve
+```
+```powershell
+$env:PHOENIX_WORKING_DIR = ".\deployment\phoenix\.data"
+uv run phoenix serve
 ```
 
 When it's up, the **UI is at http://localhost:6006**. No sign-up, org, or API
@@ -193,6 +213,11 @@ replacing it.**
 cd deployment/phoenix
 ./phoenix.sh down            # stop the process, keep .data/ (trace history)
 ./phoenix.sh down --purge    # stop and delete .data/ (all local trace history)
+```
+```powershell
+cd deployment\phoenix
+.\phoenix.ps1 down           # stop the process, keep .data\ (trace history)
+.\phoenix.ps1 down -Purge    # stop and delete .data\ (all local trace history)
 ```
 
 ---
