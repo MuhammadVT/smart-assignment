@@ -27,7 +27,14 @@ concurrency:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Runner is configurable so CI works under an org IP allow list. Standard
+    # GitHub-hosted runners use ephemeral IPs; if the org enables an IP allow
+    # list, actions/checkout is rejected with "403 ... IP allow list enabled,
+    # and <ip> is not permitted". Set a repo/org Actions variable CI_RUNNER to
+    # the label of a runner whose egress IP is on the allow list (self-hosted,
+    # or a GitHub-hosted larger runner with a static IP range); it falls back to
+    # ubuntu-latest when unset. Shared by every workflow in this repo.
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -66,7 +73,8 @@ jobs:
   # against a public model instead, swap the env below for
   # SMART_ASSIGNMENT_LLM_BACKEND=standard + a GOOGLE_API_KEY secret.
   agent-eval:
-    runs-on: ubuntu-latest
+    # See the note on the `test` job above; CI_RUNNER is shared repo-wide.
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     continue-on-error: true
     steps:
       - name: Checkout
