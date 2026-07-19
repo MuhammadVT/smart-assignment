@@ -280,7 +280,7 @@ class Config:
     llm_backend: str = "sage"
     # Model name used when llm_backend == "standard" -- a bare Gemini name,
     # or a "<provider>/<model>" litellm string for any other provider.
-    model: str = "gemini-2.5-flash"
+    model: str = "gemini-3.5-flash"
     # Model name used when llm_backend == "sage" (Sage-prefixed identifier).
     sage_model: str = "sage-gemini-2.5-flash"
     # Optional per-role model overrides (role -> model name; see the ROLE_*
@@ -395,7 +395,7 @@ class Config:
             use_address_resolution=_bool_env("SMART_ASSIGNMENT_USE_ADDRESS_RESOLUTION", True),
             use_escalation_triage=_bool_env("SMART_ASSIGNMENT_USE_ESCALATION_TRIAGE", True),
             llm_backend=os.environ.get("SMART_ASSIGNMENT_LLM_BACKEND", "sage"),
-            model=os.environ.get("SMART_ASSIGNMENT_MODEL", "gemini-2.5-flash"),
+            model=os.environ.get("SMART_ASSIGNMENT_MODEL", "gemini-3.5-flash"),
             sage_model=os.environ.get("SMART_ASSIGNMENT_SAGE_MODEL", "sage-gemini-2.5-flash"),
             role_models=_role_models_from_env(),
             debug_sage_raw_response=_bool_env("SMART_ASSIGNMENT_DEBUG_SAGE_RESPONSE", False),
