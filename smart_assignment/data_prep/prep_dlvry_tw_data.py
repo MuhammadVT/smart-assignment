@@ -52,7 +52,20 @@ def read_cached_dataframe(cache_path: str) -> pd.DataFrame:
     """Read a cached dataframe using the configured DEFAULT_CACHE_EXTENSION."""
     extension = DEFAULT_CACHE_EXTENSION.lstrip('.').lower()
     if extension == 'parquet':
-        return pd.read_parquet(cache_path)
+        try:
+            return pd.read_parquet(cache_path)
+        except ImportError as exc:
+            # pandas raises ImportError when no parquet engine is installed. Turn
+            # its generic "Unable to find a usable engine" into an actionable
+            # remedy -- otherwise this bubbles up as an opaque reason in
+            # fetch_candidate_routes' "using the mock demo routes instead"
+            # warning, which reads like a data problem rather than a missing dep.
+            raise ImportError(
+                "Reading the parquet cache under data/dev/ needs a parquet engine "
+                "(pyarrow), which isn't installed. Add it with the project's "
+                "'cache' extra: pip install -e \".[cache]\" (or uv pip install "
+                "-e \".[cache]\" / uv pip install pyarrow)."
+            ) from exc
     return pd.read_csv(cache_path)
 
 
