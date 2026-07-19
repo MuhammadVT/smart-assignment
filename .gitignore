@@ -41,3 +41,4 @@ deployment/phoenix/.run/
 .DS_Store
 Thumbs.db
 /creds.json
+data/dev/
