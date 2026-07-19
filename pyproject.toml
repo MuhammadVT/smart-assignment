@@ -39,6 +39,13 @@ dev = [
 litellm = [
     "google-adk[extensions]>=2.3.0",
 ]
+# Reading the prepared parquet cache snapshots under data/dev/ that the "cache"
+# data source (the default -- see integrations/route_capacity_client.py) loads:
+# pandas needs a parquet engine. Without it the route/tier/window cache reads
+# fail and fetch_candidate_routes falls back to the mock demo routes. Kept as an
+# opt-in extra (not a core dep) so the hermetic suite, which runs on mock, never
+# requires a heavy native wheel. Matches ds-utils-lite's own [parquet] extra.
+cache = ["pyarrow>=14.0"]
 # The live chat web app (smart_assignment/webapp). Runs the deterministic
 # pipeline offline -- no LLM key needed. Serve with:
 #   uvicorn smart_assignment.webapp.app:app --reload

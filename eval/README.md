@@ -46,6 +46,13 @@ python3 -m eval.build_evalset    # regenerate the dataset if cases changed
 pytest eval/test_eval.py
 ```
 
+Trajectory scoring is identical on the mock demo routes, so this runs fine
+without a data snapshot. If you have the prepared parquet cache under `data/dev/`
+and want the agent to load it (the default `cache` data source) instead of
+falling back to mock, also install the parquet engine: `pip install -e
+".[cache]"` (adds `pyarrow`). Without it, the cache read fails and you'll see a
+"using the mock demo routes instead" warning — expected, not an error.
+
 ## CI: advisory first
 
 The `agent-eval` job in `.github/workflows/ci.yml` runs this on PRs but is
