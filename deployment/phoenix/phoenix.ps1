@@ -9,14 +9,21 @@
     auto-install arize-phoenix (via uv) if it isn't present yet, so there's no
     separate manual setup step on a fresh machine.
 
-    It installs into a DEDICATED Phoenix venv (default <repo>\.venvs\phoenix, i.e.
-    right next to the project's .venv), NOT the project's .venv itself, and pins
-    that venv to Python 3.13 by default. This is on
-    purpose: Phoenix needs `sqlean-py`, which has no Windows wheel for Python
-    3.14, so installing Phoenix into a 3.14 project venv fails at `import
-    sqlean`. Phoenix is an external backend that talks to the agent over OTLP
-    HTTP -- its interpreter is independent of the project's, so running it on
-    3.13 keeps the project on 3.14 untouched. uv downloads 3.13 automatically.
+    It installs into a DEDICATED Phoenix venv (default
+    <user-home>\venvs\<repo-name>-phoenix), NOT the project's .venv itself, and
+    pins that venv to Python 3.13 by default. This is on purpose, for two
+    reasons:
+      - Phoenix needs `sqlean-py`, which has no Windows wheel for Python 3.14,
+        so installing Phoenix into a 3.14 project venv fails at `import
+        sqlean`. Phoenix is an external backend that talks to the agent over
+        OTLP HTTP -- its interpreter is independent of the project's, so
+        running it on 3.13 keeps the project on 3.14 untouched. uv downloads
+        3.13 automatically.
+      - Living under the repo (which is OneDrive-synced) would get the venv
+        swept into cloud sync and hit the same hardlink issues venvs run into
+        there. Keeping it under the user's home `venvs\` folder -- the same
+        place this repo's own .venv is redirected to via
+        UV_PROJECT_ENVIRONMENT -- keeps it outside OneDrive.
 
 .USAGE
     .\phoenix.ps1 up               # install (if needed) + start the server in the background
@@ -30,7 +37,7 @@
     PHOENIX_BIN           path to the `phoenix` executable (default: resolved via PATH,
                           then the dedicated Phoenix venv, then this repo's .venv)
     PHOENIX_VENV          dedicated venv dir to install/run Phoenix from
-                          (default: <repo>\.venvs\phoenix, beside the project .venv)
+                          (default: <user-home>\venvs\<repo-name>-phoenix, outside OneDrive)
     PHOENIX_PYTHON        Python version for the dedicated venv when auto-installing
                           (default: 3.13 -- has prebuilt sqlean-py Windows wheels)
     PHOENIX_WORKING_DIR   where Phoenix stores its local SQLite trace data
@@ -53,7 +60,8 @@ $ScriptPath = $MyInvocation.MyCommand.Path
 $ScriptDir = Split-Path -Parent $ScriptPath
 $RepoRoot  = Resolve-Path (Join-Path $ScriptDir '..\..')
 $RepoVenv  = Join-Path $RepoRoot '.venv'
-$PhoenixVenv   = if ($env:PHOENIX_VENV)   { $env:PHOENIX_VENV }   else { Join-Path $RepoRoot '.venvs\phoenix' }
+$RepoName  = Split-Path -Leaf $RepoRoot
+$PhoenixVenv   = if ($env:PHOENIX_VENV)   { $env:PHOENIX_VENV }   else { Join-Path $env:USERPROFILE "venvs\$RepoName-phoenix" }
 $PhoenixPython = if ($env:PHOENIX_PYTHON) { $env:PHOENIX_PYTHON } else { '3.13' }
 $RunDir    = Join-Path $ScriptDir '.run'
 $DataDir   = if ($env:PHOENIX_WORKING_DIR) { $env:PHOENIX_WORKING_DIR } else { Join-Path $ScriptDir '.data' }
