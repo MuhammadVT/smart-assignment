@@ -18,7 +18,9 @@ _LEGACY = "SMART_ASSIGNMENT_ROUTE_SOURCE"
 def _clean_env(monkeypatch):
     monkeypatch.delenv(_DATA, raising=False)
     monkeypatch.delenv(_LEGACY, raising=False)
+    rc.clear_route_cache()
     yield
+    rc.clear_route_cache()
 
 
 @pytest.mark.parametrize(

@@ -19,6 +19,13 @@ If the cache is requested (or defaulted to) but the snapshot files are missing
 loud warning rather than crash. The legacy `SMART_ASSIGNMENT_ROUTE_SOURCE`
 (values mock|prepared) is still honored with a deprecation warning:
 "prepared" maps to "live_sql".
+
+Results for the two deterministic sources ("mock" and "cache") are memoized
+per-process, so a long-running surface (the web app, adk web) parses the
+parquet snapshot once instead of on every agent tool call. "live_sql" is never
+memoized -- returning fresh data on each call is the whole reason to pick it.
+Use `clear_route_cache()` to force a re-read (see its docstring for the
+caveat about mutating returned Routes).
 """
 
 from __future__ import annotations
@@ -26,6 +33,7 @@ from __future__ import annotations
 import logging
 import os
 from datetime import time
+from functools import lru_cache
 
 import pandas as pd
 
@@ -523,8 +531,48 @@ def fetch_candidate_routes() -> list[Route]:
     (see the module docstring). "cache" (the default) and "live_sql" build from
     the prepared ODI tables; "mock" returns the demo routes. If the prepared
     tables can't be loaded (e.g. no cache snapshot on a fresh checkout), fall
-    back to mock with a loud warning rather than crash."""
+    back to mock with a loud warning rather than crash.
+
+    Every tool call re-resolves the data source (cheap: one env var read) but
+    "mock"/"cache" results are memoized in-process (see `_cached_routes_for`) --
+    both are documented to be deterministic per machine/process, so re-reading
+    and re-parsing the same on-disk snapshot on every tool call is pure waste.
+    "live_sql" is deliberately NEVER cached: it exists specifically for callers
+    that want fresh data on every call. See `clear_route_cache()` to drop the
+    memoized result (e.g. after rebuilding the parquet snapshot under data/dev/
+    while a long-running process, like the web app, is already up)."""
     source = _data_source()
+    if source == SOURCE_LIVE_SQL:
+        return _fetch_candidate_routes_uncached(source)
+    return list(_cached_routes_for(source))
+
+
+@lru_cache(maxsize=None)
+def _cached_routes_for(source: str) -> tuple[Route, ...]:
+    # Keyed by source so "mock" and "cache" each get their own cached result.
+    # Never called with "live_sql" -- see fetch_candidate_routes().
+    return tuple(_fetch_candidate_routes_uncached(source))
+
+
+def clear_route_cache() -> None:
+    """Drop the in-memory "mock"/"cache" route cache so the next
+    fetch_candidate_routes() call re-reads from disk. Call this after rebuilding
+    the parquet cache snapshot (see data_prep/) in a process that's already
+    running, or between tests that swap SMART_ASSIGNMENT_DATA_SOURCE or
+    monkeypatch the on-disk cache files. No-op if nothing is cached yet.
+
+    NOTE: the returned Route/RouteStop objects are regular (mutable)
+    dataclasses. Nothing in this codebase mutates them today, but the cache
+    hands back the SAME instances (in a fresh list) to every caller within a
+    process -- if a future caller starts mutating a fetched Route in place,
+    that mutation would leak into every other caller sharing the cache. Don't
+    mutate a Route returned from fetch_candidate_routes(); copy it first
+    (dataclasses.replace) if you need a modified variant.
+    """
+    _cached_routes_for.cache_clear()
+
+
+def _fetch_candidate_routes_uncached(source: str) -> list[Route]:
     if source == SOURCE_MOCK:
         return _mock_routes()
 
