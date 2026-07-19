@@ -9,16 +9,15 @@ pd.set_option('display.width', 1000)
 
 logger = logging.getLogger(__name__)
 
-# Config setup
+# Config
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 os.environ['DATABASE_CREDENTIALS_LOCATION'] = os.path.realpath(os.path.join(BASE_DIR, '..', '..', 'creds.json'))
-
-# Directory setup
 QUERY_DIR = os.path.realpath(os.path.join(BASE_DIR, '..', 'queries'))
 DATA_LOCATION = os.path.realpath(os.path.join(BASE_DIR, '..', '..', 'data'))
-DEFAULT_CACHE_EXTENSION = '.parquet' # '.csv.gz'
+DEFAULT_CACHE_EXTENSION = '.parquet'  # '.csv.gz'
 DS_UTILS_RUN_MODE_ENV = 'DS_UTILS_RUN_MODE'
 DEFAULT_DS_UTILS_RUN_MODE = 'dev'
+IGNORE_CACHE = False
 
 
 def get_ds_utils_run_mode() -> ds_utils.Mode:
@@ -317,7 +316,6 @@ get_route_stops_locations = summarize_stop_geographies
 
 if __name__ == '__main__':
 
-    IGNORE_CACHE = False
     sql = create_sql_access(ignore_cache=IGNORE_CACHE)
 
     route_capacity_raw_df = fetch_route_stop_records(sql)
