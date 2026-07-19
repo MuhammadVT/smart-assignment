@@ -85,7 +85,12 @@ line-length = 100
 
 [tool.isort]
 profile = "black"
-line_length = 100
+
+[tool.uv]
+# OneDrive (and other cloud-synced folders) don't support the hardlinks that uv
+# tries to create by default. Use copy mode to avoid "os error 396: incompatible
+# hardlinks" when installing on cloud-synced storage.
+link-mode = "copy"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
