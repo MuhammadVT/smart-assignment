@@ -158,12 +158,12 @@ dataset) trim that while iterating:
 
 ```bash
 # Just one case, one run each -- cheapest inner loop.
-SMART_ASSIGNMENT_EVAL_IDS=bayou_city_bistro_recommend \
+SMART_ASSIGNMENT_EVAL_IDS=woodlands_fresh_cafe_recommend \
 SMART_ASSIGNMENT_EVAL_NUM_RUNS=1 \
 pytest eval/test_eval.py
 
 # Multiple cases: comma-separate the eval_id (see golden_cases.py).
-SMART_ASSIGNMENT_EVAL_IDS=bayou_city_bistro_recommend,galleria_grill_escalate_low_score \
+SMART_ASSIGNMENT_EVAL_IDS=woodlands_fresh_cafe_recommend,galleria_grill_escalate_low_score \
 pytest eval/test_eval.py
 ```
 
@@ -188,7 +188,7 @@ never regresses the other committed cases' `final_response` back to `null`:
 
 ```bash
 # Recapture just one case's response, cheaply.
-SMART_ASSIGNMENT_EVAL_IDS=bayou_city_bistro_recommend python3 -m eval.capture --check
+SMART_ASSIGNMENT_EVAL_IDS=woodlands_fresh_cafe_recommend python3 -m eval.capture --check
 ```
 
 ## CI: advisory first

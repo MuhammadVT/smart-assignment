@@ -30,7 +30,7 @@ cases is 8 live conversations per run. Two env vars trim that while iterating:
 
 * ``SMART_ASSIGNMENT_EVAL_IDS`` -- comma-separated eval_id subset (see the
   ``eval_id`` on each ``GoldenCase`` in golden_cases.py), e.g.
-  ``SMART_ASSIGNMENT_EVAL_IDS=bayou_city_bistro_recommend``. Parsed by the
+  ``SMART_ASSIGNMENT_EVAL_IDS=woodlands_fresh_cafe_recommend``. Parsed by the
   shared ``eval/case_selection.py`` (also used by ``eval/capture.py``, so one
   setting trims cost across both). The subset is rendered fresh from
   golden_cases.py via the same ``build_evalset`` machinery that produces the
