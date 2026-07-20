@@ -10,3 +10,6 @@ per-file-ignores =
     smart_assignment/webapp/app.py:E402
     # The mock route table is one RouteStop(...) data literal per line.
     smart_assignment/integrations/route_capacity_client.py:E501
+    # DEEPEVAL_TELEMETRY_OPT_OUT must be set before `import deepeval`, same
+    # os-environ-before-import pattern as webapp/app.py above.
+    eval/test_quality.py:E402

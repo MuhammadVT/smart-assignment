@@ -78,11 +78,13 @@ class CaptureResult(NamedTuple):
     escalated: bool
 
 
-def _load_existing_captures() -> Dict[str, CaptureResult]:
-    """Existing captures, tolerating the pre-outcome-tracking file format (a plain
-    ``{eval_id: text}`` map) by treating those entries' ``escalated`` as unknown
-    (``None``) rather than guessing -- they're excluded from response-match
-    scoring until recaptured, which is the safe default (see CaptureResult)."""
+def load_captured_results() -> Dict[str, CaptureResult]:
+    """Existing captures -- ``{eval_id: CaptureResult(final_response, escalated)}``
+    -- tolerating the pre-outcome-tracking file format (a plain ``{eval_id: text}``
+    map) by treating those entries' ``escalated`` as unknown (``None``) rather
+    than guessing. Public so callers that need the full result (not just the
+    outcome bool -- e.g. ``eval/test_quality.py`` scoring the captured text
+    itself) don't have to duplicate this file-format tolerance."""
     if not _CAPTURED_PATH.exists():
         return {}
     raw = json.loads(_CAPTURED_PATH.read_text(encoding="utf-8"))
@@ -100,10 +102,8 @@ def load_captured_outcomes() -> Dict[str, Optional[bool]]:
     """``{eval_id: escalated}`` for every captured case -- ``None`` for legacy
     plain-string entries captured before outcome tracking was added. Public so
     ``eval/test_response_match.py`` can filter to known-``recommend`` cases
-    without importing capture's private merge helpers."""
-    return {
-        eval_id: result.escalated for eval_id, result in _load_existing_captures().items()
-    }
+    without needing the response text too."""
+    return {eval_id: result.escalated for eval_id, result in load_captured_results().items()}
 
 
 def _require_backend() -> None:
@@ -249,7 +249,7 @@ def main() -> None:
     # Merge into any existing captures rather than replacing wholesale -- a
     # SMART_ASSIGNMENT_EVAL_IDS-filtered run must not regress the other
     # already-committed cases' final_response back to null (see module docstring).
-    merged = {**_load_existing_captures(), **captured}
+    merged = {**load_captured_results(), **captured}
     _CAPTURED_PATH.write_text(_serialize(merged), encoding="utf-8")
     # Regenerate the dataset so final_response is populated from the captured file.
     from eval.build_evalset import main as build_dataset
