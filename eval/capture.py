@@ -23,6 +23,19 @@ Usage (needs a live backend; run from the repo root):
     python3 -m eval.capture            # capture all cases, rewrite the dataset
     python3 -m eval.capture --check    # dry run: print captures, write nothing
 
+Cost control while developing: SMART_ASSIGNMENT_EVAL_IDS (comma-separated
+eval_id subset, same knob test_eval.py reads -- see "Running a subset locally
+while developing" in eval/README.md) limits which cases get run here too.
+SMART_ASSIGNMENT_EVAL_NUM_RUNS does NOT apply to this module: each case is
+already captured exactly once (there's no multi-run/consensus concept here,
+unlike AgentEvaluator's default of scoring every case twice), so there is
+nothing for it to control.
+
+A filtered run (no --check) MERGES its captures into any existing
+eval/data/captured_responses.json rather than replacing it -- so capturing
+just one case while iterating never regresses the other committed cases'
+final_response back to null.
+
 Imports stay credential-free: the heavy ADK/agent imports are lazy inside the
 functions, so importing this module never needs a backend and it is safe for the
 hermetic suite to import.
@@ -37,6 +50,7 @@ import os
 import pathlib
 from typing import Dict, List, Optional
 
+from eval.case_selection import EVAL_IDS_ENV, select_cases
 from eval.golden_cases import GOLDEN_CASES, GoldenCase
 
 # A distinct app/user id so capture runs are easy to spot in a trace backend
@@ -44,6 +58,12 @@ from eval.golden_cases import GOLDEN_CASES, GoldenCase
 _APP_NAME = "smart_assignment_eval_capture"
 _USER_ID = "eval_capture"
 _CAPTURED_PATH = pathlib.Path(__file__).parent / "data" / "captured_responses.json"
+
+
+def _load_existing_captures() -> Dict[str, str]:
+    if _CAPTURED_PATH.exists():
+        return json.loads(_CAPTURED_PATH.read_text(encoding="utf-8"))
+    return {}
 
 
 def _require_backend() -> None:
@@ -163,20 +183,34 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    try:
+        cases = select_cases(GOLDEN_CASES)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    if len(cases) < len(GOLDEN_CASES):
+        print(
+            f"[capture] {EVAL_IDS_ENV} set: running {len(cases)}/{len(GOLDEN_CASES)} "
+            f"case(s): {', '.join(c.eval_id for c in cases)}"
+        )
+
     _require_backend()
-    captured = asyncio.run(_capture_all(GOLDEN_CASES))
+    captured = asyncio.run(_capture_all(cases))
 
     if args.check:
         print(_serialize(captured))
         print(f"[capture] --check: captured {len(captured)} response(s); no files written.")
         return
 
-    _CAPTURED_PATH.write_text(_serialize(captured), encoding="utf-8")
+    # Merge into any existing captures rather than replacing wholesale -- a
+    # SMART_ASSIGNMENT_EVAL_IDS-filtered run must not regress the other
+    # already-committed cases' final_response back to null (see module docstring).
+    merged = {**_load_existing_captures(), **captured}
+    _CAPTURED_PATH.write_text(_serialize(merged), encoding="utf-8")
     # Regenerate the dataset so final_response is populated from the captured file.
     from eval.build_evalset import main as build_dataset
 
     build_dataset()
-    print(f"[capture] wrote {len(captured)} response(s) to {_CAPTURED_PATH}")
+    print(f"[capture] wrote {len(captured)} response(s) ({len(merged)} total) to {_CAPTURED_PATH}")
     print("[capture] regenerated the dataset. Commit BOTH files:")
     print("           eval/data/captured_responses.json")
     print("           eval/data/slot_recommendation.test.json")

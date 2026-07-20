@@ -30,11 +30,13 @@ cases is 8 live conversations per run. Two env vars trim that while iterating:
 
 * ``SMART_ASSIGNMENT_EVAL_IDS`` -- comma-separated eval_id subset (see the
   ``eval_id`` on each ``GoldenCase`` in golden_cases.py), e.g.
-  ``SMART_ASSIGNMENT_EVAL_IDS=bayou_city_bistro_recommend``. The subset is
-  rendered fresh from golden_cases.py via the same ``build_evalset`` machinery
-  that produces the committed dataset, so it can never drift from it, and is
-  written to a scratch temp dir -- the committed JSON under eval/data/ is
-  never touched, so there's nothing to accidentally commit.
+  ``SMART_ASSIGNMENT_EVAL_IDS=bayou_city_bistro_recommend``. Parsed by the
+  shared ``eval/case_selection.py`` (also used by ``eval/capture.py``, so one
+  setting trims cost across both). The subset is rendered fresh from
+  golden_cases.py via the same ``build_evalset`` machinery that produces the
+  committed dataset, so it can never drift from it, and is written to a
+  scratch temp dir -- the committed JSON under eval/data/ is never touched,
+  so there's nothing to accidentally commit.
 * ``SMART_ASSIGNMENT_EVAL_NUM_RUNS`` -- overrides ADK's num_runs (default 2),
   e.g. ``SMART_ASSIGNMENT_EVAL_NUM_RUNS=1``.
 
@@ -54,6 +56,7 @@ import pytest
 from google.adk.evaluation.agent_evaluator import AgentEvaluator
 
 from eval.build_evalset import render_dataset
+from eval.case_selection import select_cases
 from eval.golden_cases import GOLDEN_CASES
 
 REPO_ROOT = pathlib.Path(__file__).parent.parent
@@ -62,32 +65,20 @@ _DATA_DIR = REPO_ROOT / "eval" / "data"
 _COMMITTED_DATASET = _DATA_DIR / "slot_recommendation.test.json"
 _TEST_CONFIG = _DATA_DIR / "test_config.json"
 
-_EVAL_IDS_ENV = "SMART_ASSIGNMENT_EVAL_IDS"
 _NUM_RUNS_ENV = "SMART_ASSIGNMENT_EVAL_NUM_RUNS"
 
 
 def _eval_dataset_path() -> str:
-    """The committed dataset, or -- when SMART_ASSIGNMENT_EVAL_IDS names a
-    subset of golden eval_ids -- a scratch dataset containing only those
-    cases (see module docstring)."""
-    raw = os.environ.get(_EVAL_IDS_ENV)
-    if not raw or not raw.strip():
+    """The committed dataset, or -- when SMART_ASSIGNMENT_EVAL_IDS (see
+    eval/case_selection.py) names a subset of golden eval_ids -- a scratch
+    dataset containing only those cases (see module docstring)."""
+    cases = select_cases(GOLDEN_CASES)
+    if cases is GOLDEN_CASES:
         return str(_COMMITTED_DATASET)
-
-    wanted = [eval_id.strip() for eval_id in raw.split(",") if eval_id.strip()]
-    by_id = {case.eval_id: case for case in GOLDEN_CASES}
-    missing = [eval_id for eval_id in wanted if eval_id not in by_id]
-    if missing:
-        raise ValueError(
-            f"{_EVAL_IDS_ENV} named unknown eval_id(s): {missing}. "
-            f"Valid ids: {sorted(by_id)}"
-        )
 
     scratch_dir = pathlib.Path(tempfile.mkdtemp(prefix="smart_assignment_eval_subset_"))
     dataset_path = scratch_dir / "subset.test.json"
-    dataset_path.write_text(
-        render_dataset([by_id[eval_id] for eval_id in wanted]), encoding="utf-8"
-    )
+    dataset_path.write_text(render_dataset(cases), encoding="utf-8")
     # AgentEvaluator discovers criteria (IN_ORDER match_type, see golden_cases.py)
     # from a test_config.json in the SAME FOLDER as the dataset file. Without this,
     # the subset would silently fall back to ADK's stricter EXACT default and the

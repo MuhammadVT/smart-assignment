@@ -13,7 +13,10 @@ live LLM backend** and are kept separate from the hermetic tests.
 | `build_evalset.py` | Deterministically renders the cases into an ADK `EvalSet` JSON. Run `python3 -m eval.build_evalset` to regenerate the dataset. |
 | `data/slot_recommendation.test.json` | The generated `EvalSet` (do not hand-edit — regenerate). |
 | `data/test_config.json` | The scoring criteria ADK auto-discovers from this folder. |
+| `data/captured_responses.json` | Committed `{eval_id: final_response}` map written by `capture.py` (Phase 2b). |
 | `test_eval.py` | The pytest entry point that runs `AgentEvaluator`. |
+| `capture.py` | Runs the live agent once per case to record its real final response (Phase 2b). |
+| `case_selection.py` | Shared `SMART_ASSIGNMENT_EVAL_IDS` subset filter used by both `test_eval.py` and `capture.py` — one place owning that env var's name and validation. |
 
 ## What is scored (and what isn't, yet)
 
@@ -111,8 +114,24 @@ have comments and is checked by `tests/eval/test_build_evalset.py` for staying
 in sync with `golden_cases.py`) — it renders a scratch subset from
 `golden_cases.py` on the fly via the same `build_evalset` machinery that
 produces the real file, so the subset can never drift from it, and nothing
-under `eval/data/` is touched. See the docstring on `_eval_dataset_path` in
-`test_eval.py` for exactly what it does.
+under `eval/data/` is touched. Parsing/validation of the env var lives in one
+shared place, `case_selection.py`, so `test_eval.py` and `capture.py` can't
+drift on what a comma-separated subset means. See the docstring on
+`_eval_dataset_path` in `test_eval.py` for exactly what it does there.
+
+`capture.py` (Phase 2b) honors the same `SMART_ASSIGNMENT_EVAL_IDS` to limit
+which cases get a live run — useful since it's a separate cost center from
+`test_eval.py`. `SMART_ASSIGNMENT_EVAL_NUM_RUNS` does **not** apply to it:
+`capture.py` already only runs each case once (there's no multi-run/consensus
+step to control, unlike `AgentEvaluator`'s `num_runs`). Unlike `test_eval.py`,
+a filtered (non-`--check`) capture run **merges** into any existing
+`captured_responses.json` rather than replacing it, so recapturing one case
+never regresses the other committed cases' `final_response` back to `null`:
+
+```bash
+# Recapture just one case's response, cheaply.
+SMART_ASSIGNMENT_EVAL_IDS=bayou_city_bistro_recommend python3 -m eval.capture --check
+```
 
 ## CI: advisory first
 
