@@ -146,12 +146,20 @@ module already prefers:
 
 ```bash
 SMART_ASSIGNMENT_USE_TRACING=true
-OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:6006/v1/traces
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:6006
 
 # Optional: the name traces appear under in Phoenix's project picker (defaults
 # to smart-assignment). Use a distinct value to make eval-run traces easy to find:
 OTEL_SERVICE_NAME=smart-assignment-eval
 ```
+
+**Use the bare host:port, with NO `/v1/traces` suffix.** The OTLP/HTTP exporter
+appends that path itself; adding it yourself makes every export POST to
+`/v1/traces/v1/traces`, which Phoenix rejects with HTTP 405 — and tracing will
+report itself as "configured" (the TracerProvider and ADK instrumentor install
+fine) while every span is silently dropped. This is easy to miss because
+nothing in the test/eval run itself errors; the only symptom is an empty
+project in the Phoenix UI.
 
 Do **not** also set the `LANGFUSE_*` trio — `OTEL_EXPORTER_OTLP_ENDPOINT` takes
 precedence over it in `shared/tracing.py`, but leaving both around invites
