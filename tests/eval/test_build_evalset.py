@@ -13,7 +13,7 @@ import pathlib
 
 from google.adk.evaluation.eval_set import EvalSet
 
-from eval.build_evalset import build_eval_set, render_dataset
+from eval.build_evalset import build_eval_set, load_captured, render_dataset
 from eval.golden_cases import GOLDEN_CASES, expected_trajectory, intake_args
 
 _DATASET_PATH = (
@@ -30,12 +30,46 @@ def test_built_eval_set_validates_against_adk_schema():
 
 def test_committed_dataset_is_in_sync_with_builder():
     # The committed file must equal the builder's output byte-for-byte; regenerate
-    # with `python3 -m eval.build_evalset` after changing golden_cases.py.
+    # with `python3 -m eval.build_evalset` after changing golden_cases.py (or after
+    # `python3 -m eval.capture`). render_dataset() reads the same committed capture
+    # file the dataset was built from, so this holds in both Phase 2a and 2b.
     on_disk = _DATASET_PATH.read_text(encoding="utf-8")
     assert on_disk == render_dataset(), (
         "eval/data/slot_recommendation.test.json is stale; "
         "run `python3 -m eval.build_evalset` and commit the result."
     )
+
+
+def test_absent_capture_leaves_final_response_null():
+    # Phase-2a reproduction: with no captured responses, every final_response is
+    # None -- structural output is unchanged.
+    eval_set = EvalSet.model_validate(build_eval_set(captured={}))
+    for case in eval_set.eval_cases:
+        assert case.conversation[0].final_response is None
+
+
+def test_captured_responses_populate_final_response_and_validate():
+    # Phase-2b: a captured {eval_id: text} map lands as the model-role final
+    # response, and the populated set still validates against ADK's schema. Uses an
+    # injected map so the test stays hermetic (no dependency on the capture file).
+    first = GOLDEN_CASES[0]
+    captured = {first.eval_id: "We can deliver Tuesday 7-10am on route CH-1."}
+    eval_set = EvalSet.model_validate(build_eval_set(captured=captured))
+
+    by_id = {case.eval_id: case for case in eval_set.eval_cases}
+    populated = by_id[first.eval_id].conversation[0].final_response
+    assert populated is not None
+    assert populated.parts[0].text == captured[first.eval_id]
+    # Cases without a captured entry stay null.
+    for case in eval_set.eval_cases:
+        if case.eval_id != first.eval_id:
+            assert case.conversation[0].final_response is None
+
+
+def test_load_captured_returns_dict():
+    # Whether or not the capture file exists yet, the loader yields a dict the
+    # builder can index into.
+    assert isinstance(load_captured(), dict)
 
 
 def test_each_case_has_the_full_pipeline_trajectory():

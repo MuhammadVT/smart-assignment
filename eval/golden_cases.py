@@ -10,7 +10,7 @@ customer (not invented), so the trajectory expectation is real, not a guess.
 
 What is deliberately NOT encoded here is the agent's final natural-language
 response: that is the LLM's narration, which can only be captured faithfully by
-running a real backend (see ``eval/build_evalset.py`` capture mode, Phase 2b).
+running a real backend (see ``eval/capture.py``, Phase 2b).
 Until then the dataset scores trajectory only (see ``eval/data/test_config.json``),
 which catches the structural regressions -- a dropped/reordered tool, the
 address-resolution branch firing when it shouldn't -- without asserting text we
@@ -30,6 +30,18 @@ from smart_assignment.shared.models import CustomerProfile
 # tools take no arguments (they read accumulated session state), so their
 # expected calls carry empty args; ``intake_customer`` is handled separately
 # because its args are the customer's known fields.
+#
+# This is the pipeline PREFIX, not the whole trajectory: on an ESCALATE case the
+# agent additionally hands off to a human -- ``escalation_triage`` (when
+# Config.use_escalation_triage is on, the default) and/or ADK's
+# ``adk_request_input``. Those tail calls are deliberately NOT listed here
+# because their only arguments are model-authored prose (the triage `request`
+# and the handoff `message`), which differ on every run -- pinning them would
+# make the eval permanently flaky, and the trajectory metric compares args
+# exactly. So eval/data/test_config.json scores this metric with
+# ``match_type: IN_ORDER``: every tool below must appear, in this order, with
+# exactly these args, while extra trailing handoff calls are tolerated. Don't
+# "tighten" that back to the EXACT default -- it fails the two escalate cases.
 _PIPELINE_AFTER_INTAKE: Tuple[str, ...] = (
     "find_candidate_routes",
     "evaluate_and_score_routes",
@@ -85,9 +97,22 @@ def _by_name(name: str) -> CustomerProfile:
 
 
 # Natural-language intake messages authored to encode each fixture's facts. The
-# four mock customers were chosen to exercise the full outcome range (see
-# mock_customers.py): two clean recommends, two escalations (low score, and
-# out-of-range/over-capacity).
+# four mock customers were chosen to exercise the full outcome range under the
+# built-in mock routes (see mock_customers.py): two clean recommends, two
+# escalations (low score, and out-of-range/over-capacity).
+#
+# ``expected_outcome``/``note`` describe that MOCK-data design intent, not a
+# guarantee: this repo's default data source is "cache" (see
+# integrations/route_capacity_client.py), so whenever a local data/dev/*.parquet
+# cache snapshot is present, trajectory-scored fields (agent's tool calls) are
+# unaffected, but the outcome (recommend vs. escalate) and Phase 2b's captured
+# final_response instead reflect THAT real capacity snapshot at capture time --
+# which can legitimately differ from the mock-data design intent below, and will
+# drift as real capacity changes. bayou_city_bistro_recommend is a live example:
+# under real cache data captured so far it escalates (see
+# eval/data/captured_responses.json), not the clean recommend the mock data
+# gives. Not a bug -- re-run eval.capture (see eval/README.md) to refresh
+# captured responses against current real data.
 GOLDEN_CASES: List[GoldenCase] = [
     GoldenCase(
         eval_id="bayou_city_bistro_recommend",
@@ -97,7 +122,12 @@ GOLDEN_CASES: List[GoldenCase] = [
         ),
         customer=_by_name("Bayou City Bistro"),
         expected_outcome="recommend",
-        note="Downtown, modest order, in the dense Central Houston route -> clean recommend.",
+        note=(
+            "Downtown, modest order, in the dense Central Houston route -> clean "
+            "recommend on the MOCK routes. Under real cache data this can escalate "
+            "instead (route capacity is a real, current fact, not scripted) -- see "
+            "the module docstring above."
+        ),
     ),
     GoldenCase(
         eval_id="galleria_grill_escalate_low_score",
