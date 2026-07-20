@@ -5,8 +5,16 @@ Runs the live ``root_agent`` (smart_assignment/agent.py) over each golden case, 
 it NEEDS a configured LLM backend (e.g. the Sage credentials -- see .env.example),
 and records the agent's concluding natural-language response per case. The text is
 written to ``eval/data/captured_responses.json`` -- a committed, human-reviewable
-``{eval_id: final_response}`` file -- and the dataset is regenerated so
-``final_response`` is populated from it (see eval/build_evalset.py).
+``{eval_id: {"final_response": str, "escalated": bool}}`` file -- and the dataset
+is regenerated so ``final_response`` is populated from it (see
+eval/build_evalset.py, which reads only the text and stays byte-stable either way).
+
+``escalated`` records whether the case handed off via ADK's long-running
+``request_input`` tool (see ``_capture_case``) rather than ending on plain text.
+That distinction matters downstream: ``response_match_score`` cannot meaningfully
+score an escalated case at all (see ``eval/test_response_match.py``'s module
+docstring for why -- it's a real ADK limitation, not tunable via threshold), so
+that scorer only ever runs against captured cases known to be ``escalated: False``.
 
 Why a separate committed file (rather than editing the dataset directly): the
 builder stays deterministic and the hermetic sync test
@@ -48,7 +56,7 @@ import asyncio
 import json
 import os
 import pathlib
-from typing import Dict, List, Optional
+from typing import Dict, List, NamedTuple, Optional
 
 from eval.case_selection import EVAL_IDS_ENV, select_cases
 from eval.golden_cases import GOLDEN_CASES, GoldenCase
@@ -60,10 +68,42 @@ _USER_ID = "eval_capture"
 _CAPTURED_PATH = pathlib.Path(__file__).parent / "data" / "captured_responses.json"
 
 
-def _load_existing_captures() -> Dict[str, str]:
-    if _CAPTURED_PATH.exists():
-        return json.loads(_CAPTURED_PATH.read_text(encoding="utf-8"))
-    return {}
+class CaptureResult(NamedTuple):
+    """One case's captured outcome: the text to put in the dataset's
+    ``final_response``, and whether it came from the escalation handoff path
+    (see ``_capture_case``) -- the fact ``eval/test_response_match.py`` needs to
+    know which captured cases it can safely response-match-score."""
+
+    final_response: str
+    escalated: bool
+
+
+def _load_existing_captures() -> Dict[str, CaptureResult]:
+    """Existing captures, tolerating the pre-outcome-tracking file format (a plain
+    ``{eval_id: text}`` map) by treating those entries' ``escalated`` as unknown
+    (``None``) rather than guessing -- they're excluded from response-match
+    scoring until recaptured, which is the safe default (see CaptureResult)."""
+    if not _CAPTURED_PATH.exists():
+        return {}
+    raw = json.loads(_CAPTURED_PATH.read_text(encoding="utf-8"))
+    return {
+        eval_id: (
+            CaptureResult(entry["final_response"], entry["escalated"])
+            if isinstance(entry, dict)
+            else CaptureResult(entry, None)
+        )
+        for eval_id, entry in raw.items()
+    }
+
+
+def load_captured_outcomes() -> Dict[str, Optional[bool]]:
+    """``{eval_id: escalated}`` for every captured case -- ``None`` for legacy
+    plain-string entries captured before outcome tracking was added. Public so
+    ``eval/test_response_match.py`` can filter to known-``recommend`` cases
+    without importing capture's private merge helpers."""
+    return {
+        eval_id: result.escalated for eval_id, result in _load_existing_captures().items()
+    }
 
 
 def _require_backend() -> None:
@@ -98,9 +138,9 @@ def _require_backend() -> None:
         )
 
 
-async def _capture_case(case: GoldenCase) -> str:
-    """Run the live agent once on the case's intake message and return the agent's
-    final natural-language response.
+async def _capture_case(case: GoldenCase) -> CaptureResult:
+    """Run the live agent once on the case's intake message and return its final
+    natural-language response, tagged with whether it escalated.
 
     Single-turn by design (one user message per case, matching the dataset). For an
     escalation the agent hands off to a human via ADK's ``request_input`` long-running
@@ -147,28 +187,31 @@ async def _capture_case(case: GoldenCase) -> str:
                 final_texts.append(text.strip())
 
     if escalation_prompt:
-        return escalation_prompt.strip()
+        return CaptureResult(escalation_prompt.strip(), escalated=True)
     if not final_texts:
         raise RuntimeError(
             f"{case.eval_id}: the agent produced no final text response and no escalation. "
             "Check the backend/model is actually answering (try `python3 -m eval.capture --check`)."
         )
     # The concluding narration is the last aggregated text event.
-    return final_texts[-1]
+    return CaptureResult(final_texts[-1], escalated=False)
 
 
-async def _capture_all(cases: List[GoldenCase]) -> Dict[str, str]:
-    captured: Dict[str, str] = {}
+async def _capture_all(cases: List[GoldenCase]) -> Dict[str, CaptureResult]:
+    captured: Dict[str, CaptureResult] = {}
     for case in cases:
         print(f"[capture] running {case.eval_id} ...", flush=True)
         captured[case.eval_id] = await _capture_case(case)
     return captured
 
 
-def _serialize(captured: Dict[str, str]) -> str:
+def _serialize(captured: Dict[str, CaptureResult]) -> str:
     """Sorted keys + trailing newline so the committed file is stable and diffs are
     readable."""
-    ordered = {key: captured[key] for key in sorted(captured)}
+    ordered = {
+        key: {"final_response": captured[key].final_response, "escalated": captured[key].escalated}
+        for key in sorted(captured)
+    }
     return json.dumps(ordered, indent=2, ensure_ascii=False) + "\n"
 
 
@@ -198,6 +241,8 @@ def main() -> None:
 
     if args.check:
         print(_serialize(captured))
+        for eval_id, result in sorted(captured.items()):
+            print(f"[capture]   {eval_id}: escalated={result.escalated}")
         print(f"[capture] --check: captured {len(captured)} response(s); no files written.")
         return
 

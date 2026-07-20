@@ -97,9 +97,22 @@ def _by_name(name: str) -> CustomerProfile:
 
 
 # Natural-language intake messages authored to encode each fixture's facts. The
-# four mock customers were chosen to exercise the full outcome range (see
-# mock_customers.py): two clean recommends, two escalations (low score, and
-# out-of-range/over-capacity).
+# four mock customers were chosen to exercise the full outcome range under the
+# built-in mock routes (see mock_customers.py): two clean recommends, two
+# escalations (low score, and out-of-range/over-capacity).
+#
+# ``expected_outcome``/``note`` describe that MOCK-data design intent, not a
+# guarantee: this repo's default data source is "cache" (see
+# integrations/route_capacity_client.py), so whenever a local data/dev/*.parquet
+# cache snapshot is present, trajectory-scored fields (agent's tool calls) are
+# unaffected, but the outcome (recommend vs. escalate) and Phase 2b's captured
+# final_response instead reflect THAT real capacity snapshot at capture time --
+# which can legitimately differ from the mock-data design intent below, and will
+# drift as real capacity changes. bayou_city_bistro_recommend is a live example:
+# under real cache data captured so far it escalates (see
+# eval/data/captured_responses.json), not the clean recommend the mock data
+# gives. Not a bug -- re-run eval.capture (see eval/README.md) to refresh
+# captured responses against current real data.
 GOLDEN_CASES: List[GoldenCase] = [
     GoldenCase(
         eval_id="bayou_city_bistro_recommend",
@@ -109,7 +122,12 @@ GOLDEN_CASES: List[GoldenCase] = [
         ),
         customer=_by_name("Bayou City Bistro"),
         expected_outcome="recommend",
-        note="Downtown, modest order, in the dense Central Houston route -> clean recommend.",
+        note=(
+            "Downtown, modest order, in the dense Central Houston route -> clean "
+            "recommend on the MOCK routes. Under real cache data this can escalate "
+            "instead (route capacity is a real, current fact, not scripted) -- see "
+            "the module docstring above."
+        ),
     ),
     GoldenCase(
         eval_id="galleria_grill_escalate_low_score",

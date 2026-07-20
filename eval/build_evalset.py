@@ -46,14 +46,25 @@ _CAPTURED_PATH = pathlib.Path(__file__).parent / "data" / "captured_responses.js
 
 
 def load_captured() -> Dict[str, str]:
-    """The captured ``{eval_id: final_response}`` map, or ``{}`` if not yet captured.
+    """The captured ``{eval_id: final_response}`` text map, or ``{}`` if not yet
+    captured.
 
     Reading a committed file (not a live call) keeps the builder deterministic and
     backend-free -- the non-determinism of a real run is frozen into the committed
-    file at capture time (see eval/capture.py)."""
-    if _CAPTURED_PATH.exists():
-        return json.loads(_CAPTURED_PATH.read_text(encoding="utf-8"))
-    return {}
+    file at capture time (see eval/capture.py). eval/capture.py's on-disk entries
+    are ``{"final_response": str, "escalated": bool}`` (it also tracks whether a
+    case escalated, for eval/test_response_match.py); this builder only needs the
+    text, so it extracts just that -- keeping this function's return shape (and
+    thus every downstream dataset field) unchanged regardless of that extra data.
+    Tolerates the older plain-``{eval_id: text}`` format too, so a file captured
+    before outcome-tracking was added still loads."""
+    if not _CAPTURED_PATH.exists():
+        return {}
+    raw = json.loads(_CAPTURED_PATH.read_text(encoding="utf-8"))
+    return {
+        eval_id: (entry["final_response"] if isinstance(entry, dict) else entry)
+        for eval_id, entry in raw.items()
+    }
 
 
 def _user_content(text: str) -> Dict[str, Any]:
