@@ -30,6 +30,18 @@ from smart_assignment.shared.models import CustomerProfile
 # tools take no arguments (they read accumulated session state), so their
 # expected calls carry empty args; ``intake_customer`` is handled separately
 # because its args are the customer's known fields.
+#
+# This is the pipeline PREFIX, not the whole trajectory: on an ESCALATE case the
+# agent additionally hands off to a human -- ``escalation_triage`` (when
+# Config.use_escalation_triage is on, the default) and/or ADK's
+# ``adk_request_input``. Those tail calls are deliberately NOT listed here
+# because their only arguments are model-authored prose (the triage `request`
+# and the handoff `message`), which differ on every run -- pinning them would
+# make the eval permanently flaky, and the trajectory metric compares args
+# exactly. So eval/data/test_config.json scores this metric with
+# ``match_type: IN_ORDER``: every tool below must appear, in this order, with
+# exactly these args, while extra trailing handoff calls are tolerated. Don't
+# "tighten" that back to the EXACT default -- it fails the two escalate cases.
 _PIPELINE_AFTER_INTAKE: Tuple[str, ...] = (
     "find_candidate_routes",
     "evaluate_and_score_routes",
