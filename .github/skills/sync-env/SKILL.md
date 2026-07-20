@@ -27,6 +27,9 @@ Identify everything present in `.env.example` but absent from `.env`:
 - **New commented-out variables** (e.g. `# KEY=value`) that serve as documentation
 - **New comment blocks / section headers** that provide context
 - **Updated header comments** (e.g. new usage notes at the top of the file)
+- **Updated comment text** on existing lines (including multi-line comment blocks that changed wording)
+
+The goal is for `.env` and `.env.example` to have the **same comment structure and line count**. Every comment line in `.env.example` must exist in `.env`; a key that is active in `.env` but commented in `.env.example` is kept active.
 
 ### 3. Diff: find local-only keys in `.env`
 
@@ -64,7 +67,9 @@ After editing, re-read the affected regions to confirm:
 | Key in `.env.example` only | Add to `.env` with the example's default value |
 | Key in both files | Keep `.env` value; do not touch it |
 | Key in `.env` only | Remove from `.env` |
+| Key commented in `.env.example`, active in `.env` | Keep active in `.env`; the user intentionally enabled it |
 | Comment/section only in `.env.example` | Add to `.env` at the matching position |
+| Comment text updated in `.env.example` | Replace old comment text in `.env` with the new wording |
 | Header comment updated in `.env.example` | Merge new lines into `.env` header |
 
 ## Notes
