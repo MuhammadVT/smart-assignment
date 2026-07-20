@@ -17,9 +17,10 @@ live LLM backend** and are kept separate from the hermetic tests.
 | `test_eval.py` | The pytest entry point that runs `AgentEvaluator` (trajectory, full dataset). |
 | `capture.py` | Runs the live agent once per case to record its real final response + whether it escalated (Phase 2b). |
 | `test_response_match.py` | Separate pytest entry point: `response_match_score`, scoped to captured cases known NOT to have escalated. See its module docstring for why escalate cases can't be scored this way at all. |
-| `case_selection.py` | Shared `SMART_ASSIGNMENT_EVAL_IDS` subset filter used by `test_eval.py`, `capture.py`, and `test_quality.py` — one place owning that env var's name and validation. |
+| `case_selection.py` | Shared `SMART_ASSIGNMENT_EVAL_IDS` subset filter used by `test_eval.py`, `capture.py`, `test_quality.py`, and `test_rationale_faithfulness.py` — one place owning that env var's name and validation. |
 | `deepeval_llm.py` | `SmartAssignmentDeepEvalLLM` — adapts this repo's own `generate_text` (any `SMART_ASSIGNMENT_LLM_BACKEND`) to DeepEval's judge-model interface. |
 | `test_quality.py` | Separate pytest entry point (Phase 3a): DeepEval G-Eval `brief_quality`/`response_clarity`, scored directly against captured `{final_response, escalated}` data — no ADK dataset involved. |
+| `test_rationale_faithfulness.py` | Separate pytest entry point (Phase 3b): DeepEval G-Eval `rationale_faithfulness`, scored directly against a live `routeslot/` grounded pick and its real evidence packet — no captured data or ADK dataset involved. |
 
 ## What is scored (and what isn't, yet)
 
@@ -228,15 +229,71 @@ operational model.
 > silently (no error) if `pypi.org` is unreachable, relevant in a Sage-only
 > environment where such egress may be blocked or audited.
 
-Need one confirmed `escalated: true` capture to exercise `brief_quality` for
-the first time — none exists yet as of writing (only
-`woodlands_fresh_cafe_recommend` is a confirmed `escalated: false`). Recapture
-a case already known to escalate under real cache data (see the callout above)
-to get one cheaply:
+`brief_quality` needs at least one confirmed `escalated: true` capture to
+exercise; `response_clarity` needs at least one confirmed `escalated: false`
+one. As of writing both exist (`bayou_city_bistro_recommend` and
+`woodlands_fresh_cafe_recommend` respectively). If a future recapture (real
+cache data drifts — see the callout above) leaves one dimension without a
+qualifying case, that test skips cleanly rather than failing; recapture a
+case known to have the missing outcome to unskip it, e.g.:
 
 ```bash
 SMART_ASSIGNMENT_EVAL_IDS=bayou_city_bistro_recommend python3 -m eval.capture
 ```
+
+### `eval/test_rationale_faithfulness.py` — Phase 3b: grounded-layer rationale faithfulness
+
+A **different granularity** from `test_quality.py`: not what the agent tells
+the customer, but whether a grounded decision layer's own internal rationale
+actually follows from the raw evidence it was given. Every grounded layer
+(`judgment/`, `routeslot/`, `slotpick/`, `triage/`, `address_resolve/`) already
+runs a rigorous *deterministic* verifier — citations must resolve to real
+packet facts, and a regex-based prose scan grounds every number/route-id/day/
+time mentioned anywhere in the free text. But `judgment/verifier.py`'s own
+docstring (and `routeslot/verifier.py`'s, identically) names the exact
+residual gap deterministic checking cannot close:
+
+> "a rationale can attach a *correct* number to the wrong noun (...), and a
+> comparison citation can be true yet support a different sentence than the
+> one the model wrote. Those are semantic, not arithmetic, gaps"
+
+That's a job for an LLM judge — `rationale_faithfulness`, a reference-free
+G-Eval rubric scored against `routeslot/`'s real evidence packet.
+
+**Why `routeslot/`, not `judgment/`.** With
+`SMART_ASSIGNMENT_USE_ROUTE_SLOT_SCORING=true` (this repo's default),
+`judgment/`'s `GroundedJudge` is bypassed entirely — see
+`tools/slot_recommendation.py`. The grounded call actually producing rationale
+text is `routeslot/decide.py`'s `_grounded_index`, which builds the
+`decision_summary`/`primary_reasons`/`key_tradeoff`/`runner_up` narrative that
+becomes the agent's final response (the same text `response_clarity` scores
+above). Testing `routeslot/` tests the code path actually running. `judgment/`
+shares the identical evidence/schema/verifier recipe and could get the same
+treatment later.
+
+Unlike `test_quality.py`, this file needs **no capture step and touches
+nothing under `eval/data/`**: faithfulness is judged against the evidence
+packet, which is always available fresh, deterministically, from a golden
+case's fixture — there's no "reference" to freeze. It drives
+`routeslot/decide.py`'s real `_grounded_index` (call → parse → verify → one
+corrective retry) directly, live, each run — the exact sequence that decides
+what ships to real users, not a reimplementation.
+
+Not every golden case produces a grounded choice to score: a case with no
+route-slot clearing `route_slot_score_threshold` is a deterministic escalation
+(`_escalate_low_score`) where the grounded pick never runs. Those cases are
+skipped individually; the whole test only skips if **no** case produced a
+scoreable choice.
+
+```bash
+pytest eval/test_rationale_faithfulness.py
+```
+
+Same `SMART_ASSIGNMENT_EVAL_IDS` cost-control knob as everywhere else;
+`SMART_ASSIGNMENT_EVAL_NUM_RUNS` doesn't apply (one live call per case, no
+resampling — routeslot's own resampling only exists on its grounded-
+*escalation* path, `Config.use_grounded_route_slot_escalation`, off by
+default).
 
 ## Running locally
 
@@ -309,7 +366,8 @@ SMART_ASSIGNMENT_EVAL_IDS=woodlands_fresh_cafe_recommend python3 -m eval.capture
 ## CI: advisory first
 
 The `agent-eval` job in `.github/workflows/ci.yml` runs `test_eval.py`, and the
-sibling `quality-eval` job runs `test_quality.py` — both **advisory**
+sibling `quality-eval` job runs both `test_quality.py` and
+`test_rationale_faithfulness.py` — both jobs **advisory**
 (`continue-on-error: true`): they report, they don't block. Both no-op cleanly
 when `SAGE_*` credentials aren't configured as repo secrets, so neither fails a
 PR for infrastructure reasons.
