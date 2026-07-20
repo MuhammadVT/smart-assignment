@@ -17,7 +17,9 @@ live LLM backend** and are kept separate from the hermetic tests.
 | `test_eval.py` | The pytest entry point that runs `AgentEvaluator` (trajectory, full dataset). |
 | `capture.py` | Runs the live agent once per case to record its real final response + whether it escalated (Phase 2b). |
 | `test_response_match.py` | Separate pytest entry point: `response_match_score`, scoped to captured cases known NOT to have escalated. See its module docstring for why escalate cases can't be scored this way at all. |
-| `case_selection.py` | Shared `SMART_ASSIGNMENT_EVAL_IDS` subset filter used by both `test_eval.py` and `capture.py` — one place owning that env var's name and validation. |
+| `case_selection.py` | Shared `SMART_ASSIGNMENT_EVAL_IDS` subset filter used by `test_eval.py`, `capture.py`, and `test_quality.py` — one place owning that env var's name and validation. |
+| `deepeval_llm.py` | `SmartAssignmentDeepEvalLLM` — adapts this repo's own `generate_text` (any `SMART_ASSIGNMENT_LLM_BACKEND`) to DeepEval's judge-model interface. |
+| `test_quality.py` | Separate pytest entry point (Phase 3a): DeepEval G-Eval `brief_quality`/`response_clarity`, scored directly against captured `{final_response, escalated}` data — no ADK dataset involved. |
 
 ## What is scored (and what isn't, yet)
 
@@ -142,6 +144,100 @@ shape or behavior may move under future ADK versions.
 > `golden_cases.py`'s comments), run capture with
 > `SMART_ASSIGNMENT_DATA_SOURCE=mock` set.
 
+### `eval/test_quality.py` — Phase 3a: DeepEval G-Eval quality metrics
+
+`response_match_score`/`final_response_match_v2` are similarity-to-reference
+metrics — and structurally cannot score an ESCALATE case at all (see above),
+leaving the highest-stakes prose (the escalation/handoff brief a human
+specialist acts on) with zero automated signal. `test_quality.py` closes that
+gap with two **reference-free** DeepEval G-Eval rubrics (no `expected_output`
+set — the judge rates the response on its own merits, not fidelity to a
+captured reference), scored **directly against captured text** — no ADK
+`EvalSet`/`AgentEvaluator` involved at all, so there's no scratch dataset file
+to render; this file only *reads* `eval/data/captured_responses.json`.
+
+Both rubrics are drawn from the human-annotation dimensions in
+[`deployment/phoenix/README.md`](../deployment/phoenix/README.md)'s feedback
+table, so the automated score and the human-annotation vocabulary stay
+aligned:
+
+| Metric | Scored on | Rubric source |
+|---|---|---|
+| `brief_quality` | captures with `escalated: true` | `deployment/phoenix/README.md`'s `brief_quality` row — "is the escalation/handoff brief useful?" |
+| `response_clarity` | captures with `escalated: false` | same table's `response_clarity` row — "is the final customer message clear?" |
+
+That table's other two rows (`decision_correct` — already covered
+deterministically by trajectory scoring's `recommend_or_escalate` call —
+and `slot_reasonable`) and grounded-layer rationale-faithfulness (a different
+granularity: the decision layer's own reasoning, not the agent's final
+customer-facing prose) are **out of scope here**, deferred to a later phase.
+
+```bash
+pip install -e ".[dev,eval-quality]"
+pytest eval/test_quality.py
+```
+
+The `eval-quality` extra is pinned to `deepeval==2.6.6` specifically (not a
+floor) — newer DeepEval releases require `python-dotenv>=1.1.1`, which
+conflicts with this project's own `litellm==1.83.7` (hard-pins
+`python-dotenv==1.0.1`, for Sage SDK compatibility). See the pin's comment in
+`pyproject.toml` if that litellm constraint is ever loosened — DeepEval's
+public API drifted from 2.6.6 (e.g. `LLMTestCaseParams` here vs. the newer
+`SingleTurnParams` alias, no built-in `GeminiModel` at 2.6.6), so re-verify
+against whatever version actually resolves before bumping the pin.
+
+Each test **skips cleanly** (not a failure) when no captured case is yet known
+to have the matching outcome — same `SMART_ASSIGNMENT_EVAL_IDS` subset-cost
+knob as `test_eval.py`/`capture.py` applies here too.
+`SMART_ASSIGNMENT_EVAL_NUM_RUNS` does **not** apply: nothing here re-runs the
+live agent, only the judge call scores already-captured text.
+
+The judge model is `deepeval_llm.py`'s `SmartAssignmentDeepEvalLLM`, backed by
+`shared/llm.py`'s own `generate_text` — the same function every other grounded
+call in this repo already uses, so it works under **any**
+`SMART_ASSIGNMENT_LLM_BACKEND` (including Sage-only) with no per-backend branch
+needed here, unlike `test_response_match.py`'s ADK-judge path (which needs
+`sage_judge_llm.py`'s registry adapter because ADK's own `LlmAsAJudgeCriterion`
+resolves its model through ADK-core's generic registry — a constraint this
+file doesn't have). Its model is set via the same per-role convention as every
+other LLM call in this repo (`Config.for_role`) — override it independently of
+the app's main model with `SMART_ASSIGNMENT_MODEL_QUALITY_JUDGE` (standard
+backend) if you want a stronger/different judge than the agent's own
+operational model.
+
+> **DeepEval makes an outbound network call at import time, independent of
+> telemetry opt-out — and it can't be fully suppressed from within this repo's
+> own code when run via `pytest`.** [VERIFIED against installed deepeval 2.6.6
+> source]: `DEEPEVAL_TELEMETRY_OPT_OUT` only covers usage-analytics events; a
+> SEPARATE switch, `DEEPEVAL_UPDATE_WARNING_OPT_OUT`, gates an HTTPS GET to
+> `pypi.org` (a "newer version available" check, 5s timeout, silently
+> swallowed on failure). Both `deepeval_llm.py` and `test_quality.py` set both
+> via `os.environ.setdefault` before their own `deepeval` imports — but
+> **deepeval registers itself as a pytest plugin** (a `pytest11` entry point),
+> which `pytest` auto-imports during its own startup, before ANY of this
+> repo's Python code runs. That in-code `setdefault` only helps a bare, non-
+> `pytest` import; the actual `pytest eval/test_quality.py` invocation is
+> unaffected by it. To silence it locally, export both as real shell env vars
+> **before** invoking `pytest`:
+> ```bash
+> export DEEPEVAL_TELEMETRY_OPT_OUT=YES DEEPEVAL_UPDATE_WARNING_OPT_OUT=YES
+> pytest eval/test_quality.py
+> ```
+> CI's `quality-eval` job sets both in its step's `env:` block for the same
+> reason. Purely cosmetic/latency, not a functional issue — the check fails
+> silently (no error) if `pypi.org` is unreachable, relevant in a Sage-only
+> environment where such egress may be blocked or audited.
+
+Need one confirmed `escalated: true` capture to exercise `brief_quality` for
+the first time — none exists yet as of writing (only
+`woodlands_fresh_cafe_recommend` is a confirmed `escalated: false`). Recapture
+a case already known to escalate under real cache data (see the callout above)
+to get one cheaply:
+
+```bash
+SMART_ASSIGNMENT_EVAL_IDS=bayou_city_bistro_recommend python3 -m eval.capture
+```
+
 ## Running locally
 
 Needs a configured backend (see `.env.example`); the CI job uses
@@ -212,14 +308,19 @@ SMART_ASSIGNMENT_EVAL_IDS=woodlands_fresh_cafe_recommend python3 -m eval.capture
 
 ## CI: advisory first
 
-The `agent-eval` job in `.github/workflows/ci.yml` runs this on PRs but is
-**advisory** (`continue-on-error: true`) — it reports, it does not block. It also
-no-ops cleanly when the model credentials aren't configured as repo secrets, so
-it never fails a PR for infrastructure reasons.
+The `agent-eval` job in `.github/workflows/ci.yml` runs `test_eval.py`, and the
+sibling `quality-eval` job runs `test_quality.py` — both **advisory**
+(`continue-on-error: true`): they report, they don't block. Both no-op cleanly
+when `SAGE_*` credentials aren't configured as repo secrets, so neither fails a
+PR for infrastructure reasons.
 
-The plan is to keep it advisory until the trajectory thresholds prove stable over
-a few real PRs, then flip it to a required check. Enabling Phase 2b's
-response-match scoring is a separate step on the same dataset.
+**CI currently only triggers on `main`** (see the `on:` block at the top of
+`ci.yml`) — a PR targeting `dev` won't run either job yet. Widening those
+triggers to include `dev` is a deliberate, separate follow-up, not bundled into
+the change that added `quality-eval`.
+
+The plan is to keep both advisory until their thresholds prove stable over a
+few real PRs, then flip them to required checks.
 
 ## Adding or changing cases
 

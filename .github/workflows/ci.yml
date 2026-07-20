@@ -90,7 +90,9 @@ jobs:
         run: pip install -e smart_assignment/ds_utils_lite
 
       - name: Install package with dev dependencies
-        run: pip install -e ".[dev]"
+        # NOTE: needs the `eval` extra too (google-adk[eval]) -- AgentEvaluator
+        # raises ModuleNotFoundError without it. `.[dev]` alone is not enough.
+        run: pip install -e ".[dev,eval]"
 
       - name: Run agent trajectory eval (skips cleanly without credentials)
         env:
@@ -105,3 +107,52 @@ jobs:
             exit 0
           fi
           python3 -m pytest eval/test_eval.py -q
+
+  # G-Eval quality metrics (DeepEval): brief_quality (escalate-outcome captures)
+  # and response_clarity (recommend-outcome captures), scored directly against
+  # eval/capture.py's captured {final_response, escalated} data -- see
+  # eval/test_quality.py's module docstring. Same advisory/credential-skip
+  # shape as agent-eval above, but does NOT need google-adk[eval] at all
+  # (DeepEval's GEval never goes through AgentEvaluator) -- a narrower install.
+  quality-eval:
+    # See the note on the `test` job above; CI_RUNNER is shared repo-wide.
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - name: Install the local ds-utils-lite dependency
+        run: pip install -e smart_assignment/ds_utils_lite
+
+      - name: Install package with dev + quality-eval dependencies
+        run: pip install -e ".[dev,eval-quality]"
+
+      - name: Run quality metrics (skips cleanly without credentials)
+        env:
+          SMART_ASSIGNMENT_LLM_BACKEND: sage
+          SMART_ASSIGNMENT_SAGE_MODEL: sage-gemini-2.5-flash
+          SAGE_CLIENT_ID: ${{ secrets.SAGE_CLIENT_ID }}
+          SAGE_CLIENT_SECRET: ${{ secrets.SAGE_CLIENT_SECRET }}
+          SAGE_ENVIRONMENT: ${{ secrets.SAGE_ENVIRONMENT }}
+          # deepeval registers itself as a pytest plugin (pytest11 entry point),
+          # which pytest auto-imports before any of this repo's own code runs --
+          # so these MUST be real process env vars, not just set in Python (see
+          # eval/test_quality.py's own os.environ.setdefault, which only helps
+          # non-pytest invocations). Suppresses an outbound HTTPS version-check
+          # to pypi.org and usage-analytics events on every `pytest` invocation
+          # in an environment where deepeval happens to be installed.
+          DEEPEVAL_TELEMETRY_OPT_OUT: "YES"
+          DEEPEVAL_UPDATE_WARNING_OPT_OUT: "YES"
+        run: |
+          if [ -z "$SAGE_CLIENT_ID" ]; then
+            echo "No SAGE_* credentials configured; skipping quality eval (advisory)."
+            exit 0
+          fi
+          python3 -m pytest eval/test_quality.py -q

@@ -32,6 +32,14 @@ ROLE_JUDGMENT = "judgment"  # the grounded-judgment decision call
 ROLE_REASONING = "reasoning"  # the LLM-narrated reasoning trace (LLMReasoner)
 ROLE_SLOTPICK = "slotpick"  # the grounded slot selection over a route's candidate menu
 ROLE_ADDRESS_RESOLVE = "address_resolve"  # grounded pick among geocoder address candidates
+# Not a product decision-layer role like the others above -- this is
+# eval/test_quality.py's DeepEval G-Eval judge (Phase 3a, advisory, outside the
+# product decision path). Included here anyway so it gets the same per-role
+# override capability as everything else (e.g. a stronger judge model than the
+# app's own operational model), via the same Config.for_role/generate_text seam
+# eval/deepeval_llm.py's SmartAssignmentDeepEvalLLM reuses rather than
+# reinventing a separate judge-model resolution path.
+ROLE_QUALITY_JUDGE = "quality_judge"
 
 # role -> env var that overrides that role's model. A role whose env var is
 # unset uses the global `model` / `sage_model`, so behavior is unchanged.
@@ -42,6 +50,7 @@ _ROLE_MODEL_ENV = {
     ROLE_REASONING: "SMART_ASSIGNMENT_MODEL_REASONING",
     ROLE_SLOTPICK: "SMART_ASSIGNMENT_MODEL_SLOTPICK",
     ROLE_ADDRESS_RESOLVE: "SMART_ASSIGNMENT_MODEL_ADDRESS_RESOLVE",
+    ROLE_QUALITY_JUDGE: "SMART_ASSIGNMENT_MODEL_QUALITY_JUDGE",
 }
 
 

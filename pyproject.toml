@@ -66,6 +66,33 @@ analysis = [
     "streamlit>=1.32",
     "plotly>=5.18",
 ]
+# G-Eval quality metrics (brief_quality, response_clarity -- see
+# eval/test_quality.py), Phase 3a. Kept OUT of `dev`/`eval`: needs a live LLM
+# backend, and does NOT need google-adk[eval] at all -- DeepEval's GEval scores
+# a bare (input, actual_output) pair directly, no AgentEvaluator involved, so
+# this is a narrower, cheaper install than eval/test_eval.py's `eval` extra.
+#
+# Pinned EXACTLY (not a floor): deepeval's newer releases (>=3.4.7, and all of
+# 4.x) require python-dotenv>=1.1.1, which conflicts with this project's own
+# litellm==1.83.7 (hard-pins python-dotenv==1.0.1, for Sage SDK compatibility
+# -- see the base `dependencies` list). 2.6.6 is the newest version whose own
+# deps resolve against that pin. [VERIFIED against the installed 2.6.6 API,
+# NOT deepeval's current GitHub main/PyPI-latest -- their public API drifted
+# meaningfully since 2.6.6 (e.g. LLMTestCaseParams instead of the newer
+# SingleTurnParams alias, no built-in GeminiModel) -- see eval/test_quality.py
+# and eval/deepeval_llm.py.] Revisit this pin (and re-verify the API) if the
+# litellm pin above is ever bumped/loosened.
+#
+# `langchain` is an UNDECLARED transitive runtime import: deepeval 2.6.6's own
+# package __init__ eagerly imports its OpenAI-model integration code (even
+# though we never use it), which needs langchain -- PyPI's declared deps don't
+# list it, but `import deepeval` genuinely fails without it installed. Pinned
+# exactly (0.3.30 is what actually resolves against the litellm constraint
+# above) for reproducibility, same rationale as the deepeval pin.
+eval-quality = [
+    "deepeval==2.6.6",
+    "langchain==0.3.30",
+]
 # Opt-in OpenTelemetry tracing (smart_assignment/shared/tracing.py). Kept OUT of
 # `dev` so the test suite never requires it and imports stay credential-free:
 # with SMART_ASSIGNMENT_USE_TRACING off (the default) none of this is imported.

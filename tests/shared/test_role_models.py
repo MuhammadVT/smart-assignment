@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from smart_assignment.shared.config import (
     ROLE_JUDGMENT,
+    ROLE_QUALITY_JUDGE,
     ROLE_REASONING,
     ROLE_ROOT_AGENT,
     ROLE_TRIAGE,
@@ -79,6 +80,15 @@ def test_role_models_read_from_env():
     assert c.role_models[ROLE_TRIAGE] == "m-triage"
     assert c.role_models[ROLE_JUDGMENT] == "m-judge"
     assert c.role_models[ROLE_REASONING] == "m-reason"
+
+
+def test_quality_judge_role_model_read_from_env():
+    # eval/test_quality.py's role, added for Phase 3a -- not a product
+    # decision-layer role, but resolved through the same generic mechanism.
+    with patch.dict(os.environ, {"SMART_ASSIGNMENT_MODEL_QUALITY_JUDGE": "m-quality-judge"}):
+        c = Config.from_env()
+    assert c.role_models[ROLE_QUALITY_JUDGE] == "m-quality-judge"
+    assert c.resolved_model(ROLE_QUALITY_JUDGE) == "m-quality-judge"
 
 
 def test_unset_role_env_yields_no_override():
