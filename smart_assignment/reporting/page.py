@@ -481,6 +481,48 @@ _FE_STYLE = """
   }
 """
 
+# Styles for the Eval & Feedback tab. Kept separate for readability; concatenated
+# into the same <style>. Reuses the Architecture tab's .tp/.tpcard/.arch-legend
+# vocabulary so the tab reads native, plus a couple of tab-specific additions:
+# a "planned" treatment (dashed border + corner badge) for pieces that are
+# designed but not yet built, and a dev-vs-prod flow-diagram layout.
+_EVAL_STYLE = """
+  .h2row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .h2row h2 { margin: 0; }
+  .statuspill { display: inline-flex; align-items: center; gap: 6px; font-weight: 700; font-size: 11.5px;
+    padding: 4px 10px; border-radius: 999px; }
+  .statuspill.done { background: var(--green-soft); color: var(--green); }
+  .statuspill.planned { background: var(--amber-soft); color: var(--amber); }
+  .tptype.judge { background: var(--violet-soft); color: var(--violet); }
+  .tptype.human { background: var(--green-soft); color: var(--green); }
+  .tpmeta .state.advisory { background: var(--amber-soft); color: var(--amber); }
+  .tpmeta .state.planned  { background: var(--amber-soft); color: var(--amber); }
+  .tpmeta .state.manual   { background: #eef1f6; color: var(--muted); }
+  .tpcard.planned { border: 1.5px dashed #cbb96a; }
+  .tpcard .planned-badge { position: absolute; top: 18px; right: 20px; font-size: 10px; font-weight: 800;
+    letter-spacing: .04em; text-transform: uppercase; color: var(--amber); background: var(--amber-soft);
+    border-radius: 999px; padding: 3px 8px; }
+  .envgrid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; }
+  .envcard { position: relative; }
+  .envcard .pill { position: absolute; top: 20px; right: 20px; display: inline-flex; align-items: center;
+    gap: 6px; font-weight: 700; font-size: 11.5px; padding: 5px 10px; border-radius: 999px; }
+  .envcard .pill.dev  { background: var(--green-soft); color: var(--green); }
+  .envcard .pill.prod { background: var(--amber-soft); color: var(--amber); }
+  .envcard h3 { font-size: 17px; margin: 0 0 2px; padding-right: 150px; }
+  .envcard .where { font-family: var(--mono); font-size: 11.5px; color: var(--muted); display: block; margin-bottom: 6px; }
+  .envcard .envnote { font-size: 12px; color: var(--muted); margin-top: 10px; }
+  .envcard svg { width: 100%; height: auto; display: block; margin-top: 8px; }
+  .compare-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-top: 20px; }
+  .compare-row .card { padding: 14px 16px; }
+  .compare-row .k { font-size: 11px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+  .compare-row .v-dev, .compare-row .v-prod { font-size: 13px; margin-top: 6px; }
+  .compare-row .v-dev b { color: var(--green); }
+  .compare-row .v-prod b { color: var(--amber); }
+  @media (max-width: 860px) {
+    .envgrid, .compare-row { grid-template-columns: 1fr; }
+  }
+"""
+
 # Static architecture diagram (SVG). No curly braces -> safe inside the f-string.
 _ARCH_SVG = """
 <svg viewBox="0 0 980 668" role="img" aria-label="Agentic workflow architecture diagram">
@@ -567,6 +609,299 @@ _ARCH_SVG = """
 </svg>
 """
 
+# Eval & Feedback pipeline diagram (SVG). No curly braces -> safe inside the f-string.
+# Real, shipped pieces are solid; pieces that only exist as a design/README
+# description today (the DeepEval metric suite, curator promotion) are drawn
+# dashed and amber, same visual language the rest of this diagram uses for
+# "not yet built" elsewhere on the site.
+_EVAL_PIPELINE_SVG = """
+<svg viewBox="0 0 1000 470" role="img" aria-label="Eval and feedback loop diagram">
+  <defs>
+    <marker id="e-arw" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#1257a6"/></marker>
+    <marker id="e-arwv" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#5b3fb0"/></marker>
+    <marker id="e-arwg" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#1a7f37"/></marker>
+    <marker id="e-arwa" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#9a6700"/></marker>
+  </defs>
+
+  <text x="20" y="26" font-size="12.5" font-weight="800" fill="#1257a6" letter-spacing=".03em">AUTOMATED EVAL — runs in CI, every PR</text>
+
+  <rect x="20" y="40" width="150" height="66" rx="12" fill="#fff" stroke="#c7d6ea"/>
+  <text x="95" y="66" text-anchor="middle" font-size="12.5" font-weight="700" fill="#0b2e59">Golden test cases</text>
+  <text x="95" y="83" text-anchor="middle" font-size="10" fill="#5b6675">eval/golden_cases.py</text>
+  <text x="95" y="97" text-anchor="middle" font-size="10" fill="#5b6675">from mock_customers</text>
+  <line x1="170" y1="73" x2="184" y2="73" stroke="#1257a6" stroke-width="2" marker-end="url(#e-arw)"/>
+
+  <rect x="186" y="40" width="176" height="66" rx="12" fill="#fff" stroke="#c7d6ea"/>
+  <text x="274" y="63" text-anchor="middle" font-size="12.5" font-weight="700" fill="#0b2e59">Trajectory eval</text>
+  <text x="274" y="79" text-anchor="middle" font-size="10" fill="#5b6675">tool-call order match</text>
+  <text x="274" y="93" text-anchor="middle" font-size="9.5" fill="#5b6675">eval/test_eval.py · ADK AgentEvaluator</text>
+  <line x1="362" y1="73" x2="376" y2="73" stroke="#1257a6" stroke-width="2" marker-end="url(#e-arw)"/>
+
+  <rect x="378" y="40" width="166" height="66" rx="12" fill="#fff" stroke="#c7d6ea"/>
+  <text x="461" y="63" text-anchor="middle" font-size="12.5" font-weight="700" fill="#0b2e59">Capture live run</text>
+  <text x="461" y="79" text-anchor="middle" font-size="10" fill="#5b6675">real agent, real backend</text>
+  <text x="461" y="93" text-anchor="middle" font-size="9.5" fill="#5b6675">eval/capture.py → committed JSON</text>
+  <line x1="544" y1="73" x2="558" y2="73" stroke="#1257a6" stroke-width="2" marker-end="url(#e-arw)"/>
+
+  <rect x="560" y="40" width="196" height="66" rx="12" fill="#f7f3fd" stroke="#cfc2f0"/>
+  <text x="658" y="60" text-anchor="middle" font-size="12" font-weight="700" fill="#0b2e59">Response scoring</text>
+  <text x="620" y="80" text-anchor="middle" font-size="9.5" font-weight="700" fill="#1257a6">ROUGE</text>
+  <text x="695" y="80" text-anchor="middle" font-size="9.5" font-weight="700" fill="#5b3fb0">LLM judge</text>
+  <text x="658" y="96" text-anchor="middle" font-size="9" fill="#5b6675">test_response_match.py</text>
+  <line x1="756" y1="73" x2="770" y2="73" stroke="#9a6700" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#e-arwa)"/>
+
+  <rect x="772" y="40" width="208" height="66" rx="12" fill="#fdf9ef" stroke="#cbb96a" stroke-dasharray="5 4"/>
+  <text x="876" y="60" text-anchor="middle" font-size="12" font-weight="700" fill="#9a6700">DeepEval metric suite</text>
+  <text x="876" y="76" text-anchor="middle" font-size="9.5" fill="#8a6a1f">G-Eval · Faithfulness · Relevancy</text>
+  <text x="876" y="91" text-anchor="middle" font-size="9" font-weight="700" fill="#9a6700">planned — not started</text>
+
+  <line x1="658" y1="106" x2="658" y2="122" stroke="#9a6700" stroke-width="2" marker-end="url(#e-arwa)"/>
+  <rect x="560" y="124" width="420" height="40" rx="10" fill="#fdf3d8" stroke="#9a6700"/>
+  <text x="770" y="149" text-anchor="middle" font-size="10.5" font-weight="700" fill="#9a6700">CI check · advisory only — ROUGE + LLM-judge run today; DeepEval not yet wired in</text>
+
+  <line x1="20" y1="185" x2="980" y2="185" stroke="#e3e8ef" stroke-width="1"/>
+  <text x="20" y="216" font-size="12.5" font-weight="800" fill="#5b3fb0" letter-spacing=".03em">HUMAN FEEDBACK LOOP — runtime observability, opt-in</text>
+
+  <rect x="20" y="230" width="150" height="66" rx="12" fill="#fff" stroke="#c7d6ea"/>
+  <text x="95" y="256" text-anchor="middle" font-size="12.5" font-weight="700" fill="#0b2e59">Agent runs</text>
+  <text x="95" y="272" text-anchor="middle" font-size="10" fill="#5b6675">dev &amp; prod traffic</text>
+  <text x="95" y="286" text-anchor="middle" font-size="9.5" fill="#5b6675">real or eval sessions</text>
+  <line x1="170" y1="263" x2="184" y2="263" stroke="#5b3fb0" stroke-width="2" marker-end="url(#e-arwv)"/>
+
+  <rect x="186" y="230" width="210" height="66" rx="12" fill="#fff" stroke="#c7d6ea"/>
+  <text x="291" y="253" text-anchor="middle" font-size="12.5" font-weight="700" fill="#0b2e59">OpenTelemetry spans</text>
+  <text x="291" y="269" text-anchor="middle" font-size="10" fill="#5b6675">backend · model · role · latency</text>
+  <text x="291" y="283" text-anchor="middle" font-size="9.5" fill="#5b6675">shared/tracing.py · Config.use_tracing</text>
+  <line x1="396" y1="263" x2="410" y2="263" stroke="#5b3fb0" stroke-width="2" marker-end="url(#e-arwv)"/>
+
+  <rect x="412" y="230" width="170" height="66" rx="12" fill="#f7f3fd" stroke="#cfc2f0"/>
+  <text x="497" y="256" text-anchor="middle" font-size="12.5" font-weight="700" fill="#5b3fb0">Phoenix / Langfuse</text>
+  <text x="497" y="272" text-anchor="middle" font-size="10" fill="#6b5aa0">dev vs prod backend</text>
+  <text x="497" y="286" text-anchor="middle" font-size="9.5" fill="#6b5aa0">same OTLP seam, either way</text>
+  <line x1="582" y1="263" x2="596" y2="263" stroke="#5b3fb0" stroke-width="2" marker-end="url(#e-arwv)"/>
+
+  <rect x="598" y="230" width="176" height="66" rx="12" fill="#e7f4ea" stroke="#1a7f37"/>
+  <text x="686" y="253" text-anchor="middle" font-size="12.5" font-weight="700" fill="#1a7f37">🙋 Human review</text>
+  <text x="686" y="269" text-anchor="middle" font-size="10" fill="#3b7a4e">Annotate · Annotation Queues</text>
+  <text x="686" y="283" text-anchor="middle" font-size="9.5" fill="#3b7a4e">a reviewer scores real traces</text>
+  <line x1="774" y1="263" x2="788" y2="263" stroke="#9a6700" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#e-arwa)"/>
+
+  <rect x="790" y="230" width="190" height="66" rx="12" fill="#fdf9ef" stroke="#cbb96a" stroke-dasharray="5 4"/>
+  <text x="885" y="253" text-anchor="middle" font-size="12.5" font-weight="700" fill="#9a6700">Curator promotion</text>
+  <text x="885" y="269" text-anchor="middle" font-size="10" fill="#8a6a1f">drafts a candidate case</text>
+  <text x="885" y="283" text-anchor="middle" font-size="9" font-weight="700" fill="#9a6700">planned — not started</text>
+
+  <path d="M885,296 C885,368 200,368 95,296" fill="none" stroke="#9a6700" stroke-width="1.8" stroke-dasharray="6 5" marker-end="url(#e-arwa)"/>
+  <rect x="255" y="352" width="370" height="34" rx="17" fill="#fdf3d8" stroke="#9a6700"/>
+  <text x="440" y="374" text-anchor="middle" font-size="10.5" font-weight="700" fill="#9a6700">proposed: feedback → golden set &amp; thresholds — not yet automated</text>
+
+  <text x="20" y="440" font-size="11.5" fill="#5b6675">→ runs today &#160;&#160;·&#160;&#160; ⇢ human-graded step, runs today &#160;&#160;·&#160;&#160; ┄ designed, not yet built</text>
+</svg>
+"""
+
+# Local-dev eval flow (SVG). Every step here is real, shipped code.
+_EVAL_DEV_FLOW_SVG = """
+<svg viewBox="0 0 460 500" role="img" aria-label="Local dev eval flow">
+  <defs><marker id="d-arw" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#1a7f37"/></marker></defs>
+  <rect x="30" y="10" width="400" height="64" rx="12" fill="#fff" stroke="#c7d6ea"/>
+  <text x="230" y="36" text-anchor="middle" font-size="13" font-weight="700" fill="#0b2e59">Run the agent locally</text>
+  <text x="230" y="54" text-anchor="middle" font-size="10.5" fill="#5b6675">mock or real backend · your terminal</text>
+  <line x1="230" y1="74" x2="230" y2="94" stroke="#1a7f37" stroke-width="2" marker-end="url(#d-arw)"/>
+
+  <rect x="30" y="96" width="400" height="64" rx="12" fill="#e7f4ea" stroke="#1a7f37"/>
+  <text x="230" y="122" text-anchor="middle" font-size="13" font-weight="700" fill="#1a7f37">phoenix serve</text>
+  <text x="230" y="140" text-anchor="middle" font-size="10.5" fill="#3b7a4e">one Python process · no containers, no Podman</text>
+  <line x1="230" y1="160" x2="230" y2="180" stroke="#1a7f37" stroke-width="2" marker-end="url(#d-arw)"/>
+
+  <rect x="30" y="182" width="400" height="64" rx="12" fill="#fff" stroke="#c7d6ea"/>
+  <text x="230" y="208" text-anchor="middle" font-size="13" font-weight="700" fill="#0b2e59">Trace lands on localhost</text>
+  <text x="230" y="226" text-anchor="middle" font-size="10.5" fill="#5b6675">one span tree per turn · no PII in it</text>
+  <line x1="230" y1="246" x2="230" y2="266" stroke="#1a7f37" stroke-width="2" marker-end="url(#d-arw)"/>
+
+  <rect x="30" y="268" width="400" height="64" rx="12" fill="#fff" stroke="#c7d6ea"/>
+  <text x="230" y="294" text-anchor="middle" font-size="13" font-weight="700" fill="#0b2e59">You hit Annotate</text>
+  <text x="230" y="312" text-anchor="middle" font-size="10.5" fill="#5b6675">score your own trace, right there</text>
+  <line x1="230" y1="332" x2="230" y2="352" stroke="#1a7f37" stroke-width="2" marker-end="url(#d-arw)"/>
+
+  <rect x="30" y="354" width="400" height="64" rx="12" fill="#fff" stroke="#c7d6ea"/>
+  <text x="230" y="380" text-anchor="middle" font-size="13" font-weight="700" fill="#0b2e59">Tweak prompt / flag / threshold</text>
+  <text x="230" y="398" text-anchor="middle" font-size="10.5" fill="#5b6675">same terminal, same process — rerun</text>
+
+  <path d="M30,386 C-14,386 -14,42 26,42" fill="none" stroke="#1a7f37" stroke-width="1.8" stroke-dasharray="6 5" marker-end="url(#d-arw)"/>
+  <text x="10" y="220" font-size="10.5" font-weight="700" fill="#1a7f37" transform="rotate(-90 10 220)" text-anchor="middle">seconds, not a queue</text>
+</svg>
+"""
+
+# Production eval flow (SVG). The first three steps are real (OTLP exporter,
+# Langfuse scaffolding); the last two -- Annotation Queues in active use, and
+# curator promotion -- are the target design, drawn dashed/amber to match.
+_EVAL_PROD_FLOW_SVG = """
+<svg viewBox="0 0 460 500" role="img" aria-label="Production eval flow">
+  <defs>
+    <marker id="p-arw" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#1257a6"/></marker>
+    <marker id="p-arwa" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#9a6700"/></marker>
+  </defs>
+  <rect x="30" y="10" width="400" height="64" rx="12" fill="#fff" stroke="#c7d6ea"/>
+  <text x="230" y="36" text-anchor="middle" font-size="13" font-weight="700" fill="#0b2e59">Real customer traffic</text>
+  <text x="230" y="54" text-anchor="middle" font-size="10.5" fill="#5b6675">deployed agent, live requests</text>
+  <line x1="230" y1="74" x2="230" y2="90" stroke="#1257a6" stroke-width="2" marker-end="url(#p-arw)"/>
+
+  <rect x="30" y="92" width="400" height="52" rx="12" fill="#fff" stroke="#c7d6ea"/>
+  <text x="230" y="115" text-anchor="middle" font-size="12.5" font-weight="700" fill="#0b2e59">OTLP exporter</text>
+  <text x="230" y="131" text-anchor="middle" font-size="10" fill="#5b6675">async, non-blocking — same seam as dev</text>
+  <line x1="230" y1="144" x2="230" y2="160" stroke="#1257a6" stroke-width="2" marker-end="url(#p-arw)"/>
+
+  <rect x="30" y="162" width="400" height="64" rx="12" fill="#eef5fd" stroke="#1257a6"/>
+  <text x="230" y="186" text-anchor="middle" font-size="13" font-weight="700" fill="#1257a6">Langfuse</text>
+  <text x="230" y="204" text-anchor="middle" font-size="10" fill="#2c5c94">Podman · Postgres · ClickHouse · Redis · MinIO · web · worker</text>
+  <text x="230" y="219" text-anchor="middle" font-size="9.5" fill="#5b6675">scaffolded — 6 containers vs. Phoenix's 1 process</text>
+  <line x1="230" y1="226" x2="230" y2="246" stroke="#9a6700" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#p-arwa)"/>
+
+  <rect x="30" y="248" width="400" height="64" rx="12" fill="#fdf9ef" stroke="#cbb96a" stroke-dasharray="5 4"/>
+  <text x="230" y="272" text-anchor="middle" font-size="13" font-weight="700" fill="#9a6700">Annotation Queues</text>
+  <text x="230" y="290" text-anchor="middle" font-size="10.5" fill="#8a6a1f">score configs · batches assigned across reviewers</text>
+  <line x1="230" y1="312" x2="230" y2="328" stroke="#9a6700" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#p-arwa)"/>
+
+  <rect x="30" y="330" width="400" height="64" rx="12" fill="#fdf9ef" stroke="#cbb96a" stroke-dasharray="5 4"/>
+  <text x="230" y="354" text-anchor="middle" font-size="13" font-weight="700" fill="#9a6700">Curator promotion → PR</text>
+  <text x="230" y="372" text-anchor="middle" font-size="10.5" fill="#8a6a1f">candidate case cites the real trace</text>
+  <line x1="230" y1="394" x2="230" y2="410" stroke="#9a6700" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#p-arwa)"/>
+
+  <rect x="30" y="412" width="400" height="60" rx="12" fill="#fff" stroke="#c7d6ea"/>
+  <text x="230" y="436" text-anchor="middle" font-size="13" font-weight="700" fill="#0b2e59">Merged → next CI run</text>
+  <text x="230" y="454" text-anchor="middle" font-size="10.5" fill="#5b6675">eval/golden_cases.py grows, thresholds re-checked</text>
+
+  <text x="10" y="250" font-size="10.5" font-weight="700" fill="#9a6700" transform="rotate(-90 10 250)" text-anchor="middle">target design — not yet automated</text>
+</svg>
+"""
+
+# Eval & Feedback tab body (the tab's <section>s). References the three SVG
+# constants above; no other braces appear in the copy, so this stays an
+# f-string safely.
+_EVAL_TAB_BODY = f"""
+  <section>
+    <div class="wrap">
+      <span class="eyebrow">Eval &amp; Feedback</span>
+      <div class="h2row">
+        <h2>How the agent gets graded — and how humans close the loop</h2>
+        <span class="statuspill done">✓ tracing, eval &amp; Phoenix: shipped</span>
+        <span class="statuspill planned">◐ metric suite &amp; curator promotion: planned</span>
+      </div>
+      <p class="sub">Two tracks run side by side. An <b>automated eval suite</b> checks every PR: did the
+        agent call the right tools in the right order, and — scored against a captured baseline — how good
+        is its final answer, by two metrics today (a third, DeepEval, is designed but not built). Separately,
+        every <b>live run</b> can emit OpenTelemetry spans to a trace backend where a human reviews real
+        traces. The dashed boxes below — the DeepEval metric suite and curator promotion — are the two
+        pieces that would close the loop end to end; today they're a design, not code.</p>
+      <div class="arch">
+        {_EVAL_PIPELINE_SVG}
+        <div class="arch-legend">
+          <div class="card"><div class="icon">🧪</div><h4>Trajectory first</h4><p>Every PR checks the agent called the right tools in the right order — deterministic, cheap, catches structural regressions fast.</p></div>
+          <div class="card"><div class="icon">⚖️</div><h4>Two metrics today, a third planned</h4><p>ROUGE and an LLM-as-judge already score every captured response. A broader DeepEval metric suite — G-Eval, Faithfulness, Answer Relevancy — is sketched to join them, but hasn't been started.</p></div>
+          <div class="card"><div class="icon">🔭</div><h4>Tracing is a seam, not a vendor</h4><p>One OTLP path feeds either Phoenix (local dev, ready) or Langfuse (prod track, scaffolded) — swapping backends is a config change, not a rewrite.</p></div>
+          <div class="card"><div class="icon">🔜</div><h4>Closing the loop is designed, not wired</h4><p>Curator promotion would turn a human's annotation into a reviewable PR against golden_cases.py. Today that loop is a described process in the READMEs, not code.</p></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section style="background:#fff; border-top:1px solid var(--line);">
+    <div class="wrap">
+      <span class="eyebrow">Judges in the loop</span>
+      <h2>Every place a score gets attached — and how much to trust it</h2>
+      <p class="sub">Same discipline as the decision layers: know exactly what each score can and can't tell
+        you. Cards with a dashed border and a <b>PLANNED</b> tag don't exist as code yet — they're included
+        so the shape of the finished loop is visible, not to overstate what's running today.</p>
+      <div class="tp">
+        <div class="card tpcard">
+          <span class="tptype call">Deterministic</span>
+          <h4>Trajectory scorer</h4>
+          <div class="where">eval/test_eval.py · ADK AgentEvaluator · tool_trajectory_avg_score</div>
+          <p>Replays each golden case and checks the agent called <span class="where">intake_customer → find_candidate_routes → evaluate_and_score_routes → recommend_or_escalate</span> in order — a structural check, not a quality one.</p>
+          <div class="guard"><b>What it can't tell you:</b> a perfect trajectory can still end in a bad or poorly-worded final answer. It only proves the agent followed the right steps.</div>
+          <div class="tpmeta"><span class="flag">agent-eval CI job</span><span class="state advisory">continue-on-error: true</span></div>
+        </div>
+        <div class="card tpcard">
+          <span class="tptype call">Deterministic</span>
+          <h4>Response match v1 — ROUGE</h4>
+          <div class="where">eval/test_response_match.py · response_match_score</div>
+          <p>Literal n-gram overlap between the agent's live final answer and a captured baseline response. Cheap, reproducible, blind to paraphrasing.</p>
+          <div class="guard"><b>What it can't tell you:</b> a correct answer phrased differently scores low; a wrong answer that echoes the baseline's wording can score high.</div>
+          <div class="tpmeta"><span class="flag">eval/data/captured_responses.json</span><span class="state advisory">non-escalated cases only</span></div>
+        </div>
+        <div class="card tpcard">
+          <span class="tptype judge">LLM judge</span>
+          <h4>Response match v2 — LLM-as-judge</h4>
+          <div class="where">final_response_match_v2 · ADK's judge, routed via sage_judge_llm.py</div>
+          <p>An LLM judge reads intent, not just wording — scored side by side with ROUGE, not as a replacement — and routed through the org's approved model gateway (<span class="where">sage_judge_llm.py → LLMRegistry</span>) rather than a public API.</p>
+          <div class="guard"><b>An open gap:</b> unlike judgment/, triage/, and slotpick/, this judge doesn't yet follow the repo's evidence-packet + cited-choice + verifier pattern. Worth closing when the metric suite below lands.</div>
+          <div class="tpmeta"><span class="flag">sage_judge_llm.py</span><span class="state advisory">measurement only, not required</span></div>
+        </div>
+        <div class="card tpcard planned">
+          <span class="planned-badge">Planned</span>
+          <span class="tptype judge">Metric suite</span>
+          <h4>DeepEval — G-Eval, Faithfulness, Answer Relevancy</h4>
+          <div class="where">eval/metrics.py (sketched) · not started — Phase 3</div>
+          <p>The next planned layer: a standardized metric vocabulary instead of one-off scores — a rubric-graded G-Eval pass, a Faithfulness check against the tool evidence the agent actually saw, and Answer Relevancy against the customer's original ask.</p>
+          <div class="guard"><b>Not built yet:</b> reopened by the Phoenix pivot and still unstarted. When it lands, it should sit downstream of capture.py exactly like ROUGE and the LLM-judge do today — an added metric, not a replacement.</div>
+          <div class="tpmeta"><span class="flag">SMART_ASSIGNMENT_USE_METRIC_SUITE</span><span class="state planned">Not started</span></div>
+        </div>
+        <div class="card tpcard">
+          <span class="tptype human">Human</span>
+          <h4>Trace reviewer</h4>
+          <div class="where">deployment/phoenix (Annotate) · deployment/langfuse (Annotation Queues)</div>
+          <p>A person reads a real trace — spans, latency, model/role, error status — and attaches a score or note. No prompt/response text is captured, by design, to keep customer addresses out of the trace store.</p>
+          <div class="guard"><b>The top of the trust chain today:</b> nothing overrides a human's read — but nothing wires that read back into eval/golden_cases.py automatically yet either. That's curator promotion, below.</div>
+          <div class="tpmeta"><span class="flag">Config.use_tracing</span><span class="state manual">opt-in · silent no-op on failure</span></div>
+        </div>
+        <div class="card tpcard planned">
+          <span class="planned-badge">Planned</span>
+          <span class="tptype call">Deterministic + cited</span>
+          <h4>Curator promotion</h4>
+          <div class="where">eval/curator.py (sketched) · not started — Phase 5, documented only</div>
+          <p>The design on paper: when a reviewer's annotation clears a promotion bar, a candidate golden case is drafted from that trace's real inputs and outputs — never hand-typed — and opened as a PR against <span class="where">eval/golden_cases.py</span>.</p>
+          <div class="guard"><b>Not built yet:</b> the READMEs describe this loop in prose; there's no code today. If built, it should follow the same recipe as judgment/, triage/, and slotpick/ — cite the real trace, verify the citation in code, and never write to main without a human merging the PR.</div>
+          <div class="tpmeta"><span class="flag">eval/golden_cases.py</span><span class="state planned">Documented, not automated</span></div>
+        </div>
+      </div>
+      <div class="guarantee">🛡️ <b>What's real vs. planned, stated plainly.</b> Trajectory eval, the ROUGE + LLM-judge response scoring, response capture, and OpenTelemetry tracing into Phoenix or Langfuse are real, running code today — though the CI check is currently advisory, not a required gate. The DeepEval metric suite and curator promotion above are still on paper. If they're built, this repo's own recipe already says how: enumerate candidates deterministically, cite the evidence, verify in code, fall back safely, and gate behind a flag — the same discipline as judgment/, triage/, and slotpick/.</div>
+    </div>
+  </section>
+
+  <section style="border-top:1px solid var(--line);">
+    <div class="wrap">
+      <span class="eyebrow">Dev vs. production</span>
+      <h2>Same OTLP seam, two very different loops</h2>
+      <p class="sub">The tracing code can't tell which environment it's in — it just emits spans. What changes
+        is what's listening on the other end. The local-dev loop below is real and usable today; the
+        production loop's last two steps (queued team review, curator promotion) are the target design —
+        <span class="where">deployment/langfuse/</span> is scaffolded but not yet serving real traffic.</p>
+      <div class="envgrid">
+        <div class="card envcard">
+          <span class="pill dev">🖥️ local dev · ready</span>
+          <h3>Inner loop — seconds, solo</h3>
+          <span class="where">deployment/phoenix/</span>
+          {_EVAL_DEV_FLOW_SVG}
+        </div>
+
+        <div class="card envcard">
+          <span class="pill prod">☁️ prod-track · scaffolded</span>
+          <h3>Governed loop — target design</h3>
+          <span class="where">deployment/langfuse/</span>
+          {_EVAL_PROD_FLOW_SVG}
+        </div>
+      </div>
+
+      <div class="compare-row">
+        <div class="card"><div class="k">Runtime footprint</div><div class="v-dev"><b>Dev</b> — 1 process, no containers</div><div class="v-prod"><b>Prod</b> — 6 containers under Podman, once deployed</div></div>
+        <div class="card"><div class="k">Who reviews</div><div class="v-dev"><b>Dev</b> — you, on your own trace</div><div class="v-prod"><b>Prod (target)</b> — a team, via assigned queues</div></div>
+        <div class="card"><div class="k">Feedback latency</div><div class="v-dev"><b>Dev</b> — seconds, same terminal</div><div class="v-prod"><b>Prod (target)</b> — next promotion + CI cycle, not automated yet</div></div>
+        <div class="card"><div class="k">Data captured</div><div class="v-dev"><b>Dev</b> — same OTLP schema, no PII</div><div class="v-prod"><b>Prod</b> — same OTLP schema, no PII</div></div>
+      </div>
+    </div>
+  </section>
+"""
+
 # Interactive simulator logic. Plain string (NOT an f-string) so its braces are safe.
 _SIM_JS = """
 (function () {
@@ -648,7 +983,7 @@ _TABS_JS = """
 (function () {
   var btns = document.querySelectorAll('.tabbtn');
   var panels = document.querySelectorAll('.tabpanel');
-  var valid = { overview: 1, architecture: 1, simulator: 1, frontend: 1 };
+  var valid = { overview: 1, architecture: 1, simulator: 1, eval: 1, frontend: 1 };
   function activate(name, scroll) {
     btns.forEach(function (b) {
       var on = b.getAttribute('data-tab') === name;
@@ -2524,7 +2859,7 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
 <title>Smart Assignment — AI Agent for Delivery Slot Recommendation</title>
 <meta name="description" content="An AI agent that autonomously assigns delivery slots for new Sysco customers. Explore the agentic workflow, architecture, and run it live on mock data." />
 <!-- GENERATED by scripts/generate_page.py from live workflow output. Do not edit by hand. -->
-<style>{_STYLE}{_FE_STYLE}</style>
+<style>{_STYLE}{_FE_STYLE}{_EVAL_STYLE}</style>
 </head>
 <body>
 
@@ -2552,6 +2887,7 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
     <button class="tabbtn active" data-tab="overview" role="tab" aria-selected="true">Overview</button>
     <button class="tabbtn" data-tab="architecture" role="tab" aria-selected="false">Architecture</button>
     <button class="tabbtn" data-tab="simulator" role="tab" aria-selected="false">Simulator</button>
+    <button class="tabbtn" data-tab="eval" role="tab" aria-selected="false">Eval &amp; Feedback</button>
     <button class="tabbtn" data-tab="frontend" role="tab" aria-selected="false">Frontend</button>
   </div>
 </nav>
@@ -2730,6 +3066,10 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
       </div>
     </div>
   </section>
+</div>
+
+<div class="tabpanel" id="tab-eval" role="tabpanel">
+{_EVAL_TAB_BODY}
 </div>
 
 <div class="tabpanel" id="tab-frontend" role="tabpanel">
