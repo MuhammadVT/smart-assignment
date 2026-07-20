@@ -40,10 +40,27 @@ yet**: that text is the LLM's narration and can only be captured faithfully from
 a real run — so `response_match_score` is intentionally absent here rather than
 asserted against text we can't generate offline.
 
-**Phase 2b — final-response quality.** A capture helper will run the real agent to
-record the actual final responses into the dataset, and `response_match_score`
-will be re-enabled. That step is deferred because it needs a live backend to
-build and verify.
+**Phase 2b — final-response quality.** `eval/capture.py` runs the real agent to
+record the actual final responses, so the dataset's `final_response` fields can be
+populated and `response_match_score` re-enabled. It needs a live backend, so it's
+a deliberate, separate step from the deterministic `build_evalset.py`:
+
+```bash
+# Needs a configured backend (Sage creds, or a standard Gemini key) — see .env.example.
+python3 -m eval.capture --check   # dry run: print what would be captured, write nothing
+python3 -m eval.capture           # capture, then regenerate the dataset from it
+```
+
+This writes **`eval/data/captured_responses.json`** (a committed, reviewable
+`{eval_id: final_response}` map) and regenerates
+`eval/data/slot_recommendation.test.json` with `final_response` populated from it.
+**Commit both.** Because `build_evalset.py` reads the committed capture file, the
+dataset stays byte-stable and the hermetic sync test still holds; with the file
+absent (a fresh Phase-2a checkout) `final_response` stays `null` and structural
+output is reproduced exactly.
+
+Enabling `response_match_score` in `test_config.json` is the *next* step, done
+once the captured responses are reviewed — capture only records them here.
 
 ## Running locally
 

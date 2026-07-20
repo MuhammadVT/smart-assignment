@@ -10,7 +10,7 @@ customer (not invented), so the trajectory expectation is real, not a guess.
 
 What is deliberately NOT encoded here is the agent's final natural-language
 response: that is the LLM's narration, which can only be captured faithfully by
-running a real backend (see ``eval/build_evalset.py`` capture mode, Phase 2b).
+running a real backend (see ``eval/capture.py``, Phase 2b).
 Until then the dataset scores trajectory only (see ``eval/data/test_config.json``),
 which catches the structural regressions -- a dropped/reordered tool, the
 address-resolution branch firing when it shouldn't -- without asserting text we
