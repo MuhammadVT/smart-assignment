@@ -28,6 +28,32 @@ Skips cleanly (not a failure) when no case is yet known to be a clean recommend 
 e.g. right after a capture that happened to escalate. Capture one with
 ``python3 -m eval.capture`` to unskip it.
 
+--- final_response_match_v2 (Phase 2b-2): an LLM-as-judge alternative, scored
+alongside response_match_score, NOT instead of it ---
+
+response_match_score (v1) is literal ROUGE-1 word overlap -- cheap (no extra LLM
+call) but brittle: a correct, differently-worded response can score low.
+final_response_match_v2 asks a judge LLM whether the response is valid given the
+reference, tolerating paraphrasing/format/order differences -- a materially
+better quality signal for prose, at a materially higher cost.
+
+It has the EXACT SAME escalate-case blind spot as v1, verified from the same ADK
+source read: [VERIFIED against installed google-adk 2.5.0]
+``llm_as_judge_utils.get_text_from_content`` -- even with
+``include_intermediate_responses_in_final=True`` -- still bottoms out in a
+``.text``-only read of ``Content.parts`` for every event it walks, including the
+one holding the escalation handoff (a ``function_call``, not text). So it is
+scoped by the exact same ``_recommend_only_eval_ids()`` filter as v1, not the
+full dataset.
+
+Cost note: ``LlmAsAJudgeCriterion``'s ``JudgeModelOptions.num_samples`` defaults
+to 5 in ADK -- the judge model is sampled 5x per invocation and majority-voted,
+i.e. 5 extra LLM calls per case on top of the agent's own live run. Pinned to 1
+here deliberately (cheap while iterating with few captured cases); raise it once
+there's a reason to trust majority-vote stability over a single judge call. Also
+marked ``@experimental`` in ADK's own source -- expect this metric's shape or
+behavior to move under future ADK versions.
+
 Run with (needs a configured LLM backend): pytest eval/test_response_match.py
 """
 
@@ -46,15 +72,21 @@ from eval.golden_cases import GOLDEN_CASES
 
 AGENT_MODULE_PATH = "smart_assignment"
 
-# A starting point, not a calibrated number -- ROUGE-1 on paraphrased structured
-# text can legitimately vary run to run. Revisit once more recommend-outcome
-# cases are captured and there's a real distribution to look at.
-_RESPONSE_MATCH_THRESHOLD = 0.5
+# Starting points, not calibrated numbers -- both can legitimately vary run to
+# run. Revisit once more recommend-outcome cases are captured and there's a real
+# distribution of scores to look at.
+_RESPONSE_MATCH_THRESHOLD = 0.5  # v1: ROUGE-1 f-measure, [0, 1].
+_JUDGE_MATCH_THRESHOLD = 0.5  # v2: fraction of judge samples rating "valid", [0, 1].
+_JUDGE_NUM_SAMPLES = 1  # ADK's own default is 5; see module docstring on cost.
 
 _SCRATCH_TEST_CONFIG = {
     "criteria": {
         "tool_trajectory_avg_score": {"threshold": 1.0, "match_type": "IN_ORDER"},
         "response_match_score": {"threshold": _RESPONSE_MATCH_THRESHOLD},
+        "final_response_match_v2": {
+            "threshold": _JUDGE_MATCH_THRESHOLD,
+            "judge_model_options": {"num_samples": _JUDGE_NUM_SAMPLES},
+        },
     }
 }
 
