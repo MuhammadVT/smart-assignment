@@ -39,6 +39,14 @@ dev = [
 litellm = [
     "google-adk[extensions]>=2.3.0",
 ]
+# The agent-trajectory eval suite under eval/ (ADK's AgentEvaluator). ADK ships
+# its evaluation module behind its own "eval" extra; without it AgentEvaluator
+# raises ModuleNotFoundError at run time. Kept OUT of `dev` -- eval/ replays
+# conversations against a live LLM backend, so the hermetic tests/ suite must
+# never require these deps. Run with: pytest eval/test_eval.py
+eval = [
+    "google-adk[eval]>=2.3.0",
+]
 # Reading the prepared parquet cache snapshots under data/dev/ that the "cache"
 # data source (the default -- see integrations/route_capacity_client.py) loads:
 # pandas needs a parquet engine. Without it the route/tier/window cache reads
