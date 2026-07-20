@@ -65,6 +65,21 @@ output is reproduced exactly.
 Enabling `response_match_score` in `test_config.json` is the *next* step, done
 once the captured responses are reviewed — capture only records them here.
 
+> **Data source matters here.** Capture runs the real agent, which by default
+> loads route capacity from whatever's under `data/dev/*.parquet` (the "cache"
+> data source — see `integrations/route_capacity_client.py`), not the built-in
+> mock routes `golden_cases.py`'s `expected_outcome`/`note` fields describe. If
+> you capture with a real cache snapshot present, the captured `final_response`
+> (and the recommend-vs-escalate outcome) reflects **today's real capacity**,
+> which is the intended behavior for this project but will drift as real
+> capacity data changes over time — a case that recommends today may escalate
+> after a recapture months later, with no code change involved. That's expected,
+> not a regression; re-run `eval.capture` to refresh when you want the golden
+> dataset to reflect current capacity. If you instead want a stable,
+> never-drifting reference (matching the mock-data design intent in
+> `golden_cases.py`'s comments), run capture with
+> `SMART_ASSIGNMENT_DATA_SOURCE=mock` set.
+
 ## Running locally
 
 Needs a configured backend (see `.env.example`); the CI job uses
