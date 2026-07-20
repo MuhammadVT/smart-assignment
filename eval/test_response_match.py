@@ -78,6 +78,16 @@ AGENT_MODULE_PATH = "smart_assignment"
 _RESPONSE_MATCH_THRESHOLD = 0.5  # v1: ROUGE-1 f-measure, [0, 1].
 _JUDGE_MATCH_THRESHOLD = 0.5  # v2: fraction of judge samples rating "valid", [0, 1].
 _JUDGE_NUM_SAMPLES = 1  # ADK's own default is 5; see module docstring on cost.
+# ADK's own JudgeModelOptions.judge_model default is "gemini-2.5-flash", which
+# Google has since retired (404 on every real API key -- see the model default
+# in shared/config.py for the same issue on this repo's OWN calls). Pinned
+# explicitly here to a currently-live model. Deliberately NOT derived from
+# Config.model/SMART_ASSIGNMENT_MODEL: ADK's judge always calls the raw Gemini
+# API directly (GoogleLLMVariant.GEMINI_API), regardless of this repo's
+# SMART_ASSIGNMENT_LLM_BACKEND/litellm routing, so it needs its own bare Gemini
+# model id rather than whatever backend string the app itself is configured
+# for (which may be Sage-prefixed or a "<provider>/<model>" litellm string).
+_JUDGE_MODEL = "gemini-3.1-flash-lite"
 
 _SCRATCH_TEST_CONFIG = {
     "criteria": {
@@ -85,7 +95,10 @@ _SCRATCH_TEST_CONFIG = {
         "response_match_score": {"threshold": _RESPONSE_MATCH_THRESHOLD},
         "final_response_match_v2": {
             "threshold": _JUDGE_MATCH_THRESHOLD,
-            "judge_model_options": {"num_samples": _JUDGE_NUM_SAMPLES},
+            "judge_model_options": {
+                "judge_model": _JUDGE_MODEL,
+                "num_samples": _JUDGE_NUM_SAMPLES,
+            },
         },
     }
 }
