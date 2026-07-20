@@ -13,9 +13,10 @@ live LLM backend** and are kept separate from the hermetic tests.
 | `build_evalset.py` | Deterministically renders the cases into an ADK `EvalSet` JSON. Run `python3 -m eval.build_evalset` to regenerate the dataset. |
 | `data/slot_recommendation.test.json` | The generated `EvalSet` (do not hand-edit — regenerate). |
 | `data/test_config.json` | The scoring criteria ADK auto-discovers from this folder. |
-| `data/captured_responses.json` | Committed `{eval_id: final_response}` map written by `capture.py` (Phase 2b). |
-| `test_eval.py` | The pytest entry point that runs `AgentEvaluator`. |
-| `capture.py` | Runs the live agent once per case to record its real final response (Phase 2b). |
+| `data/captured_responses.json` | Committed `{eval_id: {final_response, escalated}}` map written by `capture.py` (Phase 2b). |
+| `test_eval.py` | The pytest entry point that runs `AgentEvaluator` (trajectory, full dataset). |
+| `capture.py` | Runs the live agent once per case to record its real final response + whether it escalated (Phase 2b). |
+| `test_response_match.py` | Separate pytest entry point: `response_match_score`, scoped to captured cases known NOT to have escalated. See its module docstring for why escalate cases can't be scored this way at all. |
 | `case_selection.py` | Shared `SMART_ASSIGNMENT_EVAL_IDS` subset filter used by both `test_eval.py` and `capture.py` — one place owning that env var's name and validation. |
 
 ## What is scored (and what isn't, yet)
@@ -55,15 +56,57 @@ python3 -m eval.capture           # capture, then regenerate the dataset from it
 ```
 
 This writes **`eval/data/captured_responses.json`** (a committed, reviewable
-`{eval_id: final_response}` map) and regenerates
-`eval/data/slot_recommendation.test.json` with `final_response` populated from it.
-**Commit both.** Because `build_evalset.py` reads the committed capture file, the
-dataset stays byte-stable and the hermetic sync test still holds; with the file
-absent (a fresh Phase-2a checkout) `final_response` stays `null` and structural
-output is reproduced exactly.
+`{eval_id: {final_response, escalated}}` map — `escalated` records whether the
+case handed off via ADK's `request_input` long-running tool rather than ending on
+plain text; see `eval/test_response_match.py` below for why that matters) and
+regenerates `eval/data/slot_recommendation.test.json` with `final_response`
+populated from it. **Commit both.** Because `build_evalset.py` reads the
+committed capture file (extracting just the text), the dataset stays byte-stable
+and the hermetic sync test still holds; with the file absent (a fresh Phase-2a
+checkout) `final_response` stays `null` and structural output is reproduced
+exactly.
 
-Enabling `response_match_score` in `test_config.json` is the *next* step, done
-once the captured responses are reviewed — capture only records them here.
+### Scoring `response_match_score` — `eval/test_response_match.py`, not `test_config.json`
+
+Unlike trajectory scoring, `response_match_score` is **not** added to the shared
+`eval/data/test_config.json`. Two reasons, both load-bearing:
+
+1. It's dataset-wide, not per-case — enabling it there would apply to the full
+   committed dataset (and CI, which always runs that), including any case whose
+   `final_response` is still `null` (not yet captured). ADK doesn't error on a
+   `null` reference; it silently scores that case `0.0` and `FAILED`, dragging the
+   overall score down for reasons that have nothing to do with response quality.
+2. **`response_match_score` cannot meaningfully score an ESCALATE-outcome case at
+   all**, regardless of threshold. [VERIFIED against installed google-adk 2.5.0
+   source]: an escalation ends the turn on ADK's `request_input` long-running tool
+   call; `Event.is_final_response()` treats that tool-call event as the turn's
+   final response, but its content holds a `function_call` part, not `.text` —
+   so ADK's own live-eval extraction of the "actual" response is always `""` for
+   an escalated case, forcing a `0.0` no matter how good the real handoff message
+   was. `capture.py` works around this on the *reference* side only (it manually
+   pulls the handoff `message` out of the tool call for the case it captures);
+   there's no equivalent on the live/actual side during evaluation, and that's
+   ADK-internal, not something this repo controls. See
+   `eval/test_response_match.py`'s module docstring for the full trace through
+   ADK's source.
+
+So `eval/test_response_match.py` is a **separate** pytest entry point that scores
+`response_match_score` against a scratch dataset containing only the captured
+cases known to be `escalated: False` — real signal on recommend cases, no false
+failures on escalate ones, and the committed `test_config.json` (and therefore
+the default full-dataset run and CI) stay completely unaffected:
+
+```bash
+# Needs a configured backend, same as capture.py.
+pytest eval/test_response_match.py
+```
+
+It **skips cleanly** (not a failure) when no case is yet known to be a clean
+recommend — capture one (see the data-source caveat above: try a case still
+documented as `recommend` in `golden_cases.py`, but be aware the real outcome may
+differ) to unskip it. Its threshold (`0.5` as of writing, in the file itself, not
+`test_config.json`) is a starting point, not calibrated — tune it once there's a
+real distribution of scores to look at.
 
 > **Data source matters here.** Capture runs the real agent, which by default
 > loads route capacity from whatever's under `data/dev/*.parquet` (the "cache"
