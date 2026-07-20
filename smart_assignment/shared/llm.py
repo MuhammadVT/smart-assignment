@@ -296,6 +296,21 @@ def _is_litellm_model(model: str) -> bool:
     return "/" in model
 
 
+def get_sage_llm(sage_model: str) -> Any:
+    """Return a SageLlmRegistry LLM object (enterprise-governed, TLS-injected)
+    for the given Sage-prefixed model name.
+
+    Standalone seam for callers that have a bare Sage model string rather than
+    a full ``Config`` -- e.g. ``eval/sage_judge_llm.py``'s ADK-registry
+    adapter, which lets ADK-INTERNAL model resolution (distinct from this
+    repo's own ``get_llm()``/``generate_text()`` calls below) also address a
+    Sage-approved model. ``get_llm()``'s sage branch is just this function
+    plus the diagnostic hook, which needs the full ``Config``."""
+    _check_sage_env_vars()
+    registry = _load_sage_registry()
+    return registry.get_llm(sage_model)
+
+
 def get_llm(config: "Config") -> Any:
     """
     Return the value for an ADK LlmAgent ``model=`` parameter.
@@ -306,10 +321,8 @@ def get_llm(config: "Config") -> Any:
                provider litellm supports, e.g. "openai/gpt-4o-mini")
     """
     if config.llm_backend == "sage":
-        _check_sage_env_vars()
-        registry = _load_sage_registry()
         _maybe_install_sage_response_diagnostic(config)
-        return registry.get_llm(config.sage_model)
+        return get_sage_llm(config.sage_model)
     if _is_litellm_model(config.model):
         from google.adk.models.lite_llm import LiteLlm  # requires the `litellm` extra
 

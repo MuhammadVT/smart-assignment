@@ -69,6 +69,7 @@ from google.adk.evaluation.agent_evaluator import AgentEvaluator
 from eval.build_evalset import render_dataset
 from eval.capture import load_captured_outcomes
 from eval.golden_cases import GOLDEN_CASES
+from smart_assignment.shared.config import DEFAULT_CONFIG
 
 AGENT_MODULE_PATH = "smart_assignment"
 
@@ -79,13 +80,42 @@ _RESPONSE_MATCH_THRESHOLD = 0.5  # v1: ROUGE-1 f-measure, [0, 1].
 _JUDGE_MATCH_THRESHOLD = 0.5  # v2: fraction of judge samples rating "valid", [0, 1].
 _JUDGE_NUM_SAMPLES = 1  # ADK's own default is 5; see module docstring on cost.
 
+# ADK's own JudgeModelOptions.judge_model default is "gemini-2.5-flash", which
+# Google has since retired (404 on every real API key -- see the model default
+# in shared/config.py for the same issue on this repo's OWN calls), so it must
+# always be pinned explicitly. WHICH model depends on the active backend:
+#
+# "standard" -> a bare, currently-live Gemini id. ADK's judge always calls the
+#   raw Gemini API directly (GoogleLLMVariant.GEMINI_API) via its own generic
+#   LLMRegistry (bare "gemini-*" -> its built-in Gemini class), never through
+#   this repo's shared/llm.py -- so it needs its own bare model id, not
+#   whatever SMART_ASSIGNMENT_MODEL happens to be (which under "standard" may
+#   itself be a "<provider>/<model>" litellm string ADK's judge can't use).
+#
+# "sage" -> a Sage-prefixed id, reusing whatever SMART_ASSIGNMENT_SAGE_MODEL is
+#   already configured (never invented here -- see eval/sage_judge_llm.py's
+#   docstring). ADK's LLMRegistry has no pattern matching "sage-*" out of the
+#   box, so register_sage_judge_model() registers an adapter class first; a
+#   Sage-only environment (no direct non-Sage-approved model access) cannot
+#   reach the "standard" branch's bare Gemini id at all.
+if DEFAULT_CONFIG.llm_backend == "sage":
+    from eval.sage_judge_llm import register_sage_judge_model
+
+    register_sage_judge_model()
+    _JUDGE_MODEL = DEFAULT_CONFIG.sage_model
+else:
+    _JUDGE_MODEL = "gemini-3.1-flash-lite"
+
 _SCRATCH_TEST_CONFIG = {
     "criteria": {
         "tool_trajectory_avg_score": {"threshold": 1.0, "match_type": "IN_ORDER"},
         "response_match_score": {"threshold": _RESPONSE_MATCH_THRESHOLD},
         "final_response_match_v2": {
             "threshold": _JUDGE_MATCH_THRESHOLD,
-            "judge_model_options": {"num_samples": _JUDGE_NUM_SAMPLES},
+            "judge_model_options": {
+                "judge_model": _JUDGE_MODEL,
+                "num_samples": _JUDGE_NUM_SAMPLES,
+            },
         },
     }
 }
