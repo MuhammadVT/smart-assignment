@@ -108,6 +108,25 @@ differ) to unskip it. Its threshold (`0.5` as of writing, in the file itself, no
 `test_config.json`) is a starting point, not calibrated — tune it once there's a
 real distribution of scores to look at.
 
+#### `final_response_match_v2` — the LLM-as-judge alternative, scored alongside v1
+
+The same file also scores ADK's `final_response_match_v2`: instead of literal
+ROUGE-1 word overlap, a judge LLM rates whether the response is valid given the
+reference, tolerating paraphrasing/format/order differences — a materially
+better signal for prose, at a materially higher cost (an extra LLM call per
+sample; ADK's own default is 5 samples, majority-voted). It has the **exact same
+escalate-case blind spot as v1** — [verified against installed google-adk 2.5.0
+source] `llm_as_judge_utils.get_text_from_content` still only reads `.text` parts
+of `Content`, same as v1, so it never sees the escalation handoff message either
+(that lives in a `function_call`'s args) — so it's scoped by the same
+recommend-only filter, not added anywhere broader.
+
+`eval/test_response_match.py` pins `judge_model_options.num_samples = 1` (not
+ADK's default of 5) to keep this cheap while there's only a handful of captured
+cases; bump it once there's a reason to trust majority-vote stability over a
+single judge call. It's also marked `@experimental` in ADK's own source — its
+shape or behavior may move under future ADK versions.
+
 > **Data source matters here.** Capture runs the real agent, which by default
 > loads route capacity from whatever's under `data/dev/*.parquet` (the "cache"
 > data source — see `integrations/route_capacity_client.py`), not the built-in
