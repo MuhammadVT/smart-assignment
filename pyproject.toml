@@ -99,6 +99,15 @@ profile = "black"
 # tries to create by default. Use copy mode to avoid "os error 396: incompatible
 # hardlinks" when installing on cloud-synced storage.
 link-mode = "copy"
+# The project venv intentionally lives OUTSIDE the OneDrive-synced repo tree to
+# avoid cloud-sync / hardlink issues. The canonical location is:
+#   C:\Users\<you>\venvs\EAT_smart_assignment\
+# uv does not have a pyproject.toml key for the venv path; set the environment
+# variable UV_PROJECT_ENVIRONMENT to that path before running `uv sync` / `uv
+# run`. VS Code terminals get this automatically via .vscode/settings.json
+# (terminal.integrated.env.windows). For plain shells, run:
+#   $env:UV_PROJECT_ENVIRONMENT = "C:\Users\<you>\venvs\EAT_smart_assignment"
+# before uv commands, or set it permanently in your shell profile.
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
