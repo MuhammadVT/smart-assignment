@@ -114,6 +114,12 @@ jobs:
   # eval/test_quality.py's module docstring. Same advisory/credential-skip
   # shape as agent-eval above, but does NOT need google-adk[eval] at all
   # (DeepEval's GEval never goes through AgentEvaluator) -- a narrower install.
+  #
+  # Also runs eval/test_rationale_faithfulness.py (Phase 3b): a different
+  # granularity -- routeslot/'s own grounded-decision rationale, not the
+  # agent's customer-facing prose -- scored reference-free against the real
+  # evidence packet, no capture step needed. Same eval-quality install covers
+  # both; see that file's module docstring.
   quality-eval:
     # See the note on the `test` job above; CI_RUNNER is shared repo-wide.
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
@@ -155,4 +161,4 @@ jobs:
             echo "No SAGE_* credentials configured; skipping quality eval (advisory)."
             exit 0
           fi
-          python3 -m pytest eval/test_quality.py -q
+          python3 -m pytest eval/test_quality.py eval/test_rationale_faithfulness.py -q
