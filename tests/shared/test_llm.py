@@ -40,6 +40,126 @@ def test_get_llm_returns_bare_gemini_model_string_as_is():
     assert get_llm(config) == "gemini-2.5-flash"
 
 
+# --- Sage LLM Gateway sub-path (Config.use_sage_gateway) ---------------------
+#
+# GatewayLlm routes the sage call through Sysco's enterprise LLM Gateway
+# instead of a registered SAGE agent. Off by default (get_sage_llm, the
+# direct-agent path, is exercised above/by the sage end-to-end test below);
+# these tests cover the flag turning the sage branch onto the gateway sibling.
+
+
+def test_get_llm_uses_direct_agent_path_by_default(monkeypatch):
+    import smart_assignment.shared.llm as llm_mod
+
+    sentinel = object()
+    monkeypatch.setattr(llm_mod, "get_sage_llm", lambda model: sentinel)
+    monkeypatch.setattr(
+        llm_mod, "get_sage_gateway_llm", lambda model: (_ for _ in ()).throw(AssertionError)
+    )
+    config = Config(llm_backend="sage", sage_model="sage-gemini-2.5-flash")
+    assert get_llm(config) is sentinel
+
+
+def test_get_llm_routes_through_the_gateway_when_flag_is_on(monkeypatch):
+    import smart_assignment.shared.llm as llm_mod
+
+    sentinel = object()
+    monkeypatch.setattr(llm_mod, "get_sage_gateway_llm", lambda model: sentinel)
+    monkeypatch.setattr(
+        llm_mod, "get_sage_llm", lambda model: (_ for _ in ()).throw(AssertionError)
+    )
+    config = Config(llm_backend="sage", sage_model="gpt-4o", use_sage_gateway=True)
+    assert get_llm(config) is sentinel
+
+
+def test_get_sage_gateway_llm_passes_the_model_through(monkeypatch):
+    import smart_assignment.shared.llm as llm_mod
+    from smart_assignment.shared.llm import get_sage_gateway_llm
+
+    monkeypatch.setattr(llm_mod, "_check_sage_gateway_env_vars", lambda: None)
+    captured = {}
+
+    class FakeGatewayLlm:
+        def __init__(self, model):
+            captured["model"] = model
+
+    monkeypatch.setattr(llm_mod, "_load_sage_gateway_llm_cls", lambda: FakeGatewayLlm)
+    gateway_llm = get_sage_gateway_llm("gpt-4o")
+    assert isinstance(gateway_llm, FakeGatewayLlm)
+    assert captured["model"] == "gpt-4o"
+
+
+def test_check_sage_gateway_env_vars_raises_when_credentials_missing(monkeypatch):
+    from smart_assignment.shared.llm import _check_sage_gateway_env_vars
+
+    monkeypatch.delenv("LLM_GATEWAY_CLIENT_ID", raising=False)
+    monkeypatch.delenv("LLM_GATEWAY_CLIENT_SECRET", raising=False)
+    try:
+        _check_sage_gateway_env_vars()
+    except RuntimeError as exc:
+        assert "LLM_GATEWAY_CLIENT_ID" in str(exc)
+        assert "LLM_GATEWAY_CLIENT_SECRET" in str(exc)
+    else:  # pragma: no cover - explicit failure if no error raised
+        raise AssertionError("expected a RuntimeError when gateway credentials are missing")
+
+
+def test_check_sage_gateway_env_vars_does_not_require_gateway_env(monkeypatch):
+    # LLM_GATEWAY_ENV is optional -- the SDK's GatewayClient defaults it to "qa".
+    from smart_assignment.shared.llm import _check_sage_gateway_env_vars
+
+    monkeypatch.setenv("LLM_GATEWAY_CLIENT_ID", "id")
+    monkeypatch.setenv("LLM_GATEWAY_CLIENT_SECRET", "secret")
+    monkeypatch.delenv("LLM_GATEWAY_ENV", raising=False)
+    _check_sage_gateway_env_vars()  # must not raise
+
+
+def test_use_sage_gateway_defaults_to_false():
+    assert Config().use_sage_gateway is False
+
+
+def test_use_sage_gateway_read_from_env(monkeypatch):
+    monkeypatch.setenv("SMART_ASSIGNMENT_USE_SAGE_GATEWAY", "true")
+    assert Config.from_env().use_sage_gateway is True
+
+
+def test_use_sage_gateway_unset_env_defaults_to_false(monkeypatch):
+    monkeypatch.delenv("SMART_ASSIGNMENT_USE_SAGE_GATEWAY", raising=False)
+    assert Config.from_env().use_sage_gateway is False
+
+
+def test_generate_text_sage_gateway_end_to_end_from_offloaded_tool(monkeypatch):
+    """Same shape as the direct-agent end-to-end test above, but through the
+    gateway sub-path: only the gateway SDK boundary (env check + loader) is
+    patched, so the real generate_text -> _generate_via_sage_async -> response
+    parsing chain is exercised exactly as it would be with a real GatewayLlm."""
+    from smart_assignment.shared import llm as llm_mod
+
+    host = {}
+
+    class LoopBoundFakeLlm:
+        async def generate_content_async(self, request, stream=False):
+            if asyncio.get_running_loop() is not host["loop"]:
+                raise RuntimeError(f"loop {host['loop']!r} is not the running loop")
+            yield _llm_response_with_text('{"decision": "RECOMMEND"}')
+
+    monkeypatch.setattr(llm_mod, "_check_sage_gateway_env_vars", lambda: None)
+    monkeypatch.setattr(
+        llm_mod, "_load_sage_gateway_llm_cls", lambda: lambda model: LoopBoundFakeLlm()
+    )
+
+    config = Config(llm_backend="sage", sage_model="gpt-4o", use_sage_gateway=True)
+
+    async def server_turn() -> str:
+        host["loop"] = asyncio.get_running_loop()
+
+        def sync_tool_body() -> str:
+            return generate_text(config, "some prompt")
+
+        return await offload_to_worker_thread(sync_tool_body)
+
+    assert asyncio.run(server_turn()) == '{"decision": "RECOMMEND"}'
+
+
 @patch("litellm.completion")
 def test_generate_text_routes_provider_prefixed_model_through_litellm(mock_completion):
     mock_completion.return_value = MagicMock(

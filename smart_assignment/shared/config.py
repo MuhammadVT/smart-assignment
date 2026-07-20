@@ -280,7 +280,8 @@ class Config:
 
     # --- LLM backend ---
     # "sage"     → enterprise-governed SageLlmRegistry (requires SAGE_CLIENT_ID,
-    #              SAGE_CLIENT_SECRET, SAGE_ENVIRONMENT to be set).
+    #              SAGE_CLIENT_SECRET, SAGE_ENVIRONMENT to be set) -- unless
+    #              `use_sage_gateway` is on (see below).
     # "standard" → `model` below, used directly by Google ADK / genai
     #              (requires GOOGLE_API_KEY or Vertex credentials) -- unless
     #              it's a litellm-style "<provider>/<model>" string (e.g.
@@ -290,8 +291,19 @@ class Config:
     # Model name used when llm_backend == "standard" -- a bare Gemini name,
     # or a "<provider>/<model>" litellm string for any other provider.
     model: str = "gemini-3.5-flash"
-    # Model name used when llm_backend == "sage" (Sage-prefixed identifier).
+    # Model name used when llm_backend == "sage" (Sage-prefixed identifier,
+    # unless `use_sage_gateway` is on -- see below).
     sage_model: str = "sage-gemini-2.5-flash"
+    # When True (and llm_backend == "sage"), the sage call is routed through
+    # Sysco's enterprise LLM Gateway (the Sage SDK's `GatewayLlm`, an
+    # OpenAI-compatible litellm proxy with OAuth2 token injection) instead of
+    # SageLlmRegistry/SageLiteLlm's direct call to one registered SAGE agent
+    # -- see shared/llm.py's module docstring. `sage_model` then names a
+    # gateway-exposed model id (e.g. "gpt-4o"), not a sage-* agent name.
+    # Requires LLM_GATEWAY_CLIENT_ID/LLM_GATEWAY_CLIENT_SECRET
+    # (LLM_GATEWAY_ENV optional, defaults to "qa" in the SDK). Off by default
+    # so the existing direct-agent path is unchanged.
+    use_sage_gateway: bool = False
     # Optional per-role model overrides (role -> model name; see the ROLE_*
     # constants and for_role). A role absent here uses the global model above,
     # so the default behavior is unchanged. Lets you assign a cheaper/faster
@@ -406,6 +418,7 @@ class Config:
             llm_backend=os.environ.get("SMART_ASSIGNMENT_LLM_BACKEND", "sage"),
             model=os.environ.get("SMART_ASSIGNMENT_MODEL", "gemini-3.5-flash"),
             sage_model=os.environ.get("SMART_ASSIGNMENT_SAGE_MODEL", "sage-gemini-2.5-flash"),
+            use_sage_gateway=_bool_env("SMART_ASSIGNMENT_USE_SAGE_GATEWAY", False),
             role_models=_role_models_from_env(),
             debug_sage_raw_response=_bool_env("SMART_ASSIGNMENT_DEBUG_SAGE_RESPONSE", False),
             use_tracing=_bool_env("SMART_ASSIGNMENT_USE_TRACING", False),
