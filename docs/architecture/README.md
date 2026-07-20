@@ -477,6 +477,36 @@ No image file is included in this package — generate one (e.g. via the
 ADK Web UI's trace view, or any diagramming tool) and drop it here as
 `smart_assignment.png` once available.
 
+## Sage LLM Gateway sub-path (`shared/llm.py`, opt-in)
+
+The Sage SDK ships two distinct ways to reach a model under `llm_backend =
+"sage"`, and this repo can use either without touching any call site:
+
+- **Direct-to-agent (default).** `SageLlmRegistry`/`SageLiteLlm` call one
+  registered SAGE **agent** (by `sage_model`, a `sage-*` id) over the SAGE
+  agent API, authenticated with `SAGE_CLIENT_ID`/`SAGE_CLIENT_SECRET`/
+  `SAGE_ENVIRONMENT`.
+- **LLM Gateway (`Config.use_sage_gateway = True`).** The SDK's `GatewayLlm`
+  — itself an ADK `LiteLlm` — routes the call through Sysco's enterprise LLM
+  Gateway instead: an OpenAI-compatible litellm proxy, with the SDK injecting
+  an OAuth2 token it refreshes on a timer. Credentials are
+  `LLM_GATEWAY_CLIENT_ID`/`LLM_GATEWAY_CLIENT_SECRET` (read directly by the
+  SDK's `GatewayClient`, not this repo's `Config`); `LLM_GATEWAY_ENV` is
+  optional (defaults to `"qa"`). Under this sub-path `sage_model` names a
+  gateway-exposed model id (e.g. `"gpt-4o"`), not a SAGE agent — `GatewayLlm`
+  wraps it as `"openai/{model}"` itself.
+
+Both classes are lazily imported the same way (`shared/llm.py`'s
+`_load_sage_registry` / `_load_sage_gateway_llm_cls`, sharing the
+`_ensure_sage_sdk_on_syspath` local-workshop fallback), and because
+`GatewayLlm` is a plain ADK `LiteLlm`, it needs no new content-generation
+logic — `get_llm()` and `generate_text()` dispatch to whichever sibling
+`Config.use_sage_gateway` selects (`get_sage_llm()` vs.
+`get_sage_gateway_llm()`), and everything downstream (`_generate_via_sage_async`,
+the loop-binding dance below, the response diagnostic) is unchanged. The flag
+is off by default, so the direct-agent path is reproduced exactly unless a
+caller opts in.
+
 ## Tracing & observability (`shared/tracing.py`, opt-in)
 
 The grounded decision layers already produce an auditable *record* of every

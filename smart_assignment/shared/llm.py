@@ -2,7 +2,17 @@
 LLM factory: routes every model-creation and content-generation call through
 one of two backends, selected by SMART_ASSIGNMENT_LLM_BACKEND:
 
-  "sage"     → the Sysco Sage SDK (enterprise-governed, TLS-injected).
+  "sage"     → the Sysco Sage SDK (enterprise-governed, TLS-injected). Two
+               sub-paths, selected by Config.use_sage_gateway:
+                 - off (default): SageLlmRegistry/SageLiteLlm calls one
+                   registered SAGE agent directly (SAGE_CLIENT_ID,
+                   SAGE_CLIENT_SECRET, SAGE_ENVIRONMENT).
+                 - on: the SDK's GatewayLlm routes the call through Sysco's
+                   enterprise LLM Gateway instead (an OpenAI-compatible
+                   litellm proxy with OAuth2 token injection --
+                   LLM_GATEWAY_CLIENT_ID, LLM_GATEWAY_CLIENT_SECRET,
+                   optional LLM_GATEWAY_ENV). `sage_model` then names a
+                   gateway-exposed model id, not a sage-* agent name.
   "standard" → SMART_ASSIGNMENT_MODEL is either a bare Gemini model name
                (e.g. "gemini-2.5-flash", used as-is) or a litellm-style
                "<provider>/<model>" string (e.g. "openai/gpt-4o-mini",
@@ -87,15 +97,47 @@ async def offload_to_worker_thread(
 # ---------------------------------------------------------------------------
 
 _SAGE_REGISTRY: Any = None
+_SAGE_GATEWAY_LLM_CLS: Any = None
+
+
+def _ensure_sage_sdk_on_syspath() -> None:
+    """Add the vendored Sage SDK's src/ dirs to sys.path, for the local
+    source-tree layout used in Sysco workshops when the SDK is not installed
+    as a wheel -- mirrors the pattern from tmp.py. Idempotent no-op once the
+    paths are already present (or if no local vendor tree is found, in which
+    case the caller's own ModuleNotFoundError propagates unchanged).
+
+    Local workshop layouts supported:
+      1) <repo>/smart_assignment/sage-ai-sdk-python-sage-adk_1.0.0
+      2) <repo>/sage-ai-sdk-python-sage-adk_1.0.0
+    From this file (smart_assignment/shared/llm.py), parents[2] is the
+    repository root.
+    """
+    repo_root = Path(__file__).resolve().parents[2]
+    sdk_roots = [
+        repo_root / "smart_assignment" / "sage-ai-sdk-python-sage-adk_1.0.0",
+        repo_root / "sage-ai-sdk-python-sage-adk_1.0.0",
+    ]
+    sdk_root = next((root for root in sdk_roots if root.exists()), None)
+    if sdk_root is None:
+        return
+
+    for src_path in (
+        sdk_root / "sage_adk" / "src",
+        sdk_root / "sage_core" / "src",
+        sdk_root / "sage_client" / "src",
+    ):
+        if src_path.exists():
+            src_path_str = str(src_path)
+            if src_path_str not in sys.path:
+                sys.path.insert(0, src_path_str)
 
 
 def _load_sage_registry() -> Any:
     """
-    Import SageLlmRegistry and inject enterprise TLS.
-
-    Falls back to the local source-tree layout used in Sysco workshops when
-    the SDK is not installed as a wheel — mirrors the pattern from tmp.py.
-    Cached after the first successful load so TLS is only injected once.
+    Import SageLlmRegistry (the direct-to-agent Sage path) and inject
+    enterprise TLS. Cached after the first successful load so TLS is only
+    injected once.
     """
     global _SAGE_REGISTRY
     if _SAGE_REGISTRY is not None:
@@ -104,36 +146,9 @@ def _load_sage_registry() -> Any:
     try:
         from sage_adk import SageLlmRegistry  # type: ignore[import-untyped]
     except ModuleNotFoundError:
-        # Local workshop layouts supported:
-        # 1) <repo>/smart_assignment/sage-ai-sdk-python-sage-adk_1.0.0
-        # 2) <repo>/sage-ai-sdk-python-sage-adk_1.0.0
-        # From this file (smart_assignment/shared/llm.py), parents[2] is
-        # the repository root.
-        repo_root = Path(__file__).resolve().parents[2]
-        sdk_roots = [
-            repo_root / "smart_assignment" / "sage-ai-sdk-python-sage-adk_1.0.0",
-            repo_root / "sage-ai-sdk-python-sage-adk_1.0.0",
-        ]
-
-        sdk_root = next((root for root in sdk_roots if root.exists()), None)
-        if sdk_root is None:
-            raise
-
-        local_src_paths = [
-            sdk_root / "sage_adk" / "src",
-            sdk_root / "sage_core" / "src",
-            sdk_root / "sage_client" / "src",
-        ]
-        for src_path in local_src_paths:
-            if src_path.exists():
-                src_path_str = str(src_path)
-                if src_path_str not in sys.path:
-                    sys.path.insert(0, src_path_str)
-
-        if (sdk_root / "sage_adk" / "src").exists():
-            from sage_adk import SageLlmRegistry  # type: ignore[import-untyped]
-        else:
-            raise
+        _ensure_sage_sdk_on_syspath()
+        # Re-raises ModuleNotFoundError if the vendored SDK still isn't found.
+        from sage_adk import SageLlmRegistry  # type: ignore[import-untyped]
 
     import truststore  # type: ignore[import-untyped]
 
@@ -142,8 +157,33 @@ def _load_sage_registry() -> Any:
     return _SAGE_REGISTRY
 
 
+def _load_sage_gateway_llm_cls() -> Any:
+    """
+    Import GatewayLlm -- the Sage SDK's ADK `LiteLlm` subclass that routes a
+    model through Sysco's enterprise LLM Gateway (see Config.use_sage_gateway)
+    -- and inject enterprise TLS. Same lazy/cached/local-workshop-fallback
+    shape as _load_sage_registry, just a different class off the same SDK.
+    """
+    global _SAGE_GATEWAY_LLM_CLS
+    if _SAGE_GATEWAY_LLM_CLS is not None:
+        return _SAGE_GATEWAY_LLM_CLS
+
+    try:
+        from sage_adk import GatewayLlm  # type: ignore[import-untyped]
+    except ModuleNotFoundError:
+        _ensure_sage_sdk_on_syspath()
+        from sage_adk import GatewayLlm  # type: ignore[import-untyped]
+
+    import truststore  # type: ignore[import-untyped]
+
+    truststore.inject_into_ssl()
+    _SAGE_GATEWAY_LLM_CLS = GatewayLlm
+    return _SAGE_GATEWAY_LLM_CLS
+
+
 def _check_sage_env_vars() -> None:
-    """Raise RuntimeError early if any required Sage credential is absent."""
+    """Raise RuntimeError early if any required direct-agent Sage credential
+    is absent (the SageLlmRegistry/SageLiteLlm path)."""
     missing = [
         v
         for v in ("SAGE_CLIENT_ID", "SAGE_CLIENT_SECRET", "SAGE_ENVIRONMENT")
@@ -152,6 +192,23 @@ def _check_sage_env_vars() -> None:
     if missing:
         raise RuntimeError(
             "SMART_ASSIGNMENT_LLM_BACKEND=sage requires the following "
+            f"environment variables to be set: {', '.join(missing)}"
+        )
+
+
+def _check_sage_gateway_env_vars() -> None:
+    """Raise RuntimeError early if the LLM Gateway credentials are absent
+    (the GatewayLlm path, Config.use_sage_gateway=True). LLM_GATEWAY_ENV is
+    intentionally not required here -- the SDK's GatewayClient defaults it to
+    "qa" when unset."""
+    missing = [
+        v
+        for v in ("LLM_GATEWAY_CLIENT_ID", "LLM_GATEWAY_CLIENT_SECRET")
+        if not os.environ.get(v)
+    ]
+    if missing:
+        raise RuntimeError(
+            "SMART_ASSIGNMENT_USE_SAGE_GATEWAY=true requires the following "
             f"environment variables to be set: {', '.join(missing)}"
         )
 
@@ -298,7 +355,8 @@ def _is_litellm_model(model: str) -> bool:
 
 def get_sage_llm(sage_model: str) -> Any:
     """Return a SageLlmRegistry LLM object (enterprise-governed, TLS-injected)
-    for the given Sage-prefixed model name.
+    for the given Sage-prefixed model name -- the direct-to-agent path. See
+    ``get_sage_gateway_llm`` for the LLM-Gateway sibling.
 
     Standalone seam for callers that have a bare Sage model string rather than
     a full ``Config`` -- e.g. ``eval/sage_judge_llm.py``'s ADK-registry
@@ -311,17 +369,38 @@ def get_sage_llm(sage_model: str) -> Any:
     return registry.get_llm(sage_model)
 
 
+def get_sage_gateway_llm(model: str) -> Any:
+    """Return a ``GatewayLlm`` (an ADK ``LiteLlm``) for ``model``, routed
+    through Sysco's enterprise LLM Gateway instead of a registered SAGE agent
+    -- see ``Config.use_sage_gateway``.
+
+    ``model`` is a bare gateway-exposed model id (e.g. ``"gpt-4o"``), NOT a
+    ``sage-*`` agent name -- ``GatewayLlm`` wraps it as ``"openai/{model}"``
+    itself so litellm addresses the gateway's OpenAI-compatible endpoint.
+    Credentials come from ``LLM_GATEWAY_CLIENT_ID``/``LLM_GATEWAY_CLIENT_SECRET``
+    (read internally by the SDK's ``GatewayClient``), not the
+    ``SAGE_CLIENT_ID``/``SAGE_CLIENT_SECRET``/``SAGE_ENVIRONMENT`` trio the
+    direct-agent path uses."""
+    _check_sage_gateway_env_vars()
+    gateway_llm_cls = _load_sage_gateway_llm_cls()
+    return gateway_llm_cls(model=model)
+
+
 def get_llm(config: "Config") -> Any:
     """
     Return the value for an ADK LlmAgent ``model=`` parameter.
 
-    sage     → SageLlmRegistry LLM object (enterprise-governed, TLS-injected)
+    sage     → SageLlmRegistry LLM object (enterprise-governed, TLS-injected),
+               or -- when config.use_sage_gateway is True -- a GatewayLlm
+               routed through Sysco's enterprise LLM Gateway instead.
     standard → config.model as-is if it's a bare Gemini name, or wrapped in
                ADK's LiteLlm if it's a "<provider>/<model>" string (any
                provider litellm supports, e.g. "openai/gpt-4o-mini")
     """
     if config.llm_backend == "sage":
         _maybe_install_sage_response_diagnostic(config)
+        if config.use_sage_gateway:
+            return get_sage_gateway_llm(config.sage_model)
         return get_sage_llm(config.sage_model)
     if _is_litellm_model(config.model):
         from google.adk.models.lite_llm import LiteLlm  # requires the `litellm` extra
@@ -372,10 +451,12 @@ def _generate_text_impl(config: "Config", prompt: str) -> str:
     """The backend-routing body of ``generate_text``, kept separate so the public
     function owns the tracing span and this stays pure LLM-dispatch logic."""
     if config.llm_backend == "sage":
-        _check_sage_env_vars()
-        registry = _load_sage_registry()
         _maybe_install_sage_response_diagnostic(config)
-        llm = registry.get_llm(config.sage_model)
+        llm = (
+            get_sage_gateway_llm(config.sage_model)
+            if config.use_sage_gateway
+            else get_sage_llm(config.sage_model)
+        )
         return _run_coro_blocking(_generate_via_sage_async(llm, prompt))
 
     if _is_litellm_model(config.model):
