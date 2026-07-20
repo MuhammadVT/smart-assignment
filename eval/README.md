@@ -23,6 +23,16 @@ only. That checks the agent drives the pipeline correctly —
 `recommend_or_escalate` — and catches structural regressions (a dropped or
 reordered tool, or the address-resolution branch firing when it shouldn't).
 
+That metric runs with `match_type: IN_ORDER`, not ADK's `EXACT` default: those
+four calls must all appear, in that order, with exactly the expected args, but
+**extra trailing calls are tolerated**. That matters because the two escalate
+cases also hand off to a human — `escalation_triage` (when
+`SMART_ASSIGNMENT_USE_ESCALATION_TRIAGE` is on, the default) and ADK's
+`adk_request_input`. Their only arguments are model-authored prose that differs
+every run, so they can't be pinned in the dataset without making the suite
+permanently flaky. Under `EXACT` both escalate cases fail. See the comment on
+`_PIPELINE_AFTER_INTAKE` in `golden_cases.py`.
+
 `intake_customer`'s expected arguments are the **known ground-truth fields** of
 each mock customer (derived from the fixture, not invented), so the trajectory
 expectation is real. The agent's final natural-language **response is not scored
@@ -41,10 +51,16 @@ Needs a configured backend (see `.env.example`); the CI job uses
 `sage-gemini-2.5-flash`.
 
 ```bash
-pip install -e ".[dev]"          # google-adk[extensions] for the litellm path
+pip install -e ".[dev,eval]"     # dev = test tooling; eval = google-adk[eval],
+                                 # which ADK's AgentEvaluator needs at run time
 python3 -m eval.build_evalset    # regenerate the dataset if cases changed
 pytest eval/test_eval.py
 ```
+
+The `eval` extra is separate from `dev` on purpose: it pulls ADK's evaluation
+stack (scikit-learn, vertexai, rouge-score …), and the hermetic `tests/` suite
+must never require it. Without it `AgentEvaluator` raises
+`ModuleNotFoundError: Eval module is not installed`.
 
 Trajectory scoring is identical on the mock demo routes, so this runs fine
 without a data snapshot. If you have the prepared parquet cache under `data/dev/`
