@@ -36,8 +36,39 @@
   padding: 4px 2px 8px;
 }
 
+/* A chat turn: a speaker avatar + the bubble on one row, aligned by role. The
+   role class lives on the row (.msg) so alignment/avatar and the bubble styling
+   stay separate concerns. */
+.msg {
+  display: flex;
+  gap: 9px;
+  align-items: flex-start;
+  max-width: 88%;
+}
+.msg.agent { align-self: flex-start; }
+.msg.user { align-self: flex-end; flex-direction: row-reverse; }
+
+.avatar {
+  width: 27px;
+  height: 27px;
+  border-radius: 50%;
+  flex: none;
+  margin-top: 1px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.avatar svg { display: block; }
+/* The bot mascot sits on a fixed soft ground so it always reads as intended,
+   independent of theme (its own colours are baked into the SVG). */
+.avatar.agent { background: #eef2fb; box-shadow: inset 0 0 0 1px rgba(16, 32, 64, .05); }
+.avatar.agent svg { width: 23px; height: 23px; }
+.avatar.user { background: var(--blue-soft); color: var(--blue); border: 1px solid var(--line); }
+.avatar.user svg { width: 15px; height: 15px; }
+
 .bubble {
-  max-width: 86%;
+  min-width: 0;
   padding: 10px 13px;
   border-radius: 13px;
   font-size: 13.5px;
@@ -45,44 +76,147 @@
   white-space: pre-wrap;
   word-wrap: break-word;
 }
-.bubble.user {
-  align-self: flex-end;
+.msg.user .bubble {
   background: var(--blue);
   color: #fff;
   border-bottom-right-radius: 4px;
   font-family: var(--mono);
   font-size: 12.5px;
 }
-.bubble.agent {
-  align-self: flex-start;
+.msg.agent .bubble {
   background: var(--blue-soft);
   color: #22364f;
   border-bottom-left-radius: 4px;
 }
-.bubble.agent.thinking { color: var(--muted); font-style: italic; }
-.bubble.agent.error { background: var(--red-soft); color: var(--red); }
-.bubble.agent.await { background: var(--amber-soft); color: var(--amber); font-weight: 600; }
+/* Status bubbles (agent only) -- extra class raises specificity above the
+   .msg.agent .bubble base so the status colour wins. */
+.msg.agent .bubble.thinking { color: var(--muted); font-style: italic; }
+.msg.agent .bubble.error { background: var(--red-soft); color: var(--red); }
+.msg.agent .bubble.await { background: var(--amber-soft); color: var(--amber); font-weight: 600; }
 
+/* --- Live workflow stepper --- */
+/* One agent turn that grows a connected checklist as pipeline tools stream in:
+   the current step is active (spinner), earlier ones are done (✓). It narrates
+   WHAT is happening; the numbers, map, and timeline live in the cards below. */
+.stepper-body {
+  flex: 1;
+  min-width: 0;
+  background: var(--blue-soft);
+  border-radius: 13px;
+  border-bottom-left-radius: 4px;
+  padding: 12px 14px 11px;
+}
+.stepper-cap {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .03em;
+  text-transform: uppercase;
+  color: var(--blue);
+  opacity: .85;
+  margin-bottom: 9px;
+}
+.step-row { display: flex; gap: 10px; }
+.step-rail { flex: none; width: 18px; display: flex; flex-direction: column; align-items: center; }
+.step-dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+}
+.step-dot.done { background: var(--green); }
+.step-dot.active { background: var(--blue); animation: step-pulse 1.5s ease-out infinite; }
+.step-dot.pending { background: transparent; border: 2px solid var(--line); }
+.step-line { width: 2px; flex: 1; background: var(--line); margin: 2px 0; min-height: 12px; }
+.step-row:last-child .step-line { display: none; }
+.step-content { flex: 1; min-width: 0; padding-bottom: 12px; }
+.step-row:last-child .step-content { padding-bottom: 0; }
+.step-name { font-size: 12.5px; font-weight: 700; color: var(--ink); }
+.step-say { font-size: 12px; color: var(--muted); margin-top: 1px; line-height: 1.45; }
+.step-row.active .step-say { color: var(--blue); }
+.spin {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, .45);
+  border-top-color: #fff;
+  animation: step-spin .7s linear infinite;
+}
+.stepper-bridge {
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px dashed var(--line);
+  font-size: 11px;
+  color: var(--muted);
+}
+@keyframes step-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(18, 87, 166, .4); }
+  70% { box-shadow: 0 0 0 6px rgba(18, 87, 166, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(18, 87, 166, 0); }
+}
+@keyframes step-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .step-dot.active { animation: none; }
+  .spin { animation: none; border-top-color: rgba(255, 255, 255, .9); }
+}
+
+/* Single rounded "pill" composer: a prompt glyph, a borderless input, and a
+   circular send button. The whole pill lights up on focus (and pulses via the
+   shared `flash` keyframe when a sample chip drops text in). */
 .composer {
   display: flex;
-  gap: 10px;
+  align-items: center;
+  gap: 8px;
   margin-top: 14px;
+  padding: 6px 8px 6px 16px;
+  background: var(--card);
+  border: 1.5px solid var(--line);
+  border-radius: 26px;
+  box-shadow: var(--shadow);
+  transition: border-color .15s ease, box-shadow .15s ease;
 }
+.composer:focus-within {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 4px rgba(18, 87, 166, .14), var(--shadow);
+}
+.composer.flash { animation: flash .8s ease; }
+.composer-glyph { flex: none; font-family: var(--mono); font-size: 14px; color: var(--muted); }
 .composer input {
   flex: 1;
-  font-size: 15.5px;
-  padding: 14px 16px;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  font-family: var(--mono);
   min-width: 0;
+  padding: 9px 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  font-family: var(--mono);
+  font-size: 14px;
+  color: var(--ink);
 }
-.composer input.flash { animation: flash .8s ease; }
-.composer button {
-  padding: 14px 24px;
-  font-size: 15px;
+.composer input::placeholder { color: var(--muted); opacity: .85; }
+.composer .send-btn {
+  flex: none;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--blue);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform .1s ease, background .15s ease;
 }
-.composer button:disabled { opacity: .55; cursor: default; box-shadow: none; }
+.composer .send-btn svg { width: 17px; height: 17px; display: block; }
+.composer .send-btn:hover { background: var(--navy); }
+.composer .send-btn:active { transform: scale(.92); }
+.composer .send-btn:disabled { opacity: .55; cursor: default; transform: none; }
 
 .chips { display: flex; gap: 8px; flex-wrap: wrap; }
 

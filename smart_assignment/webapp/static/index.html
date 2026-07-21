@@ -37,10 +37,16 @@
       </div>
 
       <form id="composer" class="composer" autocomplete="off">
+        <span class="composer-glyph" aria-hidden="true">&rsaquo;</span>
         <input id="msg-input" type="text"
                placeholder="e.g. 1200 McKinney St, Houston, TX 77010, 90 cases, TUE 07:00-10:00"
                aria-label="Message to the agent" />
-        <button id="send-btn" type="submit" class="run">Send</button>
+        <button id="send-btn" type="submit" class="send-btn" aria-label="Send" title="Send">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
+               stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 19V5" /><path d="M6 11l6-6 6 6" />
+          </svg>
+        </button>
       </form>
     </section>
 
