@@ -17,7 +17,7 @@ live LLM backend** and are kept separate from the hermetic tests.
 | `test_eval.py` | The pytest entry point that runs `AgentEvaluator` (trajectory, full dataset). |
 | `capture.py` | Runs the live agent once per case to record its real final response + whether it escalated (Phase 2b). |
 | `test_response_match.py` | Separate pytest entry point: `response_match_score`, scoped to captured cases known NOT to have escalated. See its module docstring for why escalate cases can't be scored this way at all. |
-| `case_selection.py` | Shared `SMART_ASSIGNMENT_EVAL_IDS` subset filter used by `test_eval.py`, `capture.py`, `test_quality.py`, and `test_rationale_faithfulness.py` — one place owning that env var's name and validation. |
+| `case_selection.py` | Owns the `SMART_ASSIGNMENT_EVAL_IDS` subset knob for the **test runners** (`test_eval.py`, `test_quality.py`, `test_rationale_faithfulness.py`): local-only, rejected under CI, warns when it narrows. Also exposes `filter_cases_by_ids` — the explicit-subset primitive `capture.py`'s `--ids` uses (capture does not read the env var). |
 | `deepeval_llm.py` | `SmartAssignmentDeepEvalLLM` — adapts this repo's own `generate_text` (any `SMART_ASSIGNMENT_LLM_BACKEND`) to DeepEval's judge-model interface. |
 | `test_quality.py` | Separate pytest entry point (Phase 3a): DeepEval G-Eval `brief_quality`/`response_clarity`, scored directly against captured `{final_response, escalated}` data — no ADK dataset involved. |
 | `test_rationale_faithfulness.py` | Separate pytest entry point (Phase 3b): DeepEval G-Eval `rationale_faithfulness`, scored directly against a live `routeslot/` grounded pick and its real evidence packet — no captured data or ADK dataset involved. |
@@ -238,7 +238,7 @@ qualifying case, that test skips cleanly rather than failing; recapture a
 case known to have the missing outcome to unskip it, e.g.:
 
 ```bash
-SMART_ASSIGNMENT_EVAL_IDS=bayou_city_bistro_recommend python3 -m eval.capture
+python3 -m eval.capture --ids bayou_city_bistro_recommend
 ```
 
 ### `eval/test_rationale_faithfulness.py` — Phase 3b: grounded-layer rationale faithfulness
@@ -358,8 +358,10 @@ Every case replays the full agent pipeline against your live LLM backend, and
 ADK's own default runs each case **twice** (`num_runs=2`) — so a plain
 `pytest eval/test_eval.py` against all 4 committed cases is 8 live
 conversations. Two env vars (unset by default, so normal behavior is
-unchanged; **not used by CI**, which always evaluates the full committed
-dataset) trim that while iterating:
+unchanged) trim that while iterating. They are **shell-only, local-only**
+cost knobs for the **test runners**: `SMART_ASSIGNMENT_EVAL_IDS` is *rejected*
+if it's set during a CI run (`CI=true`), so CI always scores the full committed
+dataset, and any narrowing logs a loud warning so it's never invisible.
 
 ```bash
 # Just one case, one run each -- cheapest inner loop.
@@ -382,18 +384,19 @@ shared place, `case_selection.py`, so `test_eval.py` and `capture.py` can't
 drift on what a comma-separated subset means. See the docstring on
 `_eval_dataset_path` in `test_eval.py` for exactly what it does there.
 
-`capture.py` (Phase 2b) honors the same `SMART_ASSIGNMENT_EVAL_IDS` to limit
-which cases get a live run — useful since it's a separate cost center from
-`test_eval.py`. `SMART_ASSIGNMENT_EVAL_NUM_RUNS` does **not** apply to it:
-`capture.py` already only runs each case once (there's no multi-run/consensus
-step to control, unlike `AgentEvaluator`'s `num_runs`). Unlike `test_eval.py`,
-a filtered (non-`--check`) capture run **merges** into any existing
+`capture.py` (Phase 2b) is different: it **writes** the committed dataset, so it
+captures **all** cases by default and takes a subset only from an explicit
+`--ids` flag — it deliberately does **not** read `SMART_ASSIGNMENT_EVAL_IDS`, so
+a value left in `.env` (loaded into the environment by `load_dotenv`) can never
+silently capture a partial dataset. (If that var is set without `--ids`, capture
+warns and captures all.) `SMART_ASSIGNMENT_EVAL_NUM_RUNS` doesn't apply either
+(one live call per case). A non-`--check` capture **merges** into any existing
 `captured_responses.json` rather than replacing it, so recapturing one case
-never regresses the other committed cases' `final_response` back to `null`:
+never regresses the others' `final_response` back to `null`:
 
 ```bash
-# Recapture just one case's response, cheaply.
-SMART_ASSIGNMENT_EVAL_IDS=woodlands_fresh_cafe_recommend python3 -m eval.capture --check
+# Recapture just one case's response, cheaply (explicit subset).
+python3 -m eval.capture --ids woodlands_fresh_cafe_recommend --check
 ```
 
 ## CI: advisory first
@@ -420,9 +423,8 @@ few real PRs, then flip them to required checks.
    JSON stays in sync with the builder and is schema-valid, so a stale hand-edit is
    caught by the hermetic suite.
 2. Capture the new case's response against the declared dataset — run
-   `python3 -m eval.capture` (all cases, **no** `SMART_ASSIGNMENT_EVAL_IDS`
-   filter, so nothing stays uncaptured) with a backend configured, and commit
-   both `eval/data/` files.
+   `python3 -m eval.capture` (all cases; don't pass `--ids`, so nothing stays
+   uncaptured) with a backend configured, and commit both `eval/data/` files.
 
 `tests/eval/test_dataset_lock.py` makes step 2 non-optional once captures carry
 provenance: it fails the hermetic suite if a golden case has no captured
