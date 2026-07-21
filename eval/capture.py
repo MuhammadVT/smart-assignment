@@ -59,6 +59,7 @@ import pathlib
 from typing import Dict, List, NamedTuple, Optional
 
 from eval.case_selection import EVAL_IDS_ENV, select_cases
+from eval.dataset import apply_eval_dataset, run_provenance
 from eval.golden_cases import GOLDEN_CASES, GoldenCase
 
 # A distinct app/user id so capture runs are easy to spot in a trace backend
@@ -205,13 +206,34 @@ async def _capture_all(cases: List[GoldenCase]) -> Dict[str, CaptureResult]:
     return captured
 
 
-def _serialize(captured: Dict[str, CaptureResult]) -> str:
+def _load_raw() -> Dict[str, dict]:
+    """The captured file as its raw ``{eval_id: entry}`` dict (or ``{}``), where
+    each entry is the full on-disk record -- ``final_response``, ``escalated``,
+    and, once written by this module, the ``captured_with`` provenance block.
+
+    Merging at this raw level (rather than through ``CaptureResult``, which only
+    carries the text + outcome) preserves the provenance of already-committed
+    entries that a filtered re-capture doesn't touch."""
+    if not _CAPTURED_PATH.exists():
+        return {}
+    return json.loads(_CAPTURED_PATH.read_text(encoding="utf-8"))
+
+
+def _entry(result: CaptureResult, provenance: Dict[str, object]) -> dict:
+    """One captured record: the text + outcome, plus the run's dataset/model
+    provenance (see eval/dataset.py) so the capture is attributable and
+    reproducible."""
+    return {
+        "final_response": result.final_response,
+        "escalated": result.escalated,
+        "captured_with": provenance,
+    }
+
+
+def _serialize(entries: Dict[str, dict]) -> str:
     """Sorted keys + trailing newline so the committed file is stable and diffs are
     readable."""
-    ordered = {
-        key: {"final_response": captured[key].final_response, "escalated": captured[key].escalated}
-        for key in sorted(captured)
-    }
+    ordered = {key: entries[key] for key in sorted(entries)}
     return json.dumps(ordered, indent=2, ensure_ascii=False) + "\n"
 
 
@@ -236,20 +258,37 @@ def main() -> None:
             f"case(s): {', '.join(c.eval_id for c in cases)}"
         )
 
+    # Lock onto the DECLARED eval dataset (default "mock") before anything runs,
+    # so the capture is reproducible and can't inherit a developer's ambient
+    # SMART_ASSIGNMENT_DATA_SOURCE. Records what it pinned as provenance below.
+    dataset = apply_eval_dataset()
+    print(
+        f"[capture] eval dataset locked: {dataset.name} "
+        f"(data_source={dataset.data_source}, geocoder={dataset.geocoder})"
+    )
+
     _require_backend()
+    # Snapshot the run's provenance (dataset identity + resolved backend/model)
+    # BEFORE running, so the dataset content ref reflects the pristine fixtures.
+    provenance = run_provenance(dataset)
     captured = asyncio.run(_capture_all(cases))
+    fresh_entries = {eval_id: _entry(result, provenance) for eval_id, result in captured.items()}
 
     if args.check:
-        print(_serialize(captured))
+        print(_serialize(fresh_entries))
         for eval_id, result in sorted(captured.items()):
             print(f"[capture]   {eval_id}: escalated={result.escalated}")
-        print(f"[capture] --check: captured {len(captured)} response(s); no files written.")
+        print(
+            f"[capture] --check: captured {len(captured)} response(s) against dataset "
+            f"'{dataset.name}'; no files written."
+        )
         return
 
     # Merge into any existing captures rather than replacing wholesale -- a
     # SMART_ASSIGNMENT_EVAL_IDS-filtered run must not regress the other
     # already-committed cases' final_response back to null (see module docstring).
-    merged = {**load_captured_results(), **captured}
+    # Merging raw dicts preserves untouched entries' own provenance.
+    merged = {**_load_raw(), **fresh_entries}
     _CAPTURED_PATH.write_text(_serialize(merged), encoding="utf-8")
     # Regenerate the dataset so final_response is populated from the captured file.
     from eval.build_evalset import main as build_dataset

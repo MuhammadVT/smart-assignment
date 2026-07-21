@@ -312,12 +312,45 @@ stack (scikit-learn, vertexai, rouge-score …), and the hermetic `tests/` suite
 must never require it. Without it `AgentEvaluator` raises
 `ModuleNotFoundError: Eval module is not installed`.
 
-Trajectory scoring is identical on the mock demo routes, so this runs fine
-without a data snapshot. If you have the prepared parquet cache under `data/dev/`
-and want the agent to load it (the default `cache` data source) instead of
-falling back to mock, also install the parquet engine: `pip install -e
-".[cache]"` (adds `pyarrow`). Without it, the cache read fails and you'll see a
-"using the mock demo routes instead" warning — expected, not an error.
+Every eval entry point runs against the **locked** eval dataset (see the next
+section), not whatever ambient `SMART_ASSIGNMENT_DATA_SOURCE` you have set — so
+`pip install -e ".[dev,eval]"` and a run is fully reproducible without any
+`data/dev/` snapshot.
+
+## Locking the eval dataset
+
+An eval result depends on more than the agent code: it depends on **which
+dataset** the agent ran against — route capacity, tiers, delivery windows, and
+how an address geocodes. Left to the ambient default (`SMART_ASSIGNMENT_DATA_SOURCE=cache`,
+read from an *uncommitted* `data/dev/` snapshot, silently falling back to mock
+when absent), the same golden case could score against different data on two
+machines — or against mock in CI and real data on a laptop — with nothing
+recording which. That makes a score irreproducible and a regression
+unattributable.
+
+So the eval dataset is a **declared, versioned, provenance-tracked** input
+(`eval/dataset.py`):
+
+- **Declared, not defaulted.** Eval selects its dataset via
+  `SMART_ASSIGNMENT_EVAL_DATASET` (default `mock`, the committed offline world),
+  *independent* of the app's ambient `SMART_ASSIGNMENT_DATA_SOURCE`. The
+  `eval/conftest.py` and `eval/capture.py` both pin it before anything runs; an
+  unknown name is a loud error, not a silent guess.
+- **No silent substitution.** The pin turns on strict mode
+  (`SMART_ASSIGNMENT_DATA_SOURCE_STRICT`), so a declared dataset that can't load
+  *fails loudly* instead of quietly becoming the mock routes. (Off by default
+  everywhere else — normal surfaces keep the fall-back-to-mock convenience.)
+- **Provenance.** Each captured response records the dataset identity (name +
+  content hash) and the resolved backend/model it was produced with, under a
+  `captured_with` block, so a later score change is attributable — data? model?
+  code? — not guessed.
+
+`mock`, a scrubbed-synthetic snapshot, or a sanitized-real snapshot are all just
+eval datasets flowing through the same declare/lock/record path. Adding one is a
+new entry in `_KNOWN_DATASETS` and a value (`SMART_ASSIGNMENT_EVAL_DATASET=<name>`),
+never a new branch at a call site. `tests/eval/test_dataset_lock.py` enforces
+that every golden case is captured against the declared dataset (see *Adding or
+changing cases*).
 
 ### Running a subset locally while developing (cost control)
 
@@ -382,10 +415,22 @@ few real PRs, then flip them to required checks.
 
 ## Adding or changing cases
 
-Edit `golden_cases.py`, then `python3 -m eval.build_evalset` to regenerate the
-JSON, and commit both. `tests/eval/test_build_evalset.py` asserts the committed
-JSON stays in sync with the builder and is schema-valid, so a stale hand-edit is
-caught by the hermetic suite.
+1. Edit `golden_cases.py`, then `python3 -m eval.build_evalset` to regenerate the
+   JSON, and commit both. `tests/eval/test_build_evalset.py` asserts the committed
+   JSON stays in sync with the builder and is schema-valid, so a stale hand-edit is
+   caught by the hermetic suite.
+2. Capture the new case's response against the declared dataset — run
+   `python3 -m eval.capture` (all cases, **no** `SMART_ASSIGNMENT_EVAL_IDS`
+   filter, so nothing stays uncaptured) with a backend configured, and commit
+   both `eval/data/` files.
+
+`tests/eval/test_dataset_lock.py` makes step 2 non-optional once captures carry
+provenance: it fails the hermetic suite if a golden case has no captured
+response, if captures disagree on the dataset they were made against, or if a
+capture is missing its `captured_with` provenance. (Until the committed file
+adopts provenance — i.e. a first credentialed `eval.capture` run — those checks
+skip with an actionable message rather than fail, so the gate ships green and
+starts biting the moment provenance lands.)
 
 ## Human feedback on top of eval runs
 

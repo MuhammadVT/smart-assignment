@@ -16,9 +16,13 @@ The source is chosen by `SMART_ASSIGNMENT_DATA_SOURCE`, one of:
 
 If the cache is requested (or defaulted to) but the snapshot files are missing
 (e.g. a fresh checkout that never built one), we fall back to "mock" with a
-loud warning rather than crash. The legacy `SMART_ASSIGNMENT_ROUTE_SOURCE`
-(values mock|prepared) is still honored with a deprecation warning:
-"prepared" maps to "live_sql".
+loud warning rather than crash -- UNLESS strict mode is on
+(`SMART_ASSIGNMENT_DATA_SOURCE_STRICT`, off by default; see
+`_strict_data_source`), in which case the load failure is raised instead of
+silently substituting mock. The eval harness turns strict on so an eval never
+scores against silently-swapped data (see `eval/dataset.py`). The legacy
+`SMART_ASSIGNMENT_ROUTE_SOURCE` (values mock|prepared) is still honored with a
+deprecation warning: "prepared" maps to "live_sql".
 
 Results for the two deterministic sources ("mock" and "cache") are memoized
 per-process, so a long-running surface (the web app, adk web) parses the
@@ -44,7 +48,6 @@ from smart_assignment.data_prep.prep_dlvry_tw_data import (
     create_sql_access,
     DLVR_WINDOW_CACHE_PATH,
     ROUTES_CACHE_PATH,
-    attach_cust_tier_to_stop_locations,
     build_route_summary_tables,
     fetch_cust_tier_records,
     fetch_dlvr_window_records,
@@ -64,6 +67,7 @@ logger = logging.getLogger(__name__)
 
 _DATA_SOURCE_ENV = "SMART_ASSIGNMENT_DATA_SOURCE"
 _LEGACY_ROUTE_SOURCE_ENV = "SMART_ASSIGNMENT_ROUTE_SOURCE"
+_STRICT_ENV = "SMART_ASSIGNMENT_DATA_SOURCE_STRICT"
 
 SOURCE_MOCK = "mock"
 SOURCE_CACHE = "cache"
@@ -108,6 +112,18 @@ def _data_source() -> str:
 def _live_first() -> bool:
     """True when the active source should try live SQL before the cache."""
     return _data_source() == SOURCE_LIVE_SQL
+
+
+def _strict_data_source() -> bool:
+    """True when a data source that can't load must FAIL rather than silently
+    fall back to the mock demo routes.
+
+    Off by default (``SMART_ASSIGNMENT_DATA_SOURCE_STRICT`` unset/false), so the
+    existing fall-back-to-mock behavior is unchanged for every normal surface.
+    The eval harness turns it on (see ``eval/dataset.py``) so an eval can never
+    score against silently-substituted data -- a declared dataset that won't
+    load is a loud failure there, not a quiet swap to mock."""
+    return os.environ.get(_STRICT_ENV, "").strip().lower() in ("1", "true", "yes", "on")
 
 
 _DELIVERY_DAY_NAME_TO_ENUM = {
@@ -581,6 +597,16 @@ def _fetch_candidate_routes_uncached(source: str) -> list[Route]:
         route_summary, stop_locations, _committed_tw1_slots_df = _load_prepared_route_tables()
         return routes_from_summary_tables(route_summary, stop_locations)
     except Exception as exc:
+        if _strict_data_source():
+            # Strict mode (eval): refuse to silently substitute mock routes for a
+            # declared dataset that won't load -- an eval must fail loudly rather
+            # than score against different data than it declared.
+            raise RuntimeError(
+                f"Data source {source!r} could not be loaded ({exc}) and strict mode is on "
+                f"({_STRICT_ENV}); refusing to fall back to the mock demo routes. Build the "
+                "cache snapshot (see data_prep/), fix SQL access, or declare a dataset that "
+                "loads (see eval/dataset.py)."
+            ) from exc
         logger.warning(
             "Data source %r requested but its data could not be loaded (%s); using the "
             "mock demo routes instead. Build the cache snapshot (see data_prep/) or check "

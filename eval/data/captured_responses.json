@@ -1,10 +1,54 @@
 {
   "bayou_city_bistro_recommend": {
-    "final_response": "SITUATION\nBayou City Bistro, 90-case order, escalated due to no routes meeting truck capacity constraints.\n\nROOT CAUSE\nAll routes failed the 90% utilization limit: 3114 - Route 647 (91% utilization), 1136 - Route 393 (93% utilization), and 2142 - Route 466 (112% utilization).\n\nOPTIONS (most workable first)\n1) 3114 - Route 647 · Wednesday — 91% utilization, 132 cases of headroom\n   Action: Override capacity limit for this route.\n   Trade-off: Minimal, as it remains within overall vehicle safety margins.\n2) 1136 - Route 393 · Monday — 93% utilization, 44 cases of headroom\n   Action: Override capacity limit or remove one existing stop.\n   Trade-off: Higher utilization risk; requires coordination with existing accounts.\n3) 2142 - Route 466 · Tuesday — 112% utilization\n   Action: Significant rerouting or offloading required.\n   Trade-off: Extremely disruptive; high effort to rebalance.\n\nRECOMMENDATION\nStart with 3114 - Route 647; it has the lowest utilization overrun (91%) and the largest capacity headroom (132 cases).\n\nDECISION NEEDED\nDo you approve overriding the capacity constraint for 3114 - Route 647 to accommodate this delivery on Wednesday?",
-    "escalated": true
+    "final_response": "I have successfully analyzed the delivery requirements for **Bayou City Bistro**.\n\n### Decision Summary\nThe recommended assignment is **RTE-4100 - Central Houston** on **Tuesday** in the **07:14-10:14** window.\n\n### Primary Reasons\n1. **Geographic fit:** This route averages 1.7 miles to existing stops, providing excellent density.\n2. **Capacity headroom:** The truck will be at approximately 58% capacity after adding this order, leaving 440 cases of headroom, which is well within the 75% comfort threshold.\n3. **Preferred-window match:** The assigned window covers 166 of the 180 preferred minutes for Tuesday morning.\n4. **Slot openness:** The tier-weighted contention for this slot is 2.80 with an openness of 0.26.\n\n### Key Trade-off\nThis choice edges out the runner-up, **RTE-4110 - Downtown / Midtown**, on overall route-slot score (0.80 vs 0.59). By choosing the Central Houston route, we are able to accommodate the customer's preferred day (Tuesday) while also leading or matching the runner-up on all scored factors.\n\nThe third candidate, **RTE-4200 - West Houston / Energy Corridor**, was found to be infeasible due to service area constraints.",
+    "escalated": false,
+    "captured_with": {
+      "dataset": {
+        "name": "mock",
+        "kind": "code",
+        "ref": "sha256:4ad583272b301f8f"
+      },
+      "backend": "standard",
+      "model": "gemini-3.1-flash-lite"
+    }
+  },
+  "galleria_grill_escalate_low_score": {
+    "final_response": "SITUATION\nGalleria Grill & Catering (400 cases) requires a route assignment as no slot reached the auto-assign threshold.\n\nROOT CAUSE\nNo route met the auto-assign score threshold; the highest score was 0.40 on RTE-4200 due to constraints on geographic clustering and slot availability.\n\nOPTIONS (most workable first)\n1) RTE-4200 - West Houston / Energy Corridor · WED — 84% utilization with 150 cases of headroom.\n   Action: Assign to the Wednesday 11:30-14:30 window.\n   Trade-off: Higher mileage per stop (8.2 mi) compared to available alternatives.\n2) RTE-4100 - Central Houston · TUE — 88% utilization with 130 cases of headroom.\n   Action: Assign to the Tuesday 10:00-13:00 window.\n   Trade-off: Tighter capacity buffer and higher utilization compared to RTE-4200.\n\nRECOMMENDATION\nStart with RTE-4200 - West Houston / Energy Corridor as it provides the largest capacity buffer (150 cases of headroom) and lower post-assignment utilization (84%).\n\nDECISION NEEDED\nDo you approve the assignment of Galleria Grill & Catering to RTE-4200 on Wednesday, or prefer the tighter capacity utilization of RTE-4100 on Tuesday?",
+    "escalated": true,
+    "captured_with": {
+      "dataset": {
+        "name": "mock",
+        "kind": "code",
+        "ref": "sha256:4ad583272b301f8f"
+      },
+      "backend": "standard",
+      "model": "gemini-3.1-flash-lite"
+    }
+  },
+  "katy_prairie_escalate_out_of_range": {
+    "final_response": "SITUATION\nKaty Prairie Steakhouse, 260 cases, escalated due to low auto-assign score (36%).\n\nROOT CAUSE\nNo route reached the automated assignment threshold; the highest score was 0.36 on RTE-4200 due to a window mismatch (Wednesday instead of Tuesday).\n\nOPTIONS (most workable first)\n1) RTE-4200 - West Houston / Energy Corridor · Wednesday — 69% utilization and 290 cases of headroom\n   Action: Accept delivery for Wednesday instead of the preferred Tuesday.\n   Trade-off: Customer receives their order one day later than requested.\n\nRECOMMENDATION\nI suggest approving RTE-4200 as it is the only feasible route that maintains safe truck capacity (69% utilization).\n\nDECISION NEEDED\nShould we assign the order to RTE-4200 for Wednesday, or hold the order for further manual review?",
+    "escalated": true,
+    "captured_with": {
+      "dataset": {
+        "name": "mock",
+        "kind": "code",
+        "ref": "sha256:4ad583272b301f8f"
+      },
+      "backend": "standard",
+      "model": "gemini-3.1-flash-lite"
+    }
   },
   "woodlands_fresh_cafe_recommend": {
-    "final_response": "I have analyzed the delivery routes for Woodlands Fresh Cafe at 1201 Lake Woodlands Dr. \n\n**Decision Summary:** I recommend assigning **1119 - Route 102** on **Monday** with a delivery window of **05:45-08:45**.\n\n**Primary Reasons:**\n1.  **Geographic Fit:** The route has an average distance of 1.1 miles to existing stops.\n2.  **Capacity Headroom:** The truck will be at approximately 67% capacity after this order, which is safely within the 75% comfort limit (390 cases of headroom).\n3.  **Preferred-window match:** Please note that this route runs on Monday, rather than your preferred Thursday.\n4.  **Slot Openness:** There is a tier-weighted contention of 1.60 from committed stops sharing this window.\n\n**Key Trade-off:** This option edges out the runner-up on the overall route-slot score (0.65 versus 0.62) and either matches or leads the runner-up across all scored factors. The runner-up is **1119 - Route 102** on **Monday** in the **09:00-12:00** window (which scored 0.62).\n\n*Note: The primary route nearest to your location, 5040 - Route 561 (Friday), was found to be infeasible due to truck capacity constraints.*",
-    "escalated": false
+    "final_response": "I have processed the request for Woodlands Fresh Cafe.\n\n**Decision Summary:**\nI recommend assigning the customer to **RTE-4300 - North Houston / The Woodlands** on **Thursday** with a delivery window of **08:30-11:30**.\n\n**Primary Reasons:**\n1. **Geographic fit:** The location is highly efficient, with an average of 1.3 miles to existing stops.\n2. **Capacity headroom:** The truck will be approximately 81% full after this order, leaving 150 cases of headroom.\n3. **Preferred-window match:** The recommended 08:30-11:30 window covers 150 of the 180 minutes requested for Thursday.\n4. **Slot openness:** There is manageable contention for this time slot (tier-weighted contention of 2.70 with 4 existing stops overlapping).\n\n**Key Trade-off:**\nThis assignment edges out the runner-up, **RTE-4310 - Spring / South Woodlands** (Friday), on overall route-slot score (0.69 vs 0.55). While the runner-up offers slightly more capacity headroom (0.83 vs 0.58), the recommended route is a better fit overall and aligns with the customer's preferred delivery day.",
+    "escalated": false,
+    "captured_with": {
+      "dataset": {
+        "name": "mock",
+        "kind": "code",
+        "ref": "sha256:4ad583272b301f8f"
+      },
+      "backend": "standard",
+      "model": "gemini-3.1-flash-lite"
+    }
   }
 }
