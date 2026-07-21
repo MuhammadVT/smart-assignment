@@ -408,13 +408,15 @@ sibling `quality-eval` job runs both `test_quality.py` and
 when `SAGE_*` credentials aren't configured as repo secrets, so neither fails a
 PR for infrastructure reasons.
 
-**CI currently only triggers on `main`** (see the `on:` block at the top of
-`ci.yml`) — a PR targeting `dev` won't run either job yet. Widening those
-triggers to include `dev` is a deliberate, separate follow-up, not bundled into
-the change that added `quality-eval`.
+**CI triggers on `main` and the `dev-eval` integration branch** (see the `on:`
+block at the top of `ci.yml`) — a push or PR to either runs all three jobs. Only
+`dev-eval` is included among the dev branches: it's where the eval hardening
+integrates, so it's where `agent-eval`/`quality-eval` build the green track
+record. (The Pages deploy, `pages.yml`, still runs on `main` only — `dev-eval`
+is validated, not published.)
 
-The plan is to keep both advisory until their thresholds prove stable over a
-few real PRs, then flip them to required checks.
+The plan is to keep `agent-eval`/`quality-eval` advisory until their thresholds
+prove stable over a few real `dev-eval` PRs, then flip them to required checks.
 
 ## Adding or changing cases
 
