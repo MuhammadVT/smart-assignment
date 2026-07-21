@@ -27,9 +27,20 @@
   var windowsRationale = document.getElementById('windows-rationale');
 
   var MODE = 'deterministic';
-  var SESSION_ID = (window.crypto && window.crypto.randomUUID)
-    ? window.crypto.randomUUID()
-    : 'sess-' + Date.now() + '-' + Math.floor(Math.random() * 1e9);
+  // Persist the session id per browser (not per page load) so the read-only
+  // customer view (/frontend) can look up the slots this same session produced.
+  var SESSION_KEY = 'sa_session_id';
+  var SESSION_ID = (function () {
+    try {
+      var existing = localStorage.getItem(SESSION_KEY);
+      if (existing) { return existing; }
+    } catch (e) { /* localStorage unavailable (private mode) -- fall through */ }
+    var id = (window.crypto && window.crypto.randomUUID)
+      ? window.crypto.randomUUID()
+      : 'sess-' + Date.now() + '-' + Math.floor(Math.random() * 1e9);
+    try { localStorage.setItem(SESSION_KEY, id); } catch (e) { /* ignore */ }
+    return id;
+  })();
 
   function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
@@ -712,6 +723,24 @@
     }
   }
 
+  // A one-click hand-off to the read-only customer view (/frontend), which shows
+  // the slots this turn just produced for the sales consultant to pick. Appended
+  // once per completed result; opens in a new tab so the chat stays put.
+  function showCustomerViewLink() {
+    var row = document.createElement('div');
+    row.className = 'cust-view-row';
+    var a = document.createElement('a');
+    a.className = 'cust-view-link';
+    a.href = '/frontend';
+    a.target = '_blank';
+    a.rel = 'noopener';
+    a.textContent = 'Open customer view ↗';
+    a.title = 'See these slots in the sales-consultant "Choose a delivery slot" view';
+    row.appendChild(a);
+    transcript.appendChild(row);
+    transcript.scrollTop = transcript.scrollHeight;
+  }
+
   // --- Phase 2: stream the real ADK agent over SSE ---
   async function sendLlm(message) {
     var thinking = bubble('agent', 'Thinking…', 'thinking');
@@ -762,7 +791,7 @@
       }
       if (first) { thinking.remove(); }
       endStepper();  // a tools-only turn (result animates below) still completes
-      if (pendingViz) { await animate(pendingViz); }
+      if (pendingViz) { await animate(pendingViz); showCustomerViewLink(); }
     } catch (err) {
       thinking.remove();
       endStepper();

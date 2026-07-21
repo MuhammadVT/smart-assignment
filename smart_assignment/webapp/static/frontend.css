@@ -1,0 +1,100 @@
+/*
+ * Chrome for the read-only customer view (/frontend): top nav, hero, the
+ * provenance strip, and the empty state.
+ *
+ * The "Choose a delivery slot" cards themselves (.fe-grid / .fe-opt / .fe-map …)
+ * and the shared design tokens come from reporting/page.py's `_STYLE + _FE_STYLE`,
+ * injected into the page at serve time — so this view can never drift from the
+ * published GitHub Pages Frontend tab. This file only adds the page frame.
+ */
+
+body { background: var(--bg); }
+
+/* Elements toggled via the `hidden` attribute (the provenance strip, the empty
+   state). Needed because their own display rules (e.g. .fe-source{display:flex})
+   would otherwise override the UA `[hidden]` rule and keep them visible. */
+[hidden] { display: none !important; }
+
+/* --- Top nav: switch between the chat and this view (matches app.css) --- */
+.topbar { background: var(--card); border-bottom: 1px solid var(--line); }
+.topbar-in { display: flex; align-items: center; justify-content: space-between; padding: 10px 24px; }
+.topbar-brand { font-size: 13px; font-weight: 800; color: var(--navy); letter-spacing: -.01em; }
+.pagenav { display: flex; gap: 4px; background: #e6ebf2; border-radius: 9px; padding: 3px; }
+.pagenav a {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--muted);
+  text-decoration: none;
+  padding: 6px 13px;
+  border-radius: 7px;
+}
+.pagenav a.active { color: var(--violet); background: var(--card); box-shadow: 0 1px 2px rgba(16, 32, 64, .12); }
+.pagenav a:not(.active):hover { color: var(--ink); }
+
+/* --- Hero --- */
+.fe-page { padding-top: 26px; padding-bottom: 60px; }
+.fe-hero { margin-bottom: 6px; }
+.fe-hero h1 { font-size: 24px; margin: 6px 0 8px; color: var(--navy); }
+.fe-lead { max-width: 820px; font-size: 14px; line-height: 1.6; color: var(--muted); margin: 0 0 14px; }
+.fe-lead b { color: var(--ink); }
+
+/* --- Provenance strip: shows this view is fed by the chat run, read-only --- */
+.fe-source {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin: 6px 0 22px;
+  padding: 12px 16px;
+  background: #fbfcfe;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+}
+.src-flow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.src-step { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 700; color: #33415c; }
+.src-step .ic {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  color: #fff;
+}
+.src-step.sf .ic { background: var(--blue); }
+.src-step.sa .ic { background: var(--violet); }
+.src-step.sc .ic { background: var(--green); }
+.src-step.sc { color: var(--navy); }
+.src-arrow { color: #b6c2d4; font-weight: 800; font-size: 14px; }
+.src-now {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--green);
+  background: var(--green-soft);
+  border: 1px solid #bce0c6;
+  border-radius: 999px;
+  padding: 2px 9px;
+  margin-left: 2px;
+}
+.src-note { font-size: 12px; color: var(--muted); }
+.src-note b { color: var(--navy); }
+.src-sub { width: 100%; font-size: 11.5px; color: var(--muted); margin-top: 4px; }
+
+/* --- Empty state (before any prospect has been run in the chat) --- */
+.fe-empty {
+  border: 1.5px dashed #c7d1e0;
+  border-radius: var(--radius);
+  background: #fbfcfe;
+  padding: 40px 24px;
+  text-align: center;
+}
+.fe-empty .em-ic { font-size: 28px; }
+.fe-empty h2 { margin: 10px 0 4px; font-size: 16px; color: var(--navy); }
+.fe-empty p { margin: 0 auto; max-width: 460px; font-size: 13.5px; color: var(--muted); line-height: 1.55; }
+.fe-empty a { color: var(--violet); font-weight: 600; }
+
+@media (max-width: 700px) {
+  .topbar-in { padding: 10px 16px; }
+}

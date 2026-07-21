@@ -122,6 +122,52 @@ def test_sample_message_round_trips_through_recommend():
         assert len(data["payload"]["steps"]) == 5
 
 
+def test_frontend_page_serves_html_with_fe_styles():
+    resp = client.get("/frontend")
+    assert resp.status_code == 200
+    body = resp.text
+    assert "<!DOCTYPE html>" in body
+    # The shared Simulator CSS + the Frontend tab's own styles were injected.
+    assert "/*__SHARED_STYLE__*/" not in body
+    assert ".fe-opt" in body  # _FE_STYLE present
+    assert "Choose a delivery slot" in body
+    # Assets are content-hash versioned and the page revalidates (like index).
+    assert "/static/frontend.js?v=" in body
+    assert "/static/frontend.css?v=" in body
+    assert resp.headers.get("cache-control") == "no-cache"
+
+
+def test_api_frontend_empty_before_any_run():
+    """Until a session has produced a result, the customer view has nothing to
+    show -- the page falls back to its empty state."""
+    data = client.get("/api/frontend", params={"session": "never-ran"}).json()
+    assert data == {"ok": False}
+
+
+def test_api_frontend_shows_slots_after_a_chat_run():
+    """A completed chat turn caches its slots so the read-only customer view can
+    render exactly what the chat produced -- no re-run, no new decision."""
+    sid = "fe-sess-1"
+    resp = client.post(
+        "/api/chat",
+        json={
+            "session_id": sid,
+            "message": "1200 McKinney St, Houston, TX 77010, 90 cases, TUE 07:00-10:00",
+        },
+    )
+    assert resp.status_code == 200
+    assert any(f["type"] == "visualization" for f in _sse_frames(resp.text))
+
+    data = client.get("/api/frontend", params={"session": sid}).json()
+    assert data["ok"] is True
+    assert data["name"]
+    assert 'class="fe-grid"' in data["frontendHtml"]
+    assert "fe-opt" in data["frontendHtml"]
+
+    # A session that never ran anything stays empty -- results are per-session.
+    assert client.get("/api/frontend", params={"session": "other-sess"}).json() == {"ok": False}
+
+
 def test_mode_endpoint_reports_a_mode():
     resp = client.get("/api/mode")
     assert resp.status_code == 200
