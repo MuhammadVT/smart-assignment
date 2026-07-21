@@ -19,6 +19,9 @@ Endpoints
   the result card) or a clarifying question when required fields are missing.
 * ``GET  /api/samples``  — the bundled sample prospects, as ready-to-send chat
   messages (parity with the Simulator's sample chips).
+* ``GET  /frontend``     — a read-only sales-consultant "Choose a delivery slot"
+  view of the slots the chat last produced for this browser session (the GitHub
+  Pages Frontend tab, fed live). ``GET /api/frontend`` returns its data.
 
 Every recommendation goes through ``run_slot_recommendation`` with the
 deterministic reasoner and is rendered by ``build_workflow_payload`` — the exact
@@ -31,6 +34,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from collections import OrderedDict
 from pathlib import Path
 from typing import Optional
 
@@ -53,7 +57,7 @@ from pydantic import BaseModel
 from smart_assignment.mock_customers import SAMPLE_CUSTOMERS
 from smart_assignment.pipeline import run_slot_recommendation
 from smart_assignment.reasoning import DeterministicReasoner
-from smart_assignment.reporting.page import _STYLE, build_workflow_payload
+from smart_assignment.reporting.page import _FE_STYLE, _STYLE, build_workflow_payload
 from smart_assignment.shared.config import DEFAULT_CONFIG
 from smart_assignment.webapp.deterministic_chat import DeterministicChatService
 from smart_assignment.webapp.llm_chat import LlmChatService, resolve_mode
@@ -76,6 +80,26 @@ _chat_service = LlmChatService()
 # the address, accepts revisions like "try 20 cases") when the LLM path isn't
 # available -- either because deterministic mode is configured or the LLM errored.
 _det_chat_service = DeterministicChatService()
+
+# The latest workflow payload per browser session, so the read-only customer
+# view (`GET /frontend`) can show the delivery-slot options the chat just
+# produced -- mirroring production, where a prospect flows Salesforce ->
+# Smart Assignment -> the sales consultant's "Choose a delivery slot" view. This
+# is a display cache only: the payload already came from the audited pipeline via
+# the chat stream, so nothing here re-decides anything. Bounded (LRU) so a long-
+# lived process can't grow it without limit.
+_RESULT_CACHE_MAX = 256
+_last_result: "OrderedDict[str, dict]" = OrderedDict()
+
+
+def _remember_result(session_id: str, payload: Optional[dict]) -> None:
+    """Cache the latest visualization payload for a session (most-recent last)."""
+    if not payload:
+        return
+    _last_result[session_id] = payload
+    _last_result.move_to_end(session_id)
+    while len(_last_result) > _RESULT_CACHE_MAX:
+        _last_result.popitem(last=False)
 
 
 class RecommendRequest(BaseModel):
@@ -163,12 +187,19 @@ async def chat(req: ChatRequest) -> StreamingResponse:
     wasted ADK-runner build). Either way the chat remembers the conversation and
     accepts revisions like "try 20 cases" — matching ``adk web``."""
 
+    def _emit(frame: dict) -> str:
+        # Remember the result payload as it streams by, so the customer view can
+        # render the same slots this turn produced. Display-only, no re-decision.
+        if frame.get("type") == "visualization":
+            _remember_result(req.session_id, frame.get("payload"))
+        return f"data: {json.dumps(frame)}\n\n"
+
     async def event_stream():
         mode = resolve_mode(DEFAULT_CONFIG).get("mode")
         if mode == "llm":
             try:
                 async for frame in _chat_service.stream_turn(req.session_id, req.message):
-                    yield f"data: {json.dumps(frame)}\n\n"
+                    yield _emit(frame)
                 return
             except Exception as exc:  # noqa: BLE001 - any LLM/runtime failure -> deterministic
                 # Don't swallow it: log the full traceback so the real cause
@@ -189,9 +220,25 @@ async def chat(req: ChatRequest) -> StreamingResponse:
                 )
                 yield f"data: {json.dumps({'type': 'message', 'text': notice})}\n\n"
         async for frame in _det_chat_service.stream_turn(req.session_id, req.message):
-            yield f"data: {json.dumps(frame)}\n\n"
+            yield _emit(frame)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@app.get("/api/frontend")
+def frontend_result(session: str = "") -> dict:
+    """The sales-consultant "Choose a delivery slot" view for a session's latest
+    chat run. Returns ``{ok: false}`` until that session has produced a result, so
+    the customer page can show an empty state and then the real options."""
+    payload = _last_result.get(session)
+    if not payload or not payload.get("frontendHtml"):
+        return {"ok": False}
+    return {
+        "ok": True,
+        "name": payload.get("name", ""),
+        "address": payload.get("address", ""),
+        "frontendHtml": payload["frontendHtml"],
+    }
 
 
 def _asset_version(name: str) -> str:
@@ -221,6 +268,25 @@ def index() -> HTMLResponse:
     # no-cache so the browser revalidates the HTML each load and always sees the
     # current ?v=<hash> asset URLs (otherwise a cached page keeps the old URLs).
     return HTMLResponse(_render_index(), headers={"Cache-Control": "no-cache"})
+
+
+def _render_frontend() -> str:
+    """Build the read-only customer view, injecting the Simulator's shared CSS
+    plus the Frontend tab's own styles (``_FE_STYLE``) so the "Choose a delivery
+    slot" cards render exactly like the published GitHub Pages Frontend tab."""
+    template = (_STATIC_DIR / "frontend.html").read_text(encoding="utf-8")
+    html = template.replace("/*__SHARED_STYLE__*/", _STYLE + _FE_STYLE)
+    for asset in ("frontend.css", "frontend.js"):
+        html = html.replace(f"/static/{asset}", f"/static/{asset}?v={_asset_version(asset)}")
+    return html
+
+
+@app.get("/frontend", response_class=HTMLResponse)
+def frontend_page() -> HTMLResponse:
+    """The sales-consultant "Choose a delivery slot" view — a read-only display of
+    the slots the chat last produced for this browser session. The chat page
+    (``/``) stays the primary, unchanged experience."""
+    return HTMLResponse(_render_frontend(), headers={"Cache-Control": "no-cache"})
 
 
 # Serve the static assets (app.css, app.js) under /static.

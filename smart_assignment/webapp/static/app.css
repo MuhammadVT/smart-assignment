@@ -6,6 +6,22 @@
  * page at serve time. This file only adds what the chat layout needs on top.
  */
 
+/* --- Top nav: switch between the chat (this page) and the customer view --- */
+.topbar { background: var(--card); border-bottom: 1px solid var(--line); }
+.topbar-in { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; }
+.topbar-brand { font-size: 13px; font-weight: 800; color: var(--navy); letter-spacing: -.01em; }
+.pagenav { display: flex; gap: 4px; background: #e6ebf2; border-radius: 9px; padding: 3px; }
+.pagenav a {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--muted);
+  text-decoration: none;
+  padding: 6px 13px;
+  border-radius: 7px;
+}
+.pagenav a.active { color: var(--violet); background: var(--card); box-shadow: 0 1px 2px rgba(16, 32, 64, .12); }
+.pagenav a:not(.active):hover { color: var(--ink); }
+
 .app { padding: 30px 20px 10px; }
 
 /* Stacked layout: chat on top (full width), workflow visualization below. */
@@ -219,6 +235,23 @@
 .composer .send-btn:disabled { opacity: .55; cursor: default; transform: none; }
 
 .chips { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* Hand-off chip shown under a completed result: opens the read-only customer
+   view (/frontend) with the slots this run produced. Violet = the SC/agent
+   surface, matching the Frontend tab's accent. */
+.cust-view-row { display: flex; }
+.cust-view-link {
+  align-self: flex-start;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--violet);
+  text-decoration: none;
+  background: var(--violet-soft);
+  border: 1px solid #ddd2f4;
+  border-radius: 8px;
+  padding: 7px 12px;
+}
+.cust-view-link:hover { background: #e6ddf7; }
 
 /* --- Visualization column --- */
 .viz { position: relative; min-height: 220px; }
