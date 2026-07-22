@@ -435,8 +435,17 @@ _FE_STYLE = """
   .fe-tile .tl { font-size: 10.5px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .03em; }
   .fe-tile .tv { font-size: 15px; font-weight: 700; color: var(--navy); margin-top: 4px; font-variant-numeric: tabular-nums; }
   .fe-tile .ts { font-size: 10.5px; color: var(--muted); margin-top: 3px; }
-  .fe-tile .fs { display: inline-block; font-family: var(--mono); font-size: 10px; font-weight: 700; color: var(--violet);
-    background: var(--violet-soft); border-radius: 5px; padding: 1px 5px; margin-top: 5px; }
+  /* Per-tile strength meter (replaces the raw 0-1 score chip): 4 dots + a word,
+     coloured by band. Reads 'how strong' at a glance, no decimal. */
+  .fe-str { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; }
+  .fe-str .dots { display: inline-flex; gap: 3px; }
+  .fe-str .dots i { width: 6px; height: 6px; border-radius: 50%; background: #d7dce6; display: block; }
+  .fe-str .dots i.on { background: currentColor; }
+  .fe-str .w { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; }
+  .fe-str.strong { color: var(--green); }
+  .fe-str.good { color: var(--blue); }
+  .fe-str.fair { color: var(--amber); }
+  .fe-str.low { color: var(--amber); }
   .fe-tile.miss .tv { color: var(--amber); }
   .fe-unavail { margin-top: 10px; font-size: 13px; color: #7a2b22; background: var(--red-soft);
     border: 1px solid #f2cfc9; border-radius: 9px; padding: 10px 12px; }
@@ -2382,11 +2391,14 @@ def build_map_data(result: RecommendationResult, config: Optional[Config] = None
 # entry -- which is the frontend face of the "select from a valid set" guarantee.
 # ---------------------------------------------------------------------------
 
+# Sales-consultant-facing tile labels: plain business language, not the scoring
+# vocabulary. Neutral wording ("existing stops", not "your route") since a route's
+# customers can belong to several SCs.
 _FE_FACTOR_TILE = {
-    FACTOR_GEO_CLUSTERING: "Geo clustering",
-    FACTOR_CAPACITY_BUFFER: "Capacity after add",
-    FACTOR_WINDOW_MATCH: "Slot match",
-    FACTOR_SLOT_AVAILABILITY: "Slot openness",
+    FACTOR_GEO_CLUSTERING: "Near existing stops",
+    FACTOR_CAPACITY_BUFFER: "Room on the truck",
+    FACTOR_WINDOW_MATCH: "Fits their time",
+    FACTOR_SLOT_AVAILABILITY: "How busy that day",
 }
 _DAY_FULL = {
     "MON": "Monday", "TUE": "Tuesday", "WED": "Wednesday", "THU": "Thursday",
@@ -2429,12 +2441,51 @@ def _fe_options(result: RecommendationResult):
     return options, infeasible
 
 
+def _fe_strength(score: float) -> tuple:
+    """A 0-1 factor score as a rep-facing strength (css class, word, filled dots
+    out of 4). Replaces the raw number so the consultant reads 'how strong' at a
+    glance, not a decimal. Banded absolutely (like the overall quality badge)."""
+    if score >= 0.80:
+        return "strong", "Great", 4
+    if score >= 0.60:
+        return "good", "Good", 3
+    if score >= 0.40:
+        return "fair", "Fair", 2
+    return "low", "Low", 1
+
+
+def _fe_meter(score: float) -> str:
+    scls, word, filled = _fe_strength(score)
+    dots = "".join('<i class="on"></i>' if k < filled else "<i></i>" for k in range(4))
+    return f'<span class="fe-str {scls}"><span class="dots">{dots}</span><span class="w">{word}</span></span>'
+
+
+def _hm(mins) -> str:
+    """Minutes as a friendly duration: 180 -> '3h', 150 -> '2h 30m', 45 -> '45m'."""
+    h, m = divmod(int(mins), 60)
+    if h and m:
+        return f"{h}h {m}m"
+    return f"{h}h" if h else f"{m}m"
+
+
+def _fe_busy_word(openness: float) -> str:
+    """The slot-availability score as a plain 'how busy the truck is that day' read
+    (higher openness = more room). Replaces the raw 0-1 openness number."""
+    if openness >= 0.66:
+        return "Wide open"
+    if openness >= 0.40:
+        return "Fairly open"
+    if openness >= 0.20:
+        return "Fairly busy"
+    return "Very busy"
+
+
 def _fe_tile(label: str, big: str, sub: str, score: float, miss: bool = False) -> str:
     cls = "fe-tile miss" if miss else "fe-tile"
     return (
         f'<div class="{cls}"><div class="tl">{_esc(label)}</div>'
         f'<div class="tv">{_esc(big)}</div><div class="ts">{_esc(sub)}</div>'
-        f'<span class="fs">{score:.2f}</span></div>'
+        f'{_fe_meter(score)}</div>'
     )
 
 
@@ -2453,61 +2504,118 @@ def _fe_tiles(factors, cand: CandidateEvaluation) -> str:
         d = f.detail or ""
         if name == FACTOR_GEO_CLUSTERING:
             m = re.search(r"avg\s+([\d.]+)\s*mi", d)
-            big = f"{m.group(1)} mi" if m else f"{f.value:.2f}"
-            tiles.append(_fe_tile(label, big, "avg to existing stops", f.value))
+            big = f"{m.group(1)} mi away" if m else "Nearby"
+            tiles.append(_fe_tile(label, big, "from others already on the route", f.value))
         elif name == FACTOR_CAPACITY_BUFFER:
             tiles.append(
-                _fe_tile(label, f"{cand.utilization_after:.0%}",
-                         f"{cand.remaining_capacity_after} cases headroom", f.value)
+                _fe_tile(label, f"Fits, ~{cand.utilization_after:.0%} full",
+                         f"room for {cand.remaining_capacity_after} more cases", f.value)
             )
         elif name == FACTOR_WINDOW_MATCH:
             if f.value <= 0.001:
-                tiles.append(_fe_tile(label, "misses pref.", "wrong hours", f.value, miss=True))
+                tiles.append(
+                    _fe_tile(label, "Different time", "outside their preferred hours",
+                             f.value, miss=True)
+                )
             else:
                 m = re.search(r"covers\s+(\d+)\s+of\s+the\s+(\d+)", d)
-                big = f"{m.group(1)}/{m.group(2)} min" if m else f"{f.value:.2f}"
-                tiles.append(_fe_tile(label, big, "of preferred window", f.value))
-        else:  # slot availability (openness)
+                sub = (
+                    f"covers {_hm(m.group(1))} of their {_hm(m.group(2))} window"
+                    if m else "covers most of their window"
+                )
+                tiles.append(_fe_tile(label, "Preferred time ✓", sub, f.value))
+        else:  # slot availability -> "how busy that day"
+            big = _fe_busy_word(f.value)
             m = re.search(r"\((\d+)\s+overlap", d)
             if m:
                 n = int(m.group(1))
-                sub = f"{n} committed stop overlaps" if n != 1 else "1 committed stop overlaps"
+                sub = f"{n} stops already booked that window" if n != 1 else "1 stop already booked that window"
             else:
-                sub = "tier-weighted openness"
-            tiles.append(_fe_tile(label, f"{f.value:.2f}", sub, f.value))
+                sub = "based on the day's load"
+            tiles.append(_fe_tile(label, big, sub, f.value))
     cols = max(1, len(tiles))
     return f'<div class="fe-tiles" style="--fe-cols:{cols}">{"".join(tiles)}</div>'
 
 
 def _fe_why(o: dict, bar: float, recommended: bool) -> str:
-    """A short, grounded 'why' line for one option, composed from the factors'
-    own detail strings (never free text)."""
+    """A short, plain-language 'why' for one option, composed only from grounded
+    facts (distance, the customer's preferred day, window coverage) — no raw
+    scores and no internal 'auto-assign bar' jargon. Neutral wording ('existing
+    stops on the route', never 'your route')."""
+    route = o["cand"].route
     by = {f.name: f for f in o["factors"]}
     parts = []
-    g = by.get(FACTOR_GEO_CLUSTERING)
-    if g and g.detail:
-        parts.append(g.detail.rstrip("."))
+    miles = _fe_geo_miles(o["factors"])
+    if miles:
+        parts.append(f"about {miles} mi from other stops already on the route")
     w = by.get(FACTOR_WINDOW_MATCH)
-    if w is not None and w.value > 0.001 and w.detail:
-        parts.append(w.detail.rstrip("."))
-    elif w is not None and w.value <= 0.001:
-        parts.append("but it misses the preferred hours")
-    clears = "clears" if o["score"] >= bar else "is below"
-    lead = "Strongest route-slot overall — " if recommended else ""
-    body = "; ".join(parts)
-    tail = f'Route-slot score <b>{o["score"]:.2f}</b> {clears} the {bar:.0%} auto-assign bar.'
+    if w is not None and w.value > 0.001:
+        parts.append(
+            f"on the customer's preferred {_fe_day(route.day.value)}, "
+            "covering most of the window they asked for"
+        )
+    elif w is not None:
+        parts.append(f"on {_fe_day(route.day.value)}, though at different hours than they asked for")
+    lead = "The strongest option — " if recommended else ""
+    body = "; ".join(parts) if parts else "a serviceable delivery slot"
+    if o["score"] >= bar:
+        tail = "You can book it now — no extra approval needed."
+    else:
+        tail = "It's workable, but it would need a quick manager OK before booking."
     return f'<p class="fe-why">{lead}{_esc(body)}. {tail}</p>'
 
 
 def _fe_rank(score: float, bar: float) -> tuple:
-    """Map a route-slot score to a rep-facing quality rank (chip class, label),
-    banded relative to the auto-assign bar. Replaces the raw numeric score as the
-    headline: >= bar+0.20 is High capacity, >= bar Moderate, else Low."""
+    """Map a route-slot score to a rep-facing quality label (chip class, label),
+    banded relative to the auto-assign bar. Plain business language, no number:
+    >= bar+0.20 is a Great fit, >= bar a Good fit, else Workable."""
     if score >= bar + 0.20:
-        return "hi", "High capacity"
+        return "hi", "Great fit"
     if score >= bar:
-        return "med", "Moderate"
-    return "lo", "Low"
+        return "med", "Good fit"
+    return "lo", "Workable"
+
+
+# The one thing a runner-up option might do better, in plain business terms.
+_FE_RUNNER_ADV = {
+    FACTOR_GEO_CLUSTERING: "sits a little closer to existing stops",
+    FACTOR_CAPACITY_BUFFER: "leaves a bit more room on the truck",
+    FACTOR_WINDOW_MATCH: "fits the requested hours a little better",
+    FACTOR_SLOT_AVAILABILITY: "lands on a slightly quieter day",
+}
+
+
+def _fe_tradeoff(o: dict, result: RecommendationResult) -> str:
+    """A plain-language 'why this over the next option' line for the recommended
+    slot — names, in business terms, the one thing the runner-up does better (if
+    any) and frames the overall win. Grounded in the ranked options' factor
+    values; no raw scores."""
+    options, _ = _fe_options(result)
+
+    def _same(a: dict, b: dict) -> bool:
+        return (
+            a["cand"].route.route_id == b["cand"].route.route_id
+            and fmt_window(a["window"]) == fmt_window(b["window"])
+        )
+
+    runner = next((x for x in options if not _same(x, o)), None)
+    if runner is None:
+        return ""  # only one option -> no comparison to make
+    top_by = {f.name: f.value for f in o["factors"]}
+    adv, best_gap = None, 0.02  # ignore ties / scoring noise
+    for f in runner["factors"]:
+        gap = f.value - top_by.get(f.name, 0.0)
+        if gap > best_gap and f.name in _FE_RUNNER_ADV:
+            adv, best_gap = f.name, gap
+    runner_day = _esc(_fe_day(runner["cand"].route.day.value))
+    if adv is None:
+        body = "a stronger overall fit — it leads on every measure."
+    else:
+        body = (
+            f"a slightly better overall fit — the {runner_day} option {_FE_RUNNER_ADV[adv]}, "
+            "but this is the stronger choice for the customer overall."
+        )
+    return f'<div class="fe-tradeoff"><b>Why this over the {runner_day} option:</b> {body}</div>'
 
 
 def _fe_option_card(o: dict, result: RecommendationResult, config: Config, bar: float) -> str:
@@ -2517,18 +2625,13 @@ def _fe_option_card(o: dict, result: RecommendationResult, config: Config, bar: 
     recommended = o["recommended"]
     rank_cls, rank_label = _fe_rank(o["score"], bar)
     if recommended and rec.decision == Decision.RECOMMENDED:
-        rank_label += " · auto-assign"
+        rank_cls, rank_label = "hi", "Best fit · ready to book"
     elif recommended:  # escalated low score -> the strongest, proposed for review
-        rank_label += " · needs review"
+        rank_cls, rank_label = "lo", "Best available · needs a quick OK"
     selected = " selected" if recommended else ""
     badge = f'<span class="fe-rank {rank_cls}"><span class="d"></span>{rank_label}</span>'
     when = f"{_esc(_fe_day(route.day.value))} · {win}"
-    tradeoff = ""
-    if recommended and rec.key_tradeoff:
-        tradeoff = (
-            f'<div class="fe-tradeoff"><b>Why this over the alternative:</b> '
-            f'{_esc(rec.key_tradeoff)}</div>'
-        )
+    tradeoff = _fe_tradeoff(o, result) if recommended else ""
     # Every feasible option is a real, selectable choice (the rep confirms one).
     # data-route lets the map switch to this option's route when it's selected.
     selrow = '<div class="fe-selrow"><span class="fe-selmark"></span></div>'
@@ -2692,22 +2795,22 @@ def _frontend_panel_html(result: RecommendationResult, config: Config) -> str:
         '<div class="fe-field"><div class="l">Preferred slot <span style="font-weight:400">· soft '
         f'preference</span></div><div class="v">{_esc(pref)}</div></div>'
         '<div class="fe-note"><div class="h">🛡️ How these options are built</div>'
-        'Hard rules (serviceability, capacity) and the factor scoring run in deterministic code. The LLM '
-        'ranks only the feasible options and cites the facts; on any failure it falls back to the '
-        'deterministic pick. Escalation routes to a routing specialist — not a hard block.</div></aside>'
+        'Every option here is a real, bookable slot — it fits the truck, the route, and delivery rules. '
+        "We rank them by how well they fit the customer and flag the best one. If none work, you can send "
+        "it to a routing specialist — a queue, not a dead end.</div></aside>"
     )
 
     # --- center: banner + option cards + escalation + confirm ---
     banner = ""
     if rec.decision == Decision.ESCALATED_LOW_SCORE:
         banner = (
-            f'<div class="fe-banner warn">⚠ The agent escalated this — no option cleared the {bar:.0%} '
-            'auto-assign bar. The strongest is proposed below for a specialist to confirm.</div>'
+            '<div class="fe-banner warn">⚠ None of these are a strong enough fit to book on their own — '
+            'the best one is proposed below for a quick manager OK.</div>'
         )
     elif rec.decision == Decision.ESCALATED_NO_FEASIBLE_SLOT:
         banner = (
-            '<div class="fe-banner stop">✖ No serviceable route — every candidate failed a hard rule, so '
-            'there is nothing to auto-assign. Routed to a routing specialist.</div>'
+            '<div class="fe-banner stop">✖ No serviceable route for this address — nothing can be booked '
+            'here. Routed to a routing specialist.</div>'
         )
 
     # Only the feasible options are shown as slot cards (no "Unavailable" cards).
@@ -2729,21 +2832,21 @@ def _frontend_panel_html(result: RecommendationResult, config: Config) -> str:
 
     if rec.decision == Decision.RECOMMENDED:
         confirm = (
-            '<div class="fe-confirm"><div class="log">Selected: <b id="fe-sel">' + sel_when + '</b> · logged '
-            'with the rep and the facts the agent cited — fully auditable.</div><div class="btns">'
+            '<div class="fe-confirm"><div class="log">Selected: <b id="fe-sel">' + sel_when + '</b> · we’ll '
+            'save this choice on the account, with the reasons behind it.</div><div class="btns">'
             '<button type="button" class="fe-btn-ghost">Cancel</button>'
             '<button type="button" class="fe-btn-primary">Confirm slot</button></div></div>'
         )
     elif rec.decision == Decision.ESCALATED_LOW_SCORE:
         confirm = (
-            '<div class="fe-confirm"><div class="log">Selected: <b id="fe-sel">' + sel_when + '</b> — below '
-            'the auto-assign bar; confirming logs the rep’s override, or send it to a specialist.</div>'
+            '<div class="fe-confirm"><div class="log">Selected: <b id="fe-sel">' + sel_when + '</b> — this '
+            'one needs a quick manager OK; confirm to book it, or send it to a specialist.</div>'
             '<div class="btns"><button type="button" class="fe-btn-ghost">Confirm proposed slot</button>'
             '<button type="button" class="fe-btn-primary">Send to specialist</button></div></div>'
         )
     else:  # no feasible slot
         confirm = (
-            '<div class="fe-confirm"><div class="log">No assignable slot — this must go to a routing '
+            '<div class="fe-confirm"><div class="log">No slot we can book here — this goes to a routing '
             'specialist.</div><div class="btns">'
             '<button type="button" class="fe-btn-primary" disabled>Confirm slot</button></div></div>'
         )

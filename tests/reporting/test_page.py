@@ -133,10 +133,13 @@ def test_frontend_tab_renders_sc_facing_slot_view_per_prospect():
         assert f"{c.order_quantity_cases} cases" in fe
 
     joined = " ".join(payload[c.lookup_key]["frontendHtml"] for c in SAMPLE_CUSTOMERS)
-    # Raw scores are shown as quality ranks; the recommended one auto-assigns.
-    assert "High capacity · auto-assign" in joined  # a clean auto-assign
-    assert "· needs review" in joined  # low-score escalation, proposed
+    # Raw scores are shown as plain, sales-consultant-friendly language: the clean
+    # recommendation is ready to book; a low-score one needs a manager OK.
+    assert "Best fit · ready to book" in joined  # a clean auto-assign
+    assert "needs a quick OK" in joined  # low-score escalation, proposed
     assert "No serviceable route" in joined  # no-feasible-slot escalation
+    # Per-tile strength meters replace the raw 0-1 score chips.
+    assert 'class="fe-str' in joined and "fs\">" not in joined
     # Slots are selectable (the rep picks one); the map draws a cluster polygon
     # and a mock Depot (OpCo).
     assert 'class="fe-opt selectable' in joined
