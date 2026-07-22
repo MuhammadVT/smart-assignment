@@ -292,13 +292,6 @@ def build_route_summary_tables(
     return route_summary, stop_locations
 
 
-# Backward-compatible aliases for existing callers/tests. # TODO: remove these later
-pull_routes_data = fetch_route_stop_records
-pull_cust_tier_data = fetch_cust_tier_records
-pull_dlvr_window_data = fetch_dlvr_window_records
-calculate_route_capacity = summarize_route_capacity
-get_route_stops_locations = summarize_stop_geographies
-
 # def pull_dot_base_data(sql, strt_wk, end_wk, markets, qry=QUERIES['dot_base'], cache_nm=None):
 #
 #     qry = copy.deepcopy(qry)
