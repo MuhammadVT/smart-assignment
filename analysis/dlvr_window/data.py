@@ -56,14 +56,14 @@ def _normalize_committed(df: pd.DataFrame) -> pd.DataFrame:
 
 def _load_raw_dlvr_window(source: LoadSource) -> pd.DataFrame:
     from smart_assignment.data_prep.prep_delivery_data import (
-        DLVR_WINDOW_CACHE_PATH,
+        dlvr_window_cache_path,
         fetch_dlvr_window_records,
         read_cached_dataframe,
     )
 
     if source in ("auto", "cache"):
         try:
-            return read_cached_dataframe(DLVR_WINDOW_CACHE_PATH)
+            return read_cached_dataframe(dlvr_window_cache_path())
         except Exception as exc:
             if source == "cache":
                 raise FileNotFoundError(
@@ -78,14 +78,14 @@ def _load_raw_dlvr_window(source: LoadSource) -> pd.DataFrame:
 
 def _load_cust_tier_df(source: LoadSource) -> pd.DataFrame:
     from smart_assignment.data_prep.prep_delivery_data import (
-        CUST_TIER_CACHE_PATH,
+        cust_tier_cache_path,
         fetch_cust_tier_records,
         read_cached_dataframe,
     )
 
     if source in ("auto", "cache"):
         try:
-            return read_cached_dataframe(CUST_TIER_CACHE_PATH)
+            return read_cached_dataframe(cust_tier_cache_path())
         except Exception as exc:
             if source == "cache":
                 raise FileNotFoundError(

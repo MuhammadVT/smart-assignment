@@ -41,4 +41,10 @@ deployment/phoenix/.run/
 .DS_Store
 Thumbs.db
 /creds.json
+# Prepared SQL cache snapshots, one directory per DS_UTILS_RUN_MODE
+data/local/
 data/dev/
+data/qa/
+data/perf/
+data/preprod/
+data/prod/

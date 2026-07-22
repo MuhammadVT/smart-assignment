@@ -1,6 +1,7 @@
 """Prepare the delivery datasets the assignment pipeline reads.
 
-Three sources are pulled over SQL (see `QUERIES`) and cached under `data/dev/`:
+Three sources are pulled over SQL (see `QUERIES`) and cached under
+`data/<run mode>/`, where the run mode comes from DS_UTILS_RUN_MODE:
 
 - ``routes``      -- route stop facts, used for route capacity and geography.
 - ``cust_tier``   -- customer tier lookup (Perks / 4 / 5 / ...).
@@ -26,11 +27,10 @@ logger = logging.getLogger(__name__)
 
 # Config
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-os.environ['DATABASE_CREDENTIALS_LOCATION'] = os.path.realpath(
-    os.path.join(BASE_DIR, '..', '..', 'creds.json')
-)
 QUERY_DIR = os.path.realpath(os.path.join(BASE_DIR, '..', 'queries'))
 DATA_LOCATION = os.path.realpath(os.path.join(BASE_DIR, '..', '..', 'data'))
+DEFAULT_CREDENTIALS_PATH = os.path.realpath(os.path.join(BASE_DIR, '..', '..', 'creds.json'))
+CREDENTIALS_LOCATION_ENV = 'DATABASE_CREDENTIALS_LOCATION'
 DEFAULT_CACHE_EXTENSION = '.parquet'  # '.csv.gz'
 DS_UTILS_RUN_MODE_ENV = 'DS_UTILS_RUN_MODE'
 DEFAULT_DS_UTILS_RUN_MODE = 'dev'
@@ -43,6 +43,18 @@ def get_ds_utils_run_mode() -> ds_utils.Mode:
 
 
 def create_sql_access(*, ignore_cache: bool = False) -> ds_utils.SQLAccess:
+    """Build a ds_utils SQL handle backed by the cache for the current run mode.
+
+    Everything with a side effect lives here rather than at module scope, so
+    importing this module stays inert -- `integrations/` imports it on the live
+    request path just to read cached parquet, and that path must not touch
+    credentials, the environment, or the filesystem.
+    """
+    # ds_utils reads the credentials path from the environment. Default to the
+    # repo-root creds.json but let an already-set value win.
+    os.environ.setdefault(CREDENTIALS_LOCATION_ENV, DEFAULT_CREDENTIALS_PATH)
+    os.makedirs(cache_dir(), exist_ok=True)
+
     run_mode = get_ds_utils_run_mode()
     cachey = ds_utils.Data(
         rm=run_mode,
@@ -54,14 +66,21 @@ def create_sql_access(*, ignore_cache: bool = False) -> ds_utils.SQLAccess:
     return ds_utils.SQLAccess(run_mode, data=cachey)
 
 
-DEV_CACHE_DIR = os.path.join(DATA_LOCATION, 'dev')
-os.makedirs(DEV_CACHE_DIR, exist_ok=True)
+def cache_dir() -> str:
+    """Cache directory for the current run mode, e.g. `data/dev/`.
+
+    Mirrors how ds_utils lays out its cache (`<data_location>/<run_mode>/`), so
+    readers and `create_sql_access()`'s writer agree on where files land. The
+    run mode is read per call rather than frozen at import, so changing
+    DS_UTILS_RUN_MODE takes effect without reloading the module.
+    """
+    return os.path.join(DATA_LOCATION, get_ds_utils_run_mode().run_mode)
 
 
 def cache_path(cache_name: str) -> str:
-    """Build a dev-cache file path using DEFAULT_CACHE_EXTENSION."""
+    """Build a cache file path for the current run mode."""
     extension = DEFAULT_CACHE_EXTENSION.lstrip('.')
-    return os.path.join(DEV_CACHE_DIR, f'{cache_name}.{extension}')
+    return os.path.join(cache_dir(), f'{cache_name}.{extension}')
 
 
 def read_cached_dataframe(path: str) -> pd.DataFrame:
@@ -77,7 +96,7 @@ def read_cached_dataframe(path: str) -> pd.DataFrame:
             # fetch_candidate_routes' "using the mock demo routes instead"
             # warning, which reads like a data problem rather than a missing dep.
             raise ImportError(
-                "Reading the parquet cache under data/dev/ needs a parquet engine "
+                "Reading the parquet cache under data/<run mode>/ needs a parquet engine "
                 "(pyarrow), which isn't installed. Add it with the project's "
                 "'cache' extra: pip install -e \".[cache]\" (or uv pip install "
                 "-e \".[cache]\" / uv pip install pyarrow)."
@@ -85,9 +104,16 @@ def read_cached_dataframe(path: str) -> pd.DataFrame:
     return pd.read_csv(path)
 
 
-ROUTES_CACHE_PATH = cache_path('routes')
-CUST_TIER_CACHE_PATH = cache_path('cust_tier')
-DLVR_WINDOW_CACHE_PATH = cache_path('dlvr_window')
+def routes_cache_path() -> str:
+    return cache_path('routes')
+
+
+def cust_tier_cache_path() -> str:
+    return cache_path('cust_tier')
+
+
+def dlvr_window_cache_path() -> str:
+    return cache_path('dlvr_window')
 
 
 QUERIES = {
