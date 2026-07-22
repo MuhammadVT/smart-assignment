@@ -48,3 +48,7 @@ data/qa/
 data/perf/
 data/preprod/
 data/prod/
+
+# Runtime human-feedback log (durable annotation store; not source)
+feedback_data/
+.venv-test/
