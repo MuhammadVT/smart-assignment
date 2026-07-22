@@ -28,21 +28,23 @@ only come from a real run -- are produced here.
 
 Usage (needs a live backend; run from the repo root):
 
-    python3 -m eval.capture            # capture all cases, rewrite the dataset
-    python3 -m eval.capture --check    # dry run: print captures, write nothing
+    python3 -m eval.capture                       # capture ALL cases, rewrite the dataset
+    python3 -m eval.capture --check               # dry run: print captures, write nothing
+    python3 -m eval.capture --ids case_a,case_b   # capture an explicit subset
 
-Cost control while developing: SMART_ASSIGNMENT_EVAL_IDS (comma-separated
-eval_id subset, same knob test_eval.py reads -- see "Running a subset locally
-while developing" in eval/README.md) limits which cases get run here too.
-SMART_ASSIGNMENT_EVAL_NUM_RUNS does NOT apply to this module: each case is
-already captured exactly once (there's no multi-run/consensus concept here,
-unlike AgentEvaluator's default of scoring every case twice), so there is
-nothing for it to control.
+Because capture WRITES the committed dataset, it captures all cases by default and
+takes a subset only from the explicit --ids flag. It deliberately does NOT read
+the SMART_ASSIGNMENT_EVAL_IDS env var (the local cost-control knob for the eval
+TEST runners), so a value left in .env -- which load_dotenv pulls into the
+environment -- can never silently capture a partial dataset. If that var is set
+without --ids, capture warns and captures all. SMART_ASSIGNMENT_EVAL_NUM_RUNS
+does NOT apply either: each case is captured exactly once.
 
-A filtered run (no --check) MERGES its captures into any existing
-eval/data/captured_responses.json rather than replacing it -- so capturing
-just one case while iterating never regresses the other committed cases'
-final_response back to null.
+An --ids run (no --check) MERGES its captures into any existing
+eval/data/captured_responses.json rather than replacing it -- so recapturing
+just one case never regresses the other committed cases' final_response back to
+null. (The coverage gate, tests/eval/test_dataset_lock.py, still requires every
+golden case captured before a commit passes.)
 
 Imports stay credential-free: the heavy ADK/agent imports are lazy inside the
 functions, so importing this module never needs a backend and it is safe for the
@@ -58,7 +60,8 @@ import os
 import pathlib
 from typing import Dict, List, NamedTuple, Optional
 
-from eval.case_selection import EVAL_IDS_ENV, select_cases
+from eval.case_selection import EVAL_IDS_ENV, filter_cases_by_ids, parse_eval_ids
+from eval.dataset import apply_eval_dataset, run_provenance
 from eval.golden_cases import GOLDEN_CASES, GoldenCase
 
 # A distinct app/user id so capture runs are easy to spot in a trace backend
@@ -205,13 +208,34 @@ async def _capture_all(cases: List[GoldenCase]) -> Dict[str, CaptureResult]:
     return captured
 
 
-def _serialize(captured: Dict[str, CaptureResult]) -> str:
+def _load_raw() -> Dict[str, dict]:
+    """The captured file as its raw ``{eval_id: entry}`` dict (or ``{}``), where
+    each entry is the full on-disk record -- ``final_response``, ``escalated``,
+    and, once written by this module, the ``captured_with`` provenance block.
+
+    Merging at this raw level (rather than through ``CaptureResult``, which only
+    carries the text + outcome) preserves the provenance of already-committed
+    entries that a filtered re-capture doesn't touch."""
+    if not _CAPTURED_PATH.exists():
+        return {}
+    return json.loads(_CAPTURED_PATH.read_text(encoding="utf-8"))
+
+
+def _entry(result: CaptureResult, provenance: Dict[str, object]) -> dict:
+    """One captured record: the text + outcome, plus the run's dataset/model
+    provenance (see eval/dataset.py) so the capture is attributable and
+    reproducible."""
+    return {
+        "final_response": result.final_response,
+        "escalated": result.escalated,
+        "captured_with": provenance,
+    }
+
+
+def _serialize(entries: Dict[str, dict]) -> str:
     """Sorted keys + trailing newline so the committed file is stable and diffs are
     readable."""
-    ordered = {
-        key: {"final_response": captured[key].final_response, "escalated": captured[key].escalated}
-        for key in sorted(captured)
-    }
+    ordered = {key: entries[key] for key in sorted(entries)}
     return json.dumps(ordered, indent=2, ensure_ascii=False) + "\n"
 
 
@@ -224,32 +248,74 @@ def main() -> None:
         action="store_true",
         help="Dry run: capture and print responses without writing any files.",
     )
+    parser.add_argument(
+        "--ids",
+        default=None,
+        metavar="a,b,c",
+        help=(
+            "Comma-separated eval_id subset to capture (default: ALL cases). Explicit "
+            "on purpose -- capture writes the committed dataset, so it ignores the "
+            "ambient SMART_ASSIGNMENT_EVAL_IDS env var and takes a subset only here."
+        ),
+    )
     args = parser.parse_args()
 
-    try:
-        cases = select_cases(GOLDEN_CASES)
-    except ValueError as exc:
-        raise SystemExit(str(exc)) from exc
-    if len(cases) < len(GOLDEN_CASES):
+    if args.ids:
+        try:
+            cases = filter_cases_by_ids(GOLDEN_CASES, parse_eval_ids(args.ids), source="--ids")
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
         print(
-            f"[capture] {EVAL_IDS_ENV} set: running {len(cases)}/{len(GOLDEN_CASES)} "
-            f"case(s): {', '.join(c.eval_id for c in cases)}"
+            f"[capture] --ids: capturing {len(cases)}/{len(GOLDEN_CASES)} case(s): "
+            f"{', '.join(c.eval_id for c in cases)}"
+        )
+        print(
+            "[capture] NOTE: a subset capture leaves the other cases unchanged; the coverage "
+            "gate (tests/eval/test_dataset_lock.py) still requires every golden case captured "
+            "before a commit passes."
+        )
+    else:
+        cases = list(GOLDEN_CASES)
+    # SMART_ASSIGNMENT_EVAL_IDS is a TEST-runner knob; capture deliberately does not
+    # honor it (a value left in .env is loaded into the environment by load_dotenv).
+    # Warn if it's set without --ids, so it can't cause "I filtered but got all" confusion.
+    if os.environ.get(EVAL_IDS_ENV) and not args.ids:
+        print(
+            f"[capture] NOTE: {EVAL_IDS_ENV} is set in the environment but eval.capture "
+            "ignores it (capturing ALL cases). Use --ids to capture a subset."
         )
 
+    # Lock onto the DECLARED eval dataset (default "mock") before anything runs,
+    # so the capture is reproducible and can't inherit a developer's ambient
+    # SMART_ASSIGNMENT_DATA_SOURCE. Records what it pinned as provenance below.
+    dataset = apply_eval_dataset()
+    print(
+        f"[capture] eval dataset locked: {dataset.name} "
+        f"(data_source={dataset.data_source}, geocoder={dataset.geocoder})"
+    )
+
     _require_backend()
+    # Snapshot the run's provenance (dataset identity + resolved backend/model)
+    # BEFORE running, so the dataset content ref reflects the pristine fixtures.
+    provenance = run_provenance(dataset)
     captured = asyncio.run(_capture_all(cases))
+    fresh_entries = {eval_id: _entry(result, provenance) for eval_id, result in captured.items()}
 
     if args.check:
-        print(_serialize(captured))
+        print(_serialize(fresh_entries))
         for eval_id, result in sorted(captured.items()):
             print(f"[capture]   {eval_id}: escalated={result.escalated}")
-        print(f"[capture] --check: captured {len(captured)} response(s); no files written.")
+        print(
+            f"[capture] --check: captured {len(captured)} response(s) against dataset "
+            f"'{dataset.name}'; no files written."
+        )
         return
 
     # Merge into any existing captures rather than replacing wholesale -- a
     # SMART_ASSIGNMENT_EVAL_IDS-filtered run must not regress the other
     # already-committed cases' final_response back to null (see module docstring).
-    merged = {**load_captured_results(), **captured}
+    # Merging raw dicts preserves untouched entries' own provenance.
+    merged = {**_load_raw(), **fresh_entries}
     _CAPTURED_PATH.write_text(_serialize(merged), encoding="utf-8")
     # Regenerate the dataset so final_response is populated from the captured file.
     from eval.build_evalset import main as build_dataset

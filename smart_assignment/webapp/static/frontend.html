@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Smart Assignment — Choose a delivery slot</title>
+<meta name="description" content="The sales-consultant 'Choose a delivery slot' view — the delivery-slot options Smart Assignment generated for the prospect last run in the chat." />
+<!-- Shared Simulator CSS + the Frontend tab's own styles are injected at serve
+     time from reporting/page.py (_STYLE + _FE_STYLE). -->
+<style>/*__SHARED_STYLE__*/</style>
+<link rel="stylesheet" href="/static/frontend.css" />
+</head>
+<body>
+<div class="topbar">
+  <div class="fe-wrap topbar-in">
+    <span class="topbar-brand">Smart Assignment</span>
+    <nav class="pagenav" aria-label="Views">
+      <a href="/">Live agent</a>
+      <a href="/frontend" class="active" aria-current="page">Customer view</a>
+    </nav>
+  </div>
+</div>
+
+<main class="fe-wrap fe-page">
+  <div class="fe-hero">
+    <span class="fe-eyebrow">Salesforce Lightning Component</span>
+    <h1>Choose a delivery slot</h1>
+    <p class="fe-lead">The Salesforce-embedded view a sales consultant sees. Agent-ranked delivery
+      slots for a new prospect, grounded in route capacity, geographic clustering, slot match, and
+      openness. The rep <b>selects one of the agent&rsquo;s options</b> — no free-text entry, so no
+      slot is ever invented.</p>
+  </div>
+
+  <!-- provenance: this view is FED by the chat run (read-only), mirroring
+       production's Salesforce -> Smart Assignment -> sales consultant flow. -->
+  <div id="fe-source" class="fe-source" hidden>
+    <div class="src-flow">
+      <span class="src-step sf"><span class="ic">☁</span>Salesforce</span>
+      <span class="src-arrow">→</span>
+      <span class="src-step sa"><span class="ic">✦</span>Smart Assignment</span>
+      <span class="src-arrow">→</span>
+      <span class="src-step sc"><span class="ic">◉</span>Sales consultant<span class="src-now">you are here</span></span>
+    </div>
+    <div class="src-note">Showing the latest chat run · <b id="fe-prospect"></b></div>
+    <div class="src-sub">In this demo the prospect came from the chat on <code>/</code> (standing in
+      for the Salesforce feed) — this view is read-only.</div>
+  </div>
+
+  <!-- The "Choose a delivery slot" cards (frontendHtml) are rendered in here. -->
+  <div id="fe-view" aria-live="polite"></div>
+
+  <!-- Shown until this browser session has produced a result in the chat. -->
+  <div id="fe-empty" class="fe-empty" hidden>
+    <div class="em-ic" aria-hidden="true">🗓️</div>
+    <h2>No prospect yet</h2>
+    <p>Run a prospect in the <a href="/">Live agent</a> chat, then come back here to see the
+      delivery-slot options for the sales consultant to pick.</p>
+  </div>
+</main>
+
+<script src="/static/frontend.js"></script>
+</body>
+</html>

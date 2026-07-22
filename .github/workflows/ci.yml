@@ -1,8 +1,11 @@
 name: CI
 
-# Runs the full test suite on every merge (push) to main, and on pull requests
-# targeting main so changes are validated before they land. Can also be run
-# manually from the Actions tab.
+# Runs the full test suite on every merge (push) to main and the dev-eval
+# integration branch, and on pull requests targeting either, so changes are
+# validated before they land. Can also be run manually from the Actions tab.
+# (Only dev-eval is included among the dev branches -- it's where the eval
+# hardening integrates and where these jobs earn their green history before
+# any promotion to required checks.)
 #
 # IMPORTANT – GitHub IP allow list
 # If jobs fail at the "Checkout" step with "IP allow list" errors, an org admin
@@ -12,9 +15,9 @@ name: CI
 # This lets GitHub-hosted runner IPs reach private org repositories.
 on:
   push:
-    branches: [main]
+    branches: [main, dev-eval]
   pull_request:
-    branches: [main]
+    branches: [main, dev-eval]
   workflow_dispatch:
 
 permissions:
