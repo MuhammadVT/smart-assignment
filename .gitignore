@@ -42,3 +42,7 @@ deployment/phoenix/.run/
 Thumbs.db
 /creds.json
 data/dev/
+
+# Runtime human-feedback log (durable annotation store; not source)
+feedback_data/
+.venv-test/
