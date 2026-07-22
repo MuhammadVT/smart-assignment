@@ -364,9 +364,6 @@ _FE_STYLE = """
   .fe-wrap { max-width: 1320px; margin: 0 auto; padding: 0 24px; }
   .fe-eyebrow { color: var(--violet); font-weight: 800; font-size: 12px; letter-spacing: .12em;
     text-transform: uppercase; }
-  .fe-status { display: inline-flex; gap: 8px; align-items: center; font-size: 12px; color: var(--muted);
-    background: #eef2f8; border: 1px solid var(--line); border-radius: 999px; padding: 6px 13px; margin: 4px 0 22px; }
-  .fe-status b { color: var(--navy); font-weight: 700; }
   /* align-items: stretch so the left profile column matches the (tall) middle
      column's height; the map column opts out via align-self so it stays compact. */
   .fe-grid { display: grid; grid-template-columns: 280px minmax(0,1fr) 360px; gap: 24px; align-items: stretch; }
@@ -2951,7 +2948,6 @@ def _payload_notices(result: RecommendationResult) -> list[dict]:
 def build_page(results: list[RecommendationResult], config: Config) -> str:
     """Render the full three-tab overview HTML from live workflow results."""
     threshold = f"{config.total_score_threshold:.0%}"
-    fe_bar = f"{(config.route_slot_score_threshold if config.use_route_slot_scoring else config.total_score_threshold):.0%}"
     top_n = config.top_n_candidate_routes
     cards = "".join(_example_card(r) for r in results)
     payload = {r.customer.lookup_key: build_workflow_payload(r, config) for r in results}
@@ -3191,9 +3187,6 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
       <p class="sub">The Salesforce-embedded view a sales consultant sees. Agent-ranked delivery slots for a new
         prospect, grounded in route capacity, geographic clustering, slot match, and openness. The rep
         <b>selects one of the agent's options</b> — no free-text entry, so no slot is ever invented.</p>
-      <div class="fe-status">🛰️ <span><b>Grounded</b> on Houston route data · hard rules &amp; scoring are
-        <b>deterministic</b> · options ranked by the <b>LLM</b> and verified in code · auto-assign bar
-        <b>{fe_bar}</b></span></div>
       <div class="fe-picker">
         <span class="picker-label">Sample prospects — click one to load their delivery-slot view:</span>
         <div class="chips" id="fe-chips"></div>
