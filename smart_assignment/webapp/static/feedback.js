@@ -1,19 +1,23 @@
 /*
- * Shared human-feedback widget, used by both the Live-agent result card (app.js)
- * and the read-only Customer view (frontend.js).
+ * Shared human-feedback widget, used by:
+ *   - the Live-agent result card (app.js),
+ *   - the Customer view /frontend (frontend.js),
+ *   - the static GitHub Pages "Frontend" tab (reporting/page.py, demo mode).
  *
- * Design goals driven by review feedback:
- *  - PROMINENT: a distinct, accent-tinted panel with a clear heading, not a thin
- *    line under the result that's easy to miss.
- *  - SUBMIT ON A BUTTON: clicking 👍/👎 only *selects* a rating; the note and the
- *    rating are sent together when the user clicks "Send feedback". So a note
- *    typed after choosing a rating is never lost.
- *  - NO FABRICATED SCORE: a thumb is the categorical signal (label). We do not
- *    invent a numeric score the user never gave.
+ * Interaction (per review feedback):
+ *   - Clicking 👍/👎 captures the rating IMMEDIATELY (a no-note rating is never
+ *     lost if the user forgets to click Send).
+ *   - A note is optional: the "Send feedback" button is enabled only once a
+ *     rating is chosen AND a note has been typed, and it re-submits the rating
+ *     WITH the note. Curation keeps the latest record per decision, so the
+ *     note-bearing submit supersedes the quick one.
+ *   - No fabricated score: a thumb is the categorical signal.
  *
- * Self-contained: it injects its own CSS once (scoped under `.saf`) using the
- * page's own CSS variables with hex fallbacks, so it looks right on either page
- * without duplicating styles. Exposes `window.SAFeedback.mount(container, fb, opts)`.
+ * `opts.demo` (static page): don't POST — acknowledge locally, since GitHub Pages
+ * has no backend. Keeps the view in sync without pretending to persist.
+ *
+ * Self-contained: injects its own CSS once (scoped under `.saf`) using the page's
+ * CSS variables with hex fallbacks. Exposes `window.SAFeedback.mount(container, fb, opts)`.
  */
 (function () {
   if (window.SAFeedback) { return; }
@@ -51,6 +55,7 @@
     'background:var(--violet,#6b4fd8);border:0;border-radius:10px;padding:8px 18px;}',
     '.saf-send:disabled{opacity:.45;cursor:default;}',
     '.saf-status{font-size:12.5px;color:var(--muted,#59636f);}',
+    '.saf-status.ok{color:#16805a;font-weight:600;}',
     '.saf-done{background:color-mix(in srgb,#16805a 9%,var(--card,#fff));',
     'border-color:color-mix(in srgb,#16805a 30%,var(--line,#e1e6ee));}',
     '.saf-thanks{display:flex;align-items:center;gap:9px;font-weight:620;font-size:14px;',
@@ -73,31 +78,30 @@
     return e;
   }
 
-  function finish(panel) {
+  function finish(panel, message) {
     panel.classList.add('saf-done');
     panel.innerHTML = '';
     var t = el('div', 'saf-thanks');
     var c = el('span', 'saf-check'); c.textContent = '✓';
     var msg = document.createElement('span');
-    msg.textContent = 'Thanks — your feedback was recorded.';
+    msg.textContent = message;
     t.appendChild(c); t.appendChild(msg);
     panel.appendChild(t);
   }
 
   // Mount the widget into `container`. `fb` is the payload's feedback block
   // ({enabled, decision_id, decision_kind, trace_id, span_id}); a no-op unless
-  // it's present and enabled. `opts` tunes the copy + who the annotator is.
+  // it's present and enabled. `opts` tunes the copy, the annotator, and demo mode.
   function mount(container, fb, opts) {
     if (!container || !fb || !fb.enabled || !fb.decision_id) { return; }
     opts = opts || {};
+    var demo = !!opts.demo;
     ensureStyle();
 
     var panel = el('div', 'saf');
     var h = el('div', 'saf-h');
     h.textContent = opts.question || 'Was this the right call?';
-    if (opts.tag) {
-      var tag = el('span', 'saf-tag'); tag.textContent = opts.tag; h.appendChild(tag);
-    }
+    if (opts.tag) { var tag = el('span', 'saf-tag'); tag.textContent = opts.tag; h.appendChild(tag); }
     panel.appendChild(h);
     if (opts.sub) { var sub = el('div', 'saf-sub'); sub.textContent = opts.sub; panel.appendChild(sub); }
 
@@ -120,29 +124,20 @@
     actions.appendChild(send); actions.appendChild(status); panel.appendChild(actions);
 
     var selected = null;
-    function choose(label, btn) {
-      selected = label;
-      up.classList.toggle('sel', btn === up);
-      down.classList.toggle('sel', btn === down);
-      up.setAttribute('aria-pressed', String(btn === up));
-      down.setAttribute('aria-pressed', String(btn === down));
-      send.disabled = false;
-      status.textContent = '';
-    }
-    up.addEventListener('click', function () { choose('thumbs_up', up); });
-    down.addEventListener('click', function () { choose('thumbs_down', down); });
+    var doneMsg = demo
+      ? 'Thanks for trying it — in the live app this reaches the team.'
+      : 'Thanks — your feedback was recorded.';
 
-    send.addEventListener('click', function () {
-      if (!selected) { return; }
-      send.disabled = true; up.disabled = true; down.disabled = true;
-      status.textContent = 'Saving…';
-      fetch('/api/feedback', {
+    function post(label, noteText) {
+      // Returns a promise-ish; in demo mode resolves locally (no backend).
+      if (demo) { return Promise.resolve({ ok: true }); }
+      return fetch('/api/feedback', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           decision_id: fb.decision_id,
-          label: selected,
-          note: (note.value || '').trim() || null,
+          label: label,
+          note: noteText || null,
           session_id: opts.sessionId || '',
           annotator_id: opts.annotatorId || null,
           decision_kind: fb.decision_kind || 'final_response',
@@ -150,14 +145,59 @@
           span_id: fb.span_id || null
           // No `score`: a thumb is the categorical signal; we don't invent a number.
         })
-      })
-        .then(function (r) { return r.json(); })
+      }).then(function (r) { return r.json(); });
+    }
+
+    function updateSend() {
+      send.disabled = !(selected && note.value.trim().length);
+    }
+
+    // Clicking a thumb captures the rating IMMEDIATELY (no note).
+    function choose(label, btn) {
+      selected = label;
+      up.classList.toggle('sel', btn === up);
+      down.classList.toggle('sel', btn === down);
+      up.setAttribute('aria-pressed', String(btn === up));
+      down.setAttribute('aria-pressed', String(btn === down));
+      updateSend();
+      status.className = 'saf-status';
+      status.textContent = 'Saving…';
+      post(label, null)
         .then(function (res) {
-          if (res && res.ok) { finish(panel); }
-          else { status.textContent = 'Could not record feedback. Please try again.'; }
+          if (res && res.ok) {
+            status.className = 'saf-status ok';
+            status.textContent = demo
+              ? '✓ Recorded (preview) — add a note and Send to include it.'
+              : '✓ Recorded. Add a note and click Send to include it.';
+          } else {
+            status.className = 'saf-status';
+            status.textContent = 'Could not record — click again to retry.';
+          }
         })
         .catch(function () {
-          status.textContent = 'Could not record feedback. Please try again.';
+          status.className = 'saf-status';
+          status.textContent = 'Could not record — click again to retry.';
+        });
+    }
+    up.addEventListener('click', function () { choose('thumbs_up', up); });
+    down.addEventListener('click', function () { choose('thumbs_down', down); });
+    note.addEventListener('input', updateSend);
+
+    // Send re-submits the chosen rating WITH the note, then closes the panel.
+    send.addEventListener('click', function () {
+      if (!selected) { return; }
+      send.disabled = true; up.disabled = true; down.disabled = true;
+      status.className = 'saf-status'; status.textContent = 'Saving…';
+      post(selected, note.value.trim() || null)
+        .then(function (res) {
+          if (res && res.ok) { finish(panel, doneMsg); }
+          else {
+            status.textContent = 'Could not save your note. Please try again.';
+            up.disabled = false; down.disabled = false; send.disabled = false;
+          }
+        })
+        .catch(function () {
+          status.textContent = 'Could not save your note. Please try again.';
           up.disabled = false; down.disabled = false; send.disabled = false;
         });
     });

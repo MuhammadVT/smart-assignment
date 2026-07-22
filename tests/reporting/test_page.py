@@ -40,6 +40,20 @@ def test_page_includes_every_sample_customer():
         assert html_escape(customer.name) in html
 
 
+def test_frontend_tab_embeds_feedback_widget_in_demo_mode():
+    # Bullet: the static Frontend tab mirrors the live Customer view by embedding
+    # the SAME feedback widget, in demo mode (GitHub Pages has no backend).
+    config = Config()
+    html = build_page(_results(config), config)
+    assert "window.SAFeedback" in html          # the shared widget is embedded
+    assert 'id="fe-feedback"' in html            # its mount container exists
+    assert "mountFeedback(" in html              # and the frontend JS mounts it
+    assert "copy.demo = true" in html            # mounted in demo mode (no backend)
+    # Wording adapts to whether there are slot options.
+    assert "Did these delivery-slot options work?" in html
+    assert "Was this the right call for this customer?" in html
+
+
 def test_page_reflects_live_decisions_and_reasoning():
     config = Config()
     results = _results(config)
