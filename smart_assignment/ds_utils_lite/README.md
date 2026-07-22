@@ -1,7 +1,7 @@
 # ds-utils-lite
 
 Minimal SQL access layer extracted from `ds_utils`. Enough to run
-`smart_assignment/data_prep/prep_dlvry_tw_data.py` without the full ds_utils
+`smart_assignment/data_prep/prep_delivery_data.py` without the full ds_utils
 dependency tree.
 
 ## Install

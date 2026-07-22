@@ -42,17 +42,17 @@ from functools import lru_cache
 import pandas as pd
 
 import ds_utils
-from smart_assignment.data_prep.prep_dlvry_tw_data import (
-    CUST_TIER_CACHE_PATH,
+from smart_assignment.data_prep.prep_delivery_data import (
     DEFAULT_CUST_TIER,
-    create_sql_access,
-    DLVR_WINDOW_CACHE_PATH,
-    ROUTES_CACHE_PATH,
     build_route_summary_tables,
+    create_sql_access,
+    cust_tier_cache_path,
+    dlvr_window_cache_path,
     fetch_cust_tier_records,
     fetch_dlvr_window_records,
     fetch_route_stop_records,
     read_cached_dataframe,
+    routes_cache_path,
     summarize_committed_tw1_slots,
 )
 from smart_assignment.shared.models import (
@@ -284,7 +284,7 @@ def _fetch_live_route_stop_records() -> pd.DataFrame:
 
 
 def _load_cached_route_stop_records() -> pd.DataFrame:
-    return read_cached_dataframe(ROUTES_CACHE_PATH)
+    return read_cached_dataframe(routes_cache_path())
 
 
 def _fetch_live_cust_tier_records() -> pd.DataFrame:
@@ -292,7 +292,7 @@ def _fetch_live_cust_tier_records() -> pd.DataFrame:
 
 
 def _load_cached_cust_tier_records() -> pd.DataFrame:
-    return read_cached_dataframe(CUST_TIER_CACHE_PATH)
+    return read_cached_dataframe(cust_tier_cache_path())
 
 
 def _fetch_live_dlvr_window_records() -> pd.DataFrame:
@@ -300,7 +300,7 @@ def _fetch_live_dlvr_window_records() -> pd.DataFrame:
 
 
 def _load_cached_dlvr_window_records() -> pd.DataFrame:
-    return read_cached_dataframe(DLVR_WINDOW_CACHE_PATH)
+    return read_cached_dataframe(dlvr_window_cache_path())
 
 
 def _load_route_capacity_raw_df() -> pd.DataFrame:
@@ -312,7 +312,7 @@ def _load_route_capacity_raw_df() -> pd.DataFrame:
         except Exception as exc:
             logger.warning("Live SQL route pull failed (%s); falling back to cache.", exc)
     route_capacity_raw_df = _load_cached_route_stop_records()
-    logger.info("Loaded route stop records from cache: %s", ROUTES_CACHE_PATH)
+    logger.info("Loaded route stop records from cache: %s", routes_cache_path())
     return route_capacity_raw_df
 
 
@@ -326,7 +326,7 @@ def _load_cust_tier_records() -> pd.DataFrame | None:
             logger.warning("Live SQL cust tier pull failed (%s); falling back to cache.", exc)
     try:
         cust_tier_df = _load_cached_cust_tier_records()
-        logger.info("Loaded cust tier records from cache: %s", CUST_TIER_CACHE_PATH)
+        logger.info("Loaded cust tier records from cache: %s", cust_tier_cache_path())
         return cust_tier_df
     except Exception as cache_exc:
         logger.warning(
@@ -345,7 +345,7 @@ def _load_dlvr_window_records() -> pd.DataFrame:
         except Exception as exc:
             logger.warning("Live SQL delivery-window pull failed (%s); falling back to cache.", exc)
     dlvr_window_df = _load_cached_dlvr_window_records()
-    logger.info("Loaded delivery-window records from cache: %s", DLVR_WINDOW_CACHE_PATH)
+    logger.info("Loaded delivery-window records from cache: %s", dlvr_window_cache_path())
     return dlvr_window_df
 
 
