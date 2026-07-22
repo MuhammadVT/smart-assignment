@@ -11,14 +11,13 @@ per CLAUDE.md, human feedback must feed an offline, human-driven loop -- never a
 live one that silently mutates what the system does. Nothing here runs in the
 request path, and nothing it writes changes a decision.
 
-The mapping is honest about what it can and can't infer. A thumbs-down on a run
-that *recommended* is strong evidence the case should have been reviewed, so it
-suggests ``escalate``; a thumbs-up *confirms* the observed outcome as ground
-truth. Where the inversion isn't well-defined (a thumbs-down on an escalate, an
-unlabeled score) it records the human verdict verbatim and leaves
-``suggested_expected_outcome`` unset for a human to decide -- rather than
-inventing a target. The observed outcome and the intake facts come from the
-decision *context* the app captured at feedback time.
+The mapping is honest about what it can and can't infer. A thumbs-up *confirms*
+the observed outcome as ground truth. A thumbs-down is recorded verbatim with its
+note but leaves ``suggested_expected_outcome`` **unset** -- a negative says the
+decision was wrong, not *how* it was wrong (the reviewer may have wanted an
+escalation, or just a different feasible route/slot), so a human sets the target
+during promotion rather than the tool guessing one. The observed outcome and the
+intake facts come from the decision *context* the app captured at feedback time.
 """
 
 from __future__ import annotations
@@ -83,14 +82,17 @@ def _verdict(record: FeedbackRecord) -> str:
 
 def _suggested_outcome(verdict: str, observed_outcome: Optional[str]) -> Optional[str]:
     """The eval target the human verdict implies, or ``None`` when it isn't
-    cleanly invertible. A negative on a ``recommend`` -> should have been
-    ``escalate``; a positive -> the observed outcome is confirmed ground truth."""
-    observed = (observed_outcome or "").strip().lower() or None
+    cleanly invertible.
+
+    A **positive** confirms the observed outcome as ground truth, so that becomes
+    the suggested target. A **negative** is deliberately left ``None`` for a human
+    to decide: a thumbs-down means "this decision was wrong," but not *how* -- the
+    reviewer may have wanted an escalation, or simply a *different feasible route
+    or slot* than the one recommended. Guessing ``escalate`` would encode a target
+    the human never actually chose, so we surface the verdict + note and let the
+    reviewer set the expected outcome during promotion."""
     if verdict == "positive":
-        return observed
-    if verdict == "negative" and observed == "recommend":
-        return "escalate"
-    # A negative on an escalate, or an unknown observed outcome: leave to a human.
+        return (observed_outcome or "").strip().lower() or None
     return None
 
 

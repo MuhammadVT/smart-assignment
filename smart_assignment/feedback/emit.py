@@ -20,11 +20,14 @@ backend can never break feedback capture. The durable JSONL log
 (``store.append_record``) is the source of truth; this emit is the convenience
 layer on top.
 
-Span attributes are the non-PII quality signal only (annotator kind, label,
-score, decision kind, ids). The freeform ``note`` is deliberately NOT put on the
-span -- it can carry customer PII -- matching ``shared.tracing``'s "no prompt/response
-text on spans" stance. The note lives only in the durable log, gated by the
-``feedback_scrub_pii`` toggle.
+Span attributes are the non-PII quality signal (annotator kind, label, score,
+decision kind, ids) plus a ``has_note`` boolean. The freeform ``note`` *text* is
+put on the span only when ``feedback_scrub_pii`` is **off** -- the operator has
+explicitly opted into retaining PII (a trusted company network), so the real note
+should be visible on the backend too. With scrub on, the note is redacted before
+it reaches here and is still omitted from the span, keeping the
+no-PII-on-traces default. The ``feedback_scrub_pii`` toggle thus behaves
+consistently across the durable log and the trace backend.
 """
 
 from __future__ import annotations
@@ -102,8 +105,18 @@ def emit_feedback_span(config: "Config", record: FeedbackRecord) -> bool:
             attributes[_ATTR_PREFIX + "session_id"] = target.session_id
         if record.annotator_id:
             attributes[_ATTR_PREFIX + "annotator_id"] = record.annotator_id
-        # A boolean signal that a note exists, WITHOUT the note text (PII).
-        attributes[_ATTR_PREFIX + "has_note"] = bool((record.note or "").strip())
+        # A boolean signal that a note exists is always safe to record.
+        has_note = bool((record.note or "").strip())
+        attributes[_ATTR_PREFIX + "has_note"] = has_note
+        # The note TEXT can carry PII, so it goes on the span only when PII scrub
+        # is off -- i.e. the operator has opted into retaining PII (a trusted
+        # company network). With scrub on, the record's note is already redacted
+        # before it reaches here, and we still omit it from the span to keep the
+        # no-PII-on-traces default. So the toggle behaves consistently: scrub off
+        # -> real note visible in the log AND on the backend (Phoenix/Langfuse);
+        # scrub on -> redacted everywhere.
+        if has_note and not getattr(config, "feedback_scrub_pii", True):
+            attributes[_ATTR_PREFIX + "note"] = record.note
 
         kwargs = {"attributes": attributes}
         if link is not None:

@@ -39,3 +39,53 @@ def test_build_link_none_when_api_absent_or_invalid():
     # With no OpenTelemetry API installed this returns None (import guarded);
     # with it installed, an all-zero context is invalid and also returns None.
     assert _build_link("0" * 32, "0" * 16) is None
+
+
+# --- Note-on-span behavior gated by the PII toggle (bullet: note visible when
+#     scrub is off) -- exercised with a fake tracer so it works without the SDK.
+
+
+class _FakeSpanCM:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+class _FakeTracer:
+    def __init__(self):
+        self.attributes = None
+
+    def start_as_current_span(self, name, **kwargs):
+        self.attributes = kwargs.get("attributes", {})
+        return _FakeSpanCM()
+
+
+def _emit_with_fake_tracer(monkeypatch, config, note):
+    tracer = _FakeTracer()
+    monkeypatch.setattr(
+        "smart_assignment.shared.tracing.configure_tracing", lambda cfg: tracer
+    )
+    rec = FeedbackRecord(target=FeedbackTarget(decision_id="d1"), label="thumbs_down", note=note)
+    assert emit_feedback_span(config, rec) is True
+    return tracer.attributes
+
+
+def test_note_text_on_span_when_scrub_off(monkeypatch):
+    note = "wrong route for 5085 Westheimer"
+    attrs = _emit_with_fake_tracer(
+        monkeypatch, Config(use_tracing=True, feedback_scrub_pii=False), note
+    )
+    assert attrs["smart_assignment.feedback.has_note"] is True
+    # Scrub OFF -> the real note text is on the span (visible in Phoenix/Langfuse).
+    assert attrs["smart_assignment.feedback.note"] == note
+
+
+def test_note_text_absent_from_span_when_scrub_on(monkeypatch):
+    attrs = _emit_with_fake_tracer(
+        monkeypatch, Config(use_tracing=True, feedback_scrub_pii=True), "some note"
+    )
+    assert attrs["smart_assignment.feedback.has_note"] is True
+    # Scrub ON -> only the boolean, never the text.
+    assert "smart_assignment.feedback.note" not in attrs

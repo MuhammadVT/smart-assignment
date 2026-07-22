@@ -706,82 +706,21 @@
 
   // --- Human feedback control ----------------------------------------------
   // Rendered under a completed result only when the server advertised the
-  // capability AND stamped this payload with a decision_id. Posting is purely
-  // additive: it records a quality judgment against this exact decision and
-  // changes nothing about the result on screen.
-  function postFeedback(fb, label, noteEl, statusEl, buttons) {
-    var body = {
-      decision_id: fb.decision_id,
-      label: label,
-      score: label === 'thumbs_up' ? 1 : 0,
-      session_id: SESSION_ID,
-      decision_kind: fb.decision_kind || 'final_response',
-      trace_id: fb.trace_id || null,
-      span_id: fb.span_id || null,
-      note: (noteEl && noteEl.value.trim()) || null
-    };
-    for (var i = 0; i < buttons.length; i++) { buttons[i].disabled = true; }
-    statusEl.textContent = 'Saving…';
-    fetch('/api/feedback', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    })
-      .then(function (r) { return r.json(); })
-      .then(function (res) {
-        statusEl.textContent = (res && res.ok) ? 'Thanks — feedback recorded.'
-          : 'Could not record feedback.';
-      })
-      .catch(function () {
-        statusEl.textContent = 'Could not record feedback.';
-        for (var j = 0; j < buttons.length; j++) { buttons[j].disabled = false; }
-      });
-  }
-
+  // capability AND stamped this payload with a decision_id. The shared widget
+  // (feedback.js) owns the prominent panel, the select-then-send interaction,
+  // and the POST. Purely additive: it records a judgment against this exact
+  // decision and changes nothing about the result on screen.
   function renderFeedback(fb) {
-    if (!FEEDBACK_ENABLED || !fb || !fb.enabled || !fb.decision_id) { return; }
-    var bar = document.createElement('div');
-    bar.className = 'fb-bar';
-
-    var q = document.createElement('span');
-    q.className = 'fb-q';
-    q.textContent = 'Was this recommendation right?';
-    bar.appendChild(q);
-
-    var up = document.createElement('button');
-    up.type = 'button';
-    up.className = 'fb-btn fb-up';
-    up.textContent = '👍';
-    up.title = 'This recommendation was right';
-
-    var down = document.createElement('button');
-    down.type = 'button';
-    down.className = 'fb-btn fb-down';
-    down.textContent = '👎';
-    down.title = 'This recommendation was wrong';
-
-    var note = document.createElement('input');
-    note.type = 'text';
-    note.className = 'fb-note';
-    note.placeholder = 'Add a note (optional)';
-    note.maxLength = 500;
-
-    var status = document.createElement('span');
-    status.className = 'fb-status';
-
-    var buttons = [up, down];
-    up.addEventListener('click', function () {
-      postFeedback(fb, 'thumbs_up', note, status, buttons);
+    if (!FEEDBACK_ENABLED || !window.SAFeedback) { return; }
+    window.SAFeedback.mount(outEl, fb, {
+      tag: 'your feedback',
+      question: 'Was this the right call?',
+      sub: 'Tell the team if the agent got this delivery-slot decision right or wrong.',
+      upLabel: 'Looks right',
+      downLabel: 'Not right',
+      sessionId: SESSION_ID,
+      annotatorId: 'ops_web'
     });
-    down.addEventListener('click', function () {
-      postFeedback(fb, 'thumbs_down', note, status, buttons);
-    });
-
-    bar.appendChild(up);
-    bar.appendChild(down);
-    bar.appendChild(note);
-    bar.appendChild(status);
-    outEl.appendChild(bar);
   }
 
   // --- Phase 1: deterministic one-shot ---

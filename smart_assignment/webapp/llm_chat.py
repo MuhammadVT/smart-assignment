@@ -30,7 +30,7 @@ from typing import AsyncGenerator, Optional
 from smart_assignment.pipeline import run_slot_recommendation
 from smart_assignment.reasoning import DeterministicReasoner
 from smart_assignment.reporting.page import build_workflow_payload
-from smart_assignment.webapp.decision import feedback_context, traced_decision
+from smart_assignment.webapp.decision import traced_decision
 from smart_assignment.shared.config import DEFAULT_CONFIG, Config
 from smart_assignment.shared.geo import Geocoder
 from smart_assignment.shared.llm import offload_to_worker_thread
@@ -229,7 +229,7 @@ class LlmChatService:
         # loop here, and for the sage backend that call must run a coroutine on
         # this loop -- impossible if we block it. Offload the blocking re-run to a
         # worker thread so the loop stays free (see offload_to_worker_thread).
-        with traced_decision(DEFAULT_CONFIG) as trace_ctx:
+        with traced_decision(DEFAULT_CONFIG) as decision:
             result = await offload_to_worker_thread(
                 run_slot_recommendation,
                 customer,
@@ -237,6 +237,7 @@ class LlmChatService:
                 geocoder=self._geocoder,
                 reasoner=DeterministicReasoner(),
             )
+            decision.record(result)
         payload = build_workflow_payload(
             result, DEFAULT_CONFIG, reasoning_override=reasoning_override
         )
@@ -244,8 +245,8 @@ class LlmChatService:
         # stripped by app._attach_feedback before the payload is serialized, so
         # they never reach the browser. They let the feedback stamp carry the
         # recommend/escalate outcome and a real trace link (see webapp/decision.py).
-        payload["_decision"] = feedback_context(result)
-        payload["_trace"] = dict(trace_ctx) if trace_ctx else None
+        payload["_decision"] = decision.context
+        payload["_trace"] = dict(decision.coords) if decision.coords else None
         return payload
 
     # -- the turn stream --

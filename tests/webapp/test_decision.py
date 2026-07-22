@@ -72,15 +72,46 @@ def test_feedback_context_empty_for_none():
 
 def test_traced_decision_is_noop_without_tracing():
     cfg = Config(use_tracing=False)
-    with traced_decision(cfg) as coords:
+    with traced_decision(cfg) as decision:
         pass
     # No SDK / tracing off -> empty coordinates, and the body ran fine.
-    assert coords == {}
+    assert decision.coords == {}
+    assert decision.context == {}
 
 
-def test_traced_decision_yields_mutable_dict_body_runs():
+def test_record_attaches_decision_facts_to_span(monkeypatch):
+    # Bullet 6: the webapp.recommendation span carries the decision facts, not
+    # just a role label -- so it's informative in Phoenix. Inject a fake span.
+    import contextlib
+
+    from smart_assignment.webapp import decision as decision_mod
+
+    captured = {}
+
+    class _FakeSpan:
+        def set_attribute(self, key, value):
+            captured[key] = value
+
+    @contextlib.contextmanager
+    def _fake_llm_span(config, label, **attrs):
+        yield _FakeSpan()
+
+    monkeypatch.setattr(decision_mod, "llm_span", _fake_llm_span)
+    with traced_decision(Config(use_tracing=True)) as d:
+        d.record(_result(Decision.ESCALATED_LOW_SCORE, route_id="RTE-4200", cases=400))
+
+    assert captured["smart_assignment.decision.outcome"] == "escalate"
+    assert captured["smart_assignment.decision.recommended_route_id"] == "RTE-4200"
+    assert captured["smart_assignment.decision.order_quantity_cases"] == 400
+
+
+def test_traced_decision_record_populates_context_body_runs():
     ran = {}
-    with traced_decision(Config(use_tracing=False)) as coords:
+    with traced_decision(Config(use_tracing=False)) as decision:
         ran["did"] = True
-        assert isinstance(coords, dict)
+        # record() on a no-op span must not raise and must stash the context.
+        ctx = decision.record(_result(Decision.RECOMMENDED, route_id="RTE-7"))
+        assert ctx["recommended_route_id"] == "RTE-7"
     assert ran["did"] is True
+    assert decision.context["outcome"] == "recommend"
+    assert decision.coords == {}
