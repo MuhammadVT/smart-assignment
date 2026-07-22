@@ -606,8 +606,10 @@ decision runs INSIDE one span (webapp.recommendation)   [pipeline, unchanged]
         |  app._attach_feedback consumes and strips (they never reach the browser),
         |  minting a stable decision_id.
         v
-👍 / 👎 (+ optional note) on the result card   [static/app.js, shown only when
-        |                                        Config.use_human_feedback is on]
+pick 👍/👎, add an optional note, click "Send"   [static/feedback.js — one shared
+        |   widget on BOTH the Live-agent result card AND the Customer view
+        |   (/frontend, the end-user surface); shown only when feedback is on.
+        |   Rating + note submit together on the button, so a note is never lost.]
         v
 POST /api/feedback  (webapp/app.py, flag-gated)
         v
@@ -640,13 +642,16 @@ every persistence/emit failure degrades to a logged no-op (only a bad record
 raises, as a 400), the same discipline as `shared/tracing.py`. *A layer changes
 only what it owns* — `feedback/` only writes records.
 
-**PII is a toggle, not a policy.** Only the freeform `note` and free-text
-context values are scrub-eligible; labels/scores/route-ids always pass through,
-and span attributes never carry note text regardless (matching tracing's
-no-PII-on-spans stance). `feedback_scrub_pii` defaults **on** (safe for an
-off-network / shared deployment); on a trusted company network, where the real
-customer PII is *wanted* as part of the feedback, set
-`SMART_ASSIGNMENT_FEEDBACK_SCRUB_PII=false` and records are stored verbatim.
+**PII is a toggle, not a policy — and it's consistent across log and trace.**
+Only the freeform `note` and free-text context values are scrub-eligible;
+labels/route-ids always pass through. `feedback_scrub_pii` defaults **on** (safe
+for an off-network / shared deployment): the note is redacted in the durable log
+*and* the OTLP span carries only a `has_note` boolean, never the text. On a
+trusted company network, where the real customer PII is *wanted* as part of the
+feedback, set `SMART_ASSIGNMENT_FEEDBACK_SCRUB_PII=false`: records are stored
+verbatim **and** the note text rides on the `human_feedback` span (visible in
+Phoenix/Langfuse). So the one toggle governs PII everywhere, rather than the span
+being unconditionally text-free.
 
 **Real trace linkage, on every path.** A feedback item must link to a *real*
 trace, but feedback arrives after the decision span closed. So `traced_decision`
@@ -656,12 +661,16 @@ threading them onto the payload — rather than best-effort-reading a span that 
 already be gone at emit time. Both request paths use it (the streaming chat
 services and `/api/recommend`), so the link is populated whenever tracing is on,
 regardless of which brain served the turn. With tracing off the span is a no-op
-and feedback falls back to the always-present `decision_id`. The same helper
-module's `feedback_context` puts the recommend/escalate **outcome** (plus route,
-window, order size) into the curation snapshot on every path — so a 👎 on a
-streamed chat result carries the same structured facts a `/api/recommend` one
-did. These travel as private `_trace`/`_decision` payload hints that
-`app._attach_feedback` consumes and always strips.
+and feedback falls back to the always-present `decision_id`. The
+`webapp.recommendation` span also carries the decision's non-PII facts (outcome,
+route, window, order size) as `smart_assignment.decision.*` attributes, so it's
+informative in the trace backend even in offline deterministic mode (where there
+are no child LLM/tool spans). The same helper module's `feedback_context` puts
+the recommend/escalate **outcome** (plus route, window, order size) into the
+curation snapshot on every path — so a 👎 on a streamed chat result carries the
+same structured facts a `/api/recommend` one did. These travel as private
+`_trace`/`_decision` payload hints that `app._attach_feedback` consumes and
+always strips.
 
 **One neutral pipe for all annotators.** The schema's `annotator_kind ∈ {HUMAN,
 LLM, CODE}` means an LLM-as-judge score or a deterministic code check can flow
@@ -669,10 +678,14 @@ through the *same* record, log, and OTLP span later — so the existing eval
 judges (`eval/deepeval_llm.py`, `eval/sage_judge_llm.py`) can unify with human
 ground truth without a second mechanism. Curation (`feedback/curate.py`) only
 reads HUMAN records — those are the ground truth the auto-judges calibrate
-against — and emits *candidate* cases (with a `suggested_expected_outcome` only
-where the verdict cleanly implies one, e.g. a 👎 on a `recommend` → `escalate`)
-for a human to review and promote into `eval/golden_cases.py`. The boundary is
-the point: human feedback feeds an offline, human-gated loop.
+against — and emits *candidate* cases for a human to review and promote into
+`eval/golden_cases.py`. A `suggested_expected_outcome` is filled in only when the
+verdict cleanly implies one: a 👍 confirms the observed outcome as ground truth.
+A 👎 is left for the human to decide — a thumbs-down says the decision was wrong,
+not *how* (the reviewer may have wanted an escalation, or simply a different
+feasible route/slot), so guessing `escalate` would encode a target they never
+chose. The boundary is the point: human feedback feeds an offline, human-gated
+loop.
 
 ## Step 5, two ways: weighted-sum vs. grounded LLM judgment
 

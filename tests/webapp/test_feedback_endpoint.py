@@ -101,6 +101,23 @@ def test_post_feedback_rejects_bad_label(feedback_on):
     assert resp.status_code == 400
 
 
+def test_customer_view_api_exposes_feedback_block(feedback_on, monkeypatch):
+    # Bullet 7: the customer view (/api/frontend) surfaces the SAME decision's
+    # feedback block so the end-user 👍/👎 renders there too. Drive a chat turn
+    # (deterministic) so the session has a remembered result.
+    monkeypatch.setenv("SMART_ASSIGNMENT_WEBAPP_MODE", "deterministic")
+    sid = "sess-frontend-01"
+    client.post(
+        "/api/chat",
+        json={"session_id": sid,
+              "message": "1200 McKinney St, Houston, TX 77010, 90 cases, TUE 07:00-10:00"},
+    )
+    data = client.get("/api/frontend", params={"session": sid}).json()
+    assert data["ok"] is True
+    assert data["feedback"] and data["feedback"]["enabled"] is True
+    assert data["feedback"]["decision_id"]
+
+
 # --- Increments A + B: outcome context + real trace linkage plumbing ------------
 
 
@@ -133,6 +150,18 @@ def test_attach_feedback_strips_hints_even_when_disabled(monkeypatch):
     # No feedback block when off, but the private hints must not leak either.
     assert "feedback" not in payload
     assert "_decision" not in payload and "_trace" not in payload
+
+
+def test_feedback_without_score_stores_null(feedback_on):
+    # The widget no longer sends a score (a thumb is the categorical signal), so
+    # an omitted score must persist as null -- never a fabricated 0.0.
+    rec = client.post(
+        "/api/recommend",
+        json={"message": "1200 McKinney St, Houston, TX 77010, 90 cases, TUE 07:00-10:00"},
+    ).json()
+    decision_id = rec["payload"]["feedback"]["decision_id"]
+    client.post("/api/feedback", json={"decision_id": decision_id, "label": "thumbs_down"})
+    assert read_records(feedback_on)[0].score is None
 
 
 def test_recommend_persists_outcome_context(feedback_on):

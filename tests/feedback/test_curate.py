@@ -27,7 +27,7 @@ def _write(path, decision_id, label, *, created_at, context, annotator="HUMAN", 
     )
 
 
-def test_negative_on_recommend_suggests_escalate(tmp_path):
+def test_negative_leaves_suggested_outcome_for_human(tmp_path):
     log = tmp_path / "log.jsonl"
     _write(log, "d1", "thumbs_down", created_at="2026-01-01T00:00:00Z",
            context={"outcome": "recommend", "name": "Galleria Grill", "address": "5085 Westheimer"})
@@ -35,7 +35,10 @@ def test_negative_on_recommend_suggests_escalate(tmp_path):
     assert len(cases) == 1
     c = cases[0]
     assert c.human_verdict == "negative"
-    assert c.suggested_expected_outcome == "escalate"
+    # A thumbs-down says the decision was wrong, not HOW -- the human sets the
+    # target on promotion (they may want a different feasible route, not escalate).
+    assert c.suggested_expected_outcome is None
+    assert c.observed_outcome == "recommend"
     assert "Galleria Grill" in c.query
 
 

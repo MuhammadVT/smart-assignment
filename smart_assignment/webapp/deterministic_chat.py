@@ -31,7 +31,7 @@ from smart_assignment.reasoning import DeterministicReasoner
 from smart_assignment.reporting.page import build_workflow_payload
 from smart_assignment.shared.config import DEFAULT_CONFIG
 from smart_assignment.shared.geo import Geocoder
-from smart_assignment.webapp.decision import feedback_context, traced_decision
+from smart_assignment.webapp.decision import traced_decision
 from smart_assignment.shared.models import CustomerProfile, PreferredSlot
 from smart_assignment.webapp.parse import describe_slot, parse_intake
 
@@ -147,8 +147,9 @@ class DeterministicChatService:
             preferred_slot=st.slot,
         )
         try:
-            with traced_decision(DEFAULT_CONFIG) as trace_ctx:
+            with traced_decision(DEFAULT_CONFIG) as decision:
                 result = self._run(profile)
+                decision.record(result)
         except ValueError as exc:
             # Intake rejected the profile (e.g. couldn't geocode the address).
             st.ran = False
@@ -159,7 +160,7 @@ class DeterministicChatService:
         payload = build_workflow_payload(result, DEFAULT_CONFIG)
         # Transient feedback hints stripped by app._attach_feedback before the
         # payload reaches the browser (see webapp/decision.py).
-        payload["_decision"] = feedback_context(result)
-        payload["_trace"] = dict(trace_ctx) if trace_ctx else None
+        payload["_decision"] = decision.context
+        payload["_trace"] = dict(decision.coords) if decision.coords else None
         yield {"type": "visualization", "payload": payload}
         yield {"type": "done"}

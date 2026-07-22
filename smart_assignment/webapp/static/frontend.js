@@ -35,11 +35,38 @@
     if (empty) { empty.hidden = false; }
   }
 
+  // A persistent container for the feedback widget, kept OUTSIDE `host` so the
+  // frontendHtml innerHTML swap never wipes it.
+  function feedbackHost() {
+    var fh = document.getElementById('fe-feedback');
+    if (!fh) {
+      fh = document.createElement('div');
+      fh.id = 'fe-feedback';
+      if (host.parentNode) { host.parentNode.insertBefore(fh, host.nextSibling); }
+    }
+    fh.innerHTML = '';
+    return fh;
+  }
+
   function render(data) {
     host.innerHTML = data.frontendHtml || '';
     if (prospectEl) { prospectEl.textContent = decodeEntities(data.name); }
     if (source) { source.hidden = false; }
     if (empty) { empty.hidden = true; }
+    // End-user (Scenario A) feedback: the customer/rep rates the slot options for
+    // the SAME decision the chat produced (same decision_id). Only when the
+    // server enabled feedback -- data.feedback is absent otherwise.
+    if (window.SAFeedback && data.feedback && data.feedback.enabled) {
+      window.SAFeedback.mount(feedbackHost(), data.feedback, {
+        tag: 'your feedback',
+        question: 'Did these delivery-slot options work?',
+        sub: 'Let us know if these were the right options for this customer.',
+        upLabel: 'These work',
+        downLabel: 'Not quite',
+        sessionId: sessionId(),
+        annotatorId: 'customer_web'
+      });
+    }
   }
 
   // Delegated so it survives the innerHTML swap: click (or Enter/Space on) a

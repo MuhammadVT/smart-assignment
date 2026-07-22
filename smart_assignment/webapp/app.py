@@ -61,7 +61,7 @@ from smart_assignment.pipeline import run_slot_recommendation
 from smart_assignment.reasoning import DeterministicReasoner
 from smart_assignment.reporting.page import _FE_STYLE, _STYLE, build_workflow_payload
 from smart_assignment.shared.config import DEFAULT_CONFIG
-from smart_assignment.webapp.decision import feedback_context, traced_decision
+from smart_assignment.webapp.decision import traced_decision
 from smart_assignment.webapp.deterministic_chat import DeterministicChatService
 from smart_assignment.webapp.llm_chat import LlmChatService, resolve_mode
 from smart_assignment.webapp.parse import describe_slot, parse_intake
@@ -209,20 +209,21 @@ def recommend(req: RecommendRequest) -> RecommendResponse:
         return RecommendResponse(ok=False, reply=parsed.clarify, needs_input=True)
 
     try:
-        with traced_decision(DEFAULT_CONFIG) as trace_ctx:
+        with traced_decision(DEFAULT_CONFIG) as decision:
             result = run_slot_recommendation(
                 parsed.profile,
                 config=DEFAULT_CONFIG,
                 reasoner=DeterministicReasoner(),
             )
+            decision.record(result)
     except ValueError as exc:
         # Intake rejected the profile (e.g. malformed customer number). Surface
         # the reason as an agent reply instead of a 500.
         return RecommendResponse(ok=False, reply=str(exc), needs_input=True)
 
     payload = build_workflow_payload(result, DEFAULT_CONFIG)
-    payload["_decision"] = feedback_context(result)
-    payload["_trace"] = dict(trace_ctx) if trace_ctx else None
+    payload["_decision"] = decision.context
+    payload["_trace"] = dict(decision.coords) if decision.coords else None
     _attach_feedback(payload, "")
     slot_phrase = describe_slot(parsed.preferred_slot)
     reply = (
@@ -378,6 +379,10 @@ def frontend_result(session: str = "") -> dict:
         "name": payload.get("name", ""),
         "address": payload.get("address", ""),
         "frontendHtml": payload["frontendHtml"],
+        # Present only when human feedback is enabled (see _attach_feedback), so
+        # the customer view renders the end-user 👍/👎 on the SAME decision --
+        # the same decision_id the chat result carries.
+        "feedback": payload.get("feedback"),
     }
 
 
@@ -398,7 +403,7 @@ def _render_index() -> str:
     App CSS/JS get a ?v=<hash> query so a new build always busts the browser cache."""
     template = (_STATIC_DIR / "index.html").read_text(encoding="utf-8")
     html = template.replace("/*__SHARED_STYLE__*/", _STYLE)
-    for asset in ("app.css", "app.js"):
+    for asset in ("app.css", "app.js", "feedback.js"):
         html = html.replace(f"/static/{asset}", f"/static/{asset}?v={_asset_version(asset)}")
     return html
 
@@ -416,7 +421,7 @@ def _render_frontend() -> str:
     slot" cards render exactly like the published GitHub Pages Frontend tab."""
     template = (_STATIC_DIR / "frontend.html").read_text(encoding="utf-8")
     html = template.replace("/*__SHARED_STYLE__*/", _STYLE + _FE_STYLE)
-    for asset in ("frontend.css", "frontend.js"):
+    for asset in ("frontend.css", "frontend.js", "feedback.js"):
         html = html.replace(f"/static/{asset}", f"/static/{asset}?v={_asset_version(asset)}")
     return html
 
