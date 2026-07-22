@@ -332,6 +332,31 @@ class Config:
     # OTEL_EXPORTER_OTLP_* vars, or the LANGFUSE_* trio), not from this flag.
     use_tracing: bool = False
 
+    # --- Human feedback loop (opt-in, off by default) ---
+    # When True, the app captures human quality judgments (a thumbs-up/down, an
+    # optional score, and a freeform note) on a completed recommendation and
+    # records them via the `feedback` package. Purely additive and observational:
+    # feedback is written to a durable local log (the audit source of truth) and,
+    # when tracing is on, emitted as a vendor-neutral OTLP span linked to the
+    # decision's trace -- so ANY OTLP backend (Phoenix, Langfuse, Tempo, ...)
+    # ingests it with only an endpoint change. It NEVER changes a route, score,
+    # slot, or decision; any use of the labels (eval calibration, prompt tuning)
+    # is a separate, offline, human-driven step. Off by default: flag-off hides
+    # the UI, disables the endpoint, and imports nothing new.
+    use_human_feedback: bool = False
+    # When True (the default), a freeform feedback note and the captured decision
+    # context are PII-scrubbed before they are written to the durable log, so an
+    # off-network / shared deployment never persists customer identifiers. Turn
+    # it OFF on a trusted company network, where the real customer PII is *wanted*
+    # as part of the human feedback (who the account was, the actual address).
+    # Categorical labels/scores are never PII and are unaffected either way; span
+    # attributes never carry note text regardless (see feedback/emit.py).
+    feedback_scrub_pii: bool = True
+    # Absolute or relative path to the append-only JSONL feedback log -- the
+    # durable, backend-independent record of every annotation (the curation
+    # source of truth). Relative paths resolve against the process CWD.
+    feedback_log_path: str = "feedback_data/annotations.jsonl"
+
     def tier_harm_weight(self, tier: Optional[str]) -> float:
         """Harm weight for crowding a committed stop of the given Sysco tier --
         how much to protect it when scoring slot openness. Unknown/absent tiers
@@ -422,6 +447,13 @@ class Config:
             role_models=_role_models_from_env(),
             debug_sage_raw_response=_bool_env("SMART_ASSIGNMENT_DEBUG_SAGE_RESPONSE", False),
             use_tracing=_bool_env("SMART_ASSIGNMENT_USE_TRACING", False),
+            use_human_feedback=_bool_env("SMART_ASSIGNMENT_USE_HUMAN_FEEDBACK", False),
+            feedback_scrub_pii=_bool_env("SMART_ASSIGNMENT_FEEDBACK_SCRUB_PII", True),
+            feedback_log_path=(
+                os.environ.get("SMART_ASSIGNMENT_FEEDBACK_LOG_PATH")
+                or "feedback_data/annotations.jsonl"
+            ).strip()
+            or "feedback_data/annotations.jsonl",
         )
 
 

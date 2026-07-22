@@ -27,6 +27,9 @@
   var windowsRationale = document.getElementById('windows-rationale');
 
   var MODE = 'deterministic';
+  // Whether the server has the human-feedback loop enabled (Config.use_human_feedback).
+  // Only then do we render the thumbs-up/down control on a result.
+  var FEEDBACK_ENABLED = false;
   // Persist the session id per browser (not per page load) so the read-only
   // customer view (/frontend) can look up the slots this same session produced.
   var SESSION_KEY = 'sa_session_id';
@@ -698,6 +701,87 @@
     routesPanel.innerHTML = d.routesHtml || '';
     renderMap(d.map);        // assigns each route its colour
     paintRouteCards();       // colour-match the cards to the map markers
+    renderFeedback(d.feedback);   // thumbs-up/down, when the server enabled it
+  }
+
+  // --- Human feedback control ----------------------------------------------
+  // Rendered under a completed result only when the server advertised the
+  // capability AND stamped this payload with a decision_id. Posting is purely
+  // additive: it records a quality judgment against this exact decision and
+  // changes nothing about the result on screen.
+  function postFeedback(fb, label, noteEl, statusEl, buttons) {
+    var body = {
+      decision_id: fb.decision_id,
+      label: label,
+      score: label === 'thumbs_up' ? 1 : 0,
+      session_id: SESSION_ID,
+      decision_kind: fb.decision_kind || 'final_response',
+      trace_id: fb.trace_id || null,
+      span_id: fb.span_id || null,
+      note: (noteEl && noteEl.value.trim()) || null
+    };
+    for (var i = 0; i < buttons.length; i++) { buttons[i].disabled = true; }
+    statusEl.textContent = 'Saving…';
+    fetch('/api/feedback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (res) {
+        statusEl.textContent = (res && res.ok) ? 'Thanks — feedback recorded.'
+          : 'Could not record feedback.';
+      })
+      .catch(function () {
+        statusEl.textContent = 'Could not record feedback.';
+        for (var j = 0; j < buttons.length; j++) { buttons[j].disabled = false; }
+      });
+  }
+
+  function renderFeedback(fb) {
+    if (!FEEDBACK_ENABLED || !fb || !fb.enabled || !fb.decision_id) { return; }
+    var bar = document.createElement('div');
+    bar.className = 'fb-bar';
+
+    var q = document.createElement('span');
+    q.className = 'fb-q';
+    q.textContent = 'Was this recommendation right?';
+    bar.appendChild(q);
+
+    var up = document.createElement('button');
+    up.type = 'button';
+    up.className = 'fb-btn fb-up';
+    up.textContent = '👍';
+    up.title = 'This recommendation was right';
+
+    var down = document.createElement('button');
+    down.type = 'button';
+    down.className = 'fb-btn fb-down';
+    down.textContent = '👎';
+    down.title = 'This recommendation was wrong';
+
+    var note = document.createElement('input');
+    note.type = 'text';
+    note.className = 'fb-note';
+    note.placeholder = 'Add a note (optional)';
+    note.maxLength = 500;
+
+    var status = document.createElement('span');
+    status.className = 'fb-status';
+
+    var buttons = [up, down];
+    up.addEventListener('click', function () {
+      postFeedback(fb, 'thumbs_up', note, status, buttons);
+    });
+    down.addEventListener('click', function () {
+      postFeedback(fb, 'thumbs_down', note, status, buttons);
+    });
+
+    bar.appendChild(up);
+    bar.appendChild(down);
+    bar.appendChild(note);
+    bar.appendChild(status);
+    outEl.appendChild(bar);
   }
 
   // --- Phase 1: deterministic one-shot ---
@@ -826,7 +910,11 @@
   // Resolve the mode, then greet accordingly.
   fetch('/api/mode')
     .then(function (r) { return r.json(); })
-    .then(function (m) { MODE = m.mode || 'deterministic'; return m; })
+    .then(function (m) {
+      MODE = m.mode || 'deterministic';
+      FEEDBACK_ENABLED = !!(m && m.feedback);
+      return m;
+    })
     .catch(function () { return {}; })
     .then(function (m) {
       if (MODE === 'llm') {
