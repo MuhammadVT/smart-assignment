@@ -1,6 +1,21 @@
+"""Prepare the delivery datasets the assignment pipeline reads.
+
+Three sources are pulled over SQL (see `QUERIES`) and cached under `data/dev/`:
+
+- ``routes``      -- route stop facts, used for route capacity and geography.
+- ``cust_tier``   -- customer tier lookup (Perks / 4 / 5 / ...).
+- ``dlvr_window`` -- historical delivery-window facts, used to derive each
+  customer's committed TW1 slot.
+
+Run this module as a script to refresh the cache; `integrations/` and
+`analysis/` read the cached files rather than hitting SQL.
+"""
+
 import logging
 import os
+
 import pandas as pd
+
 import ds_utils
 
 pd.set_option('display.max_rows', 500)
@@ -11,7 +26,9 @@ logger = logging.getLogger(__name__)
 
 # Config
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-os.environ['DATABASE_CREDENTIALS_LOCATION'] = os.path.realpath(os.path.join(BASE_DIR, '..', '..', 'creds.json'))
+os.environ['DATABASE_CREDENTIALS_LOCATION'] = os.path.realpath(
+    os.path.join(BASE_DIR, '..', '..', 'creds.json')
+)
 QUERY_DIR = os.path.realpath(os.path.join(BASE_DIR, '..', 'queries'))
 DATA_LOCATION = os.path.realpath(os.path.join(BASE_DIR, '..', '..', 'data'))
 DEFAULT_CACHE_EXTENSION = '.parquet'  # '.csv.gz'
@@ -47,12 +64,12 @@ def cache_path(cache_name: str) -> str:
     return os.path.join(DEV_CACHE_DIR, f'{cache_name}.{extension}')
 
 
-def read_cached_dataframe(cache_path: str) -> pd.DataFrame:
+def read_cached_dataframe(path: str) -> pd.DataFrame:
     """Read a cached dataframe using the configured DEFAULT_CACHE_EXTENSION."""
     extension = DEFAULT_CACHE_EXTENSION.lstrip('.').lower()
     if extension == 'parquet':
         try:
-            return pd.read_parquet(cache_path)
+            return pd.read_parquet(path)
         except ImportError as exc:
             # pandas raises ImportError when no parquet engine is installed. Turn
             # its generic "Unable to find a usable engine" into an actionable
@@ -65,16 +82,12 @@ def read_cached_dataframe(cache_path: str) -> pd.DataFrame:
                 "'cache' extra: pip install -e \".[cache]\" (or uv pip install "
                 "-e \".[cache]\" / uv pip install pyarrow)."
             ) from exc
-    return pd.read_csv(cache_path)
+    return pd.read_csv(path)
 
 
 ROUTES_CACHE_PATH = cache_path('routes')
 CUST_TIER_CACHE_PATH = cache_path('cust_tier')
 DLVR_WINDOW_CACHE_PATH = cache_path('dlvr_window')
-OUTPUT_DIR = os.path.realpath(os.path.join(DATA_LOCATION, 'output'))
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-INPUT_DIR = os.path.realpath(os.path.join(DATA_LOCATION, 'input'))
-os.makedirs(INPUT_DIR, exist_ok=True)
 
 
 QUERIES = {
@@ -96,54 +109,31 @@ QUERIES = {
         'params': {},
         'cache_name': 'dlvr_window'
     },
-    # 'dot_base': {
-    #     'path': os.path.join(QUERY_DIR, 'dot_base.sql'),
-    #     'clusternm': 'SEED_PROD',
-    #     'params': {},
-    #     'cache_name': 'dot_base'
-    # },
-    # 'co_itm_dim': {
-    #     'path': os.path.join(QUERY_DIR, 'co_itm_dim.sql'),
-    #     'clusternm': 'SEED_PROD',
-    #     'params': {},
-    #     'cache_name': 'co_itm_dim'
-    # },
 }
 
 
-def fillin_qry_params(qry, qry_params):
-    for key, val in qry_params.items():
-        qry['params'][key] = val
-
-    return qry
-
-
-def fetch_route_stop_records(sql, qry=QUERIES['routes'], cache_nm='routes'):
+def fetch_route_stop_records(sql, qry=QUERIES['routes']):
     df = sql.select_sql(qry)
 
     assert len(df) > 0
-    df = df.drop_duplicates()
-    # assert df.duplicated(subset=['co_nbr', 'itm_nbr', 'fisc_wk_id']).sum() == 0
 
-    return df
+    return df.drop_duplicates()
 
 
-def fetch_cust_tier_records(sql, qry=QUERIES['cust_tier'], cache_nm='cust_tier'):
+def fetch_cust_tier_records(sql, qry=QUERIES['cust_tier']):
     df = sql.select_sql(qry)
 
     assert len(df) > 0
-    df = df.drop_duplicates(subset=['co_cust_nbr'])
 
-    return df
+    return df.drop_duplicates(subset=['co_cust_nbr'])
 
 
-def fetch_dlvr_window_records(sql, qry=QUERIES['dlvr_window'], cache_nm='dlvr_window'):
+def fetch_dlvr_window_records(sql, qry=QUERIES['dlvr_window']):
     df = sql.select_sql(qry)
 
     assert len(df) > 0
-    df = df.drop_duplicates()
 
-    return df
+    return df.drop_duplicates()
 
 
 def summarize_committed_tw1_slots(
@@ -151,7 +141,6 @@ def summarize_committed_tw1_slots(
     cust_tier_df: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Derive committed TW1 slot per route/customer from historical delivery-window facts."""
-    
     df = dlvr_window_df.copy()
     df['tw1opendatetime'] = pd.to_datetime(df['tw1opendatetime'])
     df['tw1closedatetime'] = pd.to_datetime(df['tw1closedatetime'])
@@ -160,11 +149,13 @@ def summarize_committed_tw1_slots(
     df['tw1closedate'] = df['tw1closedatetime'].dt.date
     df['tw1closetime'] = df['tw1closedatetime'].dt.time
 
-    df = df.sort_values(by=['route_id', 'co_cust_nbr', 'rte_strt_dt'], ascending=[True, True, False]) 
+    # Latest route start date first, so the 'first' aggregates below pick the
+    # most recently committed window per route/customer.
+    df = df.sort_values(
+        by=['route_id', 'co_cust_nbr', 'rte_strt_dt'],
+        ascending=[True, True, False],
+    )
 
-    # cols_to_keep = ['route_id', 'rte_strt_dt', 'co_cust_nbr', 'latitude', 'longitude', 
-    # 'tw1opendate', 'tw1opentime', 'tw1closedate', 'tw1closetime']
-    # committed = df.drop_duplicates(subset=['route_id', 'co_cust_nbr'])
     committed = df.groupby(['route_id', 'co_cust_nbr']).agg(
         tw1opendate=('tw1opendate', 'first'),
         tw1closedate=('tw1closedate', 'first'),
@@ -174,37 +165,12 @@ def summarize_committed_tw1_slots(
         longitude=('longitude', 'mean'),
     ).reset_index()
 
-    # committed = committed[committed['tw1opendatetime'] < committed['tw1closedatetime']].copy()
-    
     if cust_tier_df is not None:
         # Add customer tier when available and keep higher-priority tiers.
         committed = attach_cust_tier_to_stop_locations(committed, cust_tier_df)
         committed = committed[committed['cust_tier'].isin(['4', '5', 'Perks'])].copy()
 
     return committed
-
-
-def normalize_dlvry_day_nm(series: pd.Series) -> pd.Series:
-    """Canonical weekday name for joins (routes SQL uses padded TO_CHAR 'Day' labels)."""
-    return series.astype(str).str.strip().str.title()
-
-
-def merge_stop_locations_with_dlvr_window(
-    stop_locations: pd.DataFrame,
-    dlvr_window_df: pd.DataFrame,
-) -> pd.DataFrame:
-    """Attach delivery-window attributes to route stops by customer and weekday."""
-    stops = stop_locations.copy()
-    window_df = dlvr_window_df.drop(columns=["cust_tier"], errors="ignore").copy()
-    stops["dlvry_day_nm"] = normalize_dlvry_day_nm(stops["dlvry_day_nm"])
-    window_df["tw_dlvry_day_nm"] = normalize_dlvry_day_nm(window_df["tw_dlvry_day_nm"])
-    merged = stops.merge(
-        window_df,
-        left_on=["co_cust_nbr", "dlvry_day_nm"],
-        right_on=["co_cust_nbr", "tw_dlvry_day_nm"],
-        how="left",
-    )
-    return merged
 
 
 def prepare_route_capacity_raw_data(route_capacity_raw_df: pd.DataFrame) -> pd.DataFrame:
@@ -256,9 +222,10 @@ def attach_cust_tier_to_stop_locations(
     return stop_locations
 
 
-def summarize_stop_geographies(committed_tw1_slots_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+def summarize_stop_geographies(
+    committed_tw1_slots_df: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Stop coordinates and route service centers keyed by route_id and dlvry_day_nm."""
-
     stop_locations = committed_tw1_slots_df.groupby(['route_id', 'co_cust_nbr']).agg(
         latitude=('latitude', 'mean'),
         longitude=('longitude', 'mean'),
@@ -292,21 +259,6 @@ def build_route_summary_tables(
     return route_summary, stop_locations
 
 
-# def pull_dot_base_data(sql, strt_wk, end_wk, markets, qry=QUERIES['dot_base'], cache_nm=None):
-#
-#     qry = copy.deepcopy(qry)
-#     if cache_nm is None:
-#         qry['cache_name'] = qry['cache_name'] + '_mkt_' + '_'.join(markets) + '_fw_' + '_'.join(map(str, [strt_wk, end_wk]))
-#     markets_str = ','.join(f"'{x}'" for x in markets)
-#     qry_params = {'START_WEEK': strt_wk, 'END_WEEK': end_wk, 'MARKET': markets_str}
-#     # df = PrepException.pull_data(sql, qry, qry_params=qry_params)
-#     df = PrepException.pull_data(sql, qry, qry_params=qry_params,
-#                                  data_grain=['co_nbr', 'true_vndr_nbr', 'src_vndr_nbr', 'vndr_ship_pt_nbr',
-#                                              'vndr_sb_grp_id', 'itm_nbr'])
-#
-#     return df
-
-
 if __name__ == '__main__':
 
     sql = create_sql_access(ignore_cache=IGNORE_CACHE)
@@ -318,8 +270,7 @@ if __name__ == '__main__':
     # Find committed time slot from historical data.
     committed_tw1_slots_df = summarize_committed_tw1_slots(raw_dlvr_window_df, cust_tier_df)
 
-    df_routes, df_stop_locations = build_route_summary_tables(route_capacity_raw_df, committed_tw1_slots_df)
-
-
-
-
+    df_routes, df_stop_locations = build_route_summary_tables(
+        route_capacity_raw_df,
+        committed_tw1_slots_df,
+    )

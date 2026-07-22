@@ -1,4 +1,4 @@
-"""Verify prep_dlvry_tw_data works against the vendored ds-utils-lite dependency."""
+"""Verify prep_delivery_data works against the vendored ds-utils-lite dependency."""
 
 from unittest.mock import MagicMock
 
@@ -9,7 +9,7 @@ from ds_utils import Data
 from ds_utils.deploy.mode import Mode
 from ds_utils.sql import SQLAccess
 
-from smart_assignment.data_prep import prep_dlvry_tw_data as prep
+from smart_assignment.data_prep import prep_delivery_data as prep
 
 
 def test_ds_utils_lite_imports():

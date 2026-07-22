@@ -42,7 +42,7 @@ from functools import lru_cache
 import pandas as pd
 
 import ds_utils
-from smart_assignment.data_prep.prep_dlvry_tw_data import (
+from smart_assignment.data_prep.prep_delivery_data import (
     CUST_TIER_CACHE_PATH,
     DEFAULT_CUST_TIER,
     create_sql_access,
