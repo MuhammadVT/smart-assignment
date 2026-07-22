@@ -578,6 +578,115 @@ OTLP endpoint + Basic-auth header (Langfuse ingests OpenTelemetry directly). So
 pointing dev at `localhost:3000` vs. prod at a Cloud Run instance is pure config.
 Install with the `observability` extra (`pip install -e ".[observability]"`).
 
+## Human feedback loop (`feedback/` package, opt-in)
+
+The tracing layer above makes a decision *observable*; this layer lets a human
+*judge* it and feeds that judgment back into the eval machinery — the production
+feedback flywheel (traces → human labels → dataset curation → calibrate evals →
+tune), built to the repo's standard guarantees.
+
+It is deliberately **vendor-free**. OpenTelemetry has no standard
+annotation/score signal, and every vendor's annotation REST API is
+vendor-specific — so a feedback item is represented the one portable way:
+feedback arrives *after* the decision span has already closed (a human clicks
+👎 seconds later, and an exported span can't be mutated), so each annotation is
+emitted as its **own OTLP span**, `human_feedback`, **linked** to the decision's
+span via a standard OpenTelemetry span link and the original `trace_id`. Any
+OTLP backend — Phoenix now, Langfuse later, Tempo/Jaeger/anything after —
+ingests it and correlates by trace id, with only the exporter *endpoint*
+differing. This reuses the exact exporter/provider seam in `shared/tracing.py`;
+no vendor SDK is imported.
+
+```
+decision runs INSIDE one span (webapp.recommendation)   [pipeline, unchanged]
+        |  webapp/decision.traced_decision wraps the run and captures that span's
+        |  trace/span ids WHILE it is live; webapp/decision.feedback_context pulls
+        |  the recommend/escalate outcome + route/window/order from the result.
+        |  both ride the payload as private `_trace` / `_decision` hints that
+        |  app._attach_feedback consumes and strips (they never reach the browser),
+        |  minting a stable decision_id.
+        v
+pick 👍/👎, add an optional note, click "Send"   [static/feedback.js — one shared
+        |   widget on BOTH the Live-agent result card AND the Customer view
+        |   (/frontend, the end-user surface); shown only when feedback is on.
+        |   Rating + note submit together on the button, so a note is never lost.]
+        v
+POST /api/feedback  (webapp/app.py, flag-gated)
+        v
+record_feedback(config, record)              [feedback/capture.py]
+   1. gate on use_human_feedback (off -> no-op, imports nothing further)
+   2. validate deterministically (feedback/schema.py) -> 400 on a bad record
+   3. scrub PII if feedback_scrub_pii (feedback/scrub.py; default ON)
+   4. PERSIST FIRST to the append-only JSONL log (feedback/store.py) -- the
+      durable audit source of truth, independent of any backend
+   5. best-effort OTLP emit (feedback/emit.py) -- silent no-op if tracing off
+        v
+scripts/curate_feedback.py  ->  feedback/curate.py                 [OFFLINE]
+   read HUMAN labels -> candidate eval cases aligned to eval/golden_cases.py
+   (a human reviews + promotes; nothing auto-mutates the golden set or a prompt)
+```
+
+**How the guarantees hold.** *Opt-in, default off* — everything is gated by
+`Config.use_human_feedback` (env `SMART_ASSIGNMENT_USE_HUMAN_FEEDBACK`); flag-off
+hides the UI (advertised via `/api/mode`), disables the endpoint, and imports
+nothing new. *Never worse than the baseline* — feedback is purely observational;
+it touches no route, score, slot, or decision, and any *use* of the labels
+(eval calibration, prompt tuning) is a separate, **offline, human-driven** step,
+never a live loop that mutates what the system does. *No fabricated actionable
+values* — a record carries a human judgment, never a value a downstream system
+acts on, and a deterministic validator (`schema.validate_feedback`) rejects a
+malformed one before anything persists it. *Auditable & durable* — the JSONL log
+is the source of truth, written before the best-effort emit, so an annotation
+survives a down trace backend. *Credential-free, defensive* — lazy imports, and
+every persistence/emit failure degrades to a logged no-op (only a bad record
+raises, as a 400), the same discipline as `shared/tracing.py`. *A layer changes
+only what it owns* — `feedback/` only writes records.
+
+**PII is a toggle, not a policy — and it's consistent across log and trace.**
+Only the freeform `note` and free-text context values are scrub-eligible;
+labels/route-ids always pass through. `feedback_scrub_pii` defaults **on** (safe
+for an off-network / shared deployment): the note is redacted in the durable log
+*and* the OTLP span carries only a `has_note` boolean, never the text. On a
+trusted company network, where the real customer PII is *wanted* as part of the
+feedback, set `SMART_ASSIGNMENT_FEEDBACK_SCRUB_PII=false`: records are stored
+verbatim **and** the note text rides on the `human_feedback` span (visible in
+Phoenix/Langfuse). So the one toggle governs PII everywhere, rather than the span
+being unconditionally text-free.
+
+**Real trace linkage, on every path.** A feedback item must link to a *real*
+trace, but feedback arrives after the decision span closed. So `traced_decision`
+(`webapp/decision.py`) runs the pipeline inside one explicit
+`webapp.recommendation` span and reads its coordinates *while the span is live*,
+threading them onto the payload — rather than best-effort-reading a span that may
+already be gone at emit time. Both request paths use it (the streaming chat
+services and `/api/recommend`), so the link is populated whenever tracing is on,
+regardless of which brain served the turn. With tracing off the span is a no-op
+and feedback falls back to the always-present `decision_id`. The
+`webapp.recommendation` span also carries the decision's non-PII facts (outcome,
+route, window, order size) as `smart_assignment.decision.*` attributes, so it's
+informative in the trace backend even in offline deterministic mode (where there
+are no child LLM/tool spans). The same helper module's `feedback_context` puts
+the recommend/escalate **outcome** (plus route, window, order size) into the
+curation snapshot on every path — so a 👎 on a streamed chat result carries the
+same structured facts a `/api/recommend` one did. These travel as private
+`_trace`/`_decision` payload hints that `app._attach_feedback` consumes and
+always strips.
+
+**One neutral pipe for all annotators.** The schema's `annotator_kind ∈ {HUMAN,
+LLM, CODE}` means an LLM-as-judge score or a deterministic code check can flow
+through the *same* record, log, and OTLP span later — so the existing eval
+judges (`eval/deepeval_llm.py`, `eval/sage_judge_llm.py`) can unify with human
+ground truth without a second mechanism. Curation (`feedback/curate.py`) only
+reads HUMAN records — those are the ground truth the auto-judges calibrate
+against — and emits *candidate* cases for a human to review and promote into
+`eval/golden_cases.py`. A `suggested_expected_outcome` is filled in only when the
+verdict cleanly implies one: a 👍 confirms the observed outcome as ground truth.
+A 👎 is left for the human to decide — a thumbs-down says the decision was wrong,
+not *how* (the reviewer may have wanted an escalation, or simply a different
+feasible route/slot), so guessing `escalate` would encode a target they never
+chose. The boundary is the point: human feedback feeds an offline, human-gated
+loop.
+
 ## Step 5, two ways: weighted-sum vs. grounded LLM judgment
 
 Step 5 (recommend-or-escalate) has two interchangeable *decision strategies*

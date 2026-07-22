@@ -48,6 +48,12 @@ def test_get_tracer_is_none_when_flag_off():
     assert tracing._get_tracer(Config(use_tracing=False)) is None
 
 
+def test_current_trace_context_is_none_without_active_span():
+    # No OpenTelemetry SDK / no recording span in the offline env -> None, never
+    # a raise. Feedback treats trace coordinates as best-effort on this basis.
+    assert tracing.current_trace_context() is None
+
+
 def test_flag_off_does_not_attempt_configuration():
     # If configuration were attempted with the flag off, this patched _configure
     # would blow up the call. It must never be reached.

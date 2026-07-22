@@ -35,11 +35,56 @@
     if (empty) { empty.hidden = false; }
   }
 
+  // A persistent container for the feedback widget, kept OUTSIDE `host` so the
+  // frontendHtml innerHTML swap never wipes it.
+  function feedbackHost() {
+    var fh = document.getElementById('fe-feedback');
+    if (!fh) {
+      fh = document.createElement('div');
+      fh.id = 'fe-feedback';
+      if (host.parentNode) { host.parentNode.insertBefore(fh, host.nextSibling); }
+    }
+    fh.innerHTML = '';
+    return fh;
+  }
+
   function render(data) {
     host.innerHTML = data.frontendHtml || '';
     if (prospectEl) { prospectEl.textContent = decodeEntities(data.name); }
     if (source) { source.hidden = false; }
     if (empty) { empty.hidden = true; }
+    // End-user (Scenario A) feedback: the customer/rep rates the SAME decision the
+    // chat produced (same decision_id). Only when the server enabled feedback --
+    // data.feedback is absent otherwise. The wording adapts to whether there are
+    // slot options to pick (a recommend) or the prospect was escalated with none.
+    if (window.SAFeedback && data.feedback && data.feedback.enabled) {
+      var hasSlots = host.querySelectorAll('.fe-opt').length > 0;
+      window.SAFeedback.mount(feedbackHost(), data.feedback, feedbackCopy(hasSlots, {
+        sessionId: sessionId(),
+        annotatorId: 'customer_web'
+      }));
+    }
+  }
+
+  // Shared copy for the feedback widget, so the wording matches the state of the
+  // view: real slot options vs. an escalation with none to choose.
+  function feedbackCopy(hasSlots, extra) {
+    var base = hasSlots ? {
+      tag: 'your feedback',
+      question: 'Did these delivery-slot options work?',
+      sub: 'Let us know if these were the right options for this customer.',
+      upLabel: 'These work',
+      downLabel: 'Not quite'
+    } : {
+      tag: 'your feedback',
+      question: 'Was this the right call for this customer?',
+      sub: 'No slot could be offered here — this prospect was sent to a specialist to '
+        + 'review. Tell us if that was the right move.',
+      upLabel: 'Right call',
+      downLabel: 'Not right'
+    };
+    if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) { base[k] = extra[k]; } } }
+    return base;
   }
 
   // Delegated so it survives the innerHTML swap: click (or Enter/Space on) a

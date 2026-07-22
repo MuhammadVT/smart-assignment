@@ -1072,11 +1072,36 @@ _FRONTEND_JS = """
     if (card) { ev.preventDefault(); selectCard(card); }
   });
 
+  // Mount the SAME feedback widget the live Customer view uses, in DEMO mode
+  // (GitHub Pages has no backend, so it acknowledges locally instead of posting).
+  // Wording adapts to whether there are slot options or the prospect escalated.
+  function mountFeedback(key) {
+    var fh = document.getElementById('fe-feedback');
+    if (!fh || !window.SAFeedback) { return; }
+    fh.innerHTML = '';
+    var hasSlots = host.querySelectorAll('.fe-opt').length > 0;
+    var copy = hasSlots ? {
+      tag: 'preview', question: 'Did these delivery-slot options work?',
+      sub: 'Let us know if these were the right options for this customer.',
+      upLabel: 'These work', downLabel: 'Not quite'
+    } : {
+      tag: 'preview', question: 'Was this the right call for this customer?',
+      sub: 'No slot could be offered here — this prospect was sent to a specialist to '
+        + 'review. Tell us if that was the right move.',
+      upLabel: 'Right call', downLabel: 'Not right'
+    };
+    copy.demo = true;
+    window.SAFeedback.mount(
+      fh, { enabled: true, decision_id: 'demo-' + key, decision_kind: 'final_response' }, copy
+    );
+  }
+
   function show(key, btn) {
     host.innerHTML = DATA[key].frontendHtml || '';
     var chips = chipsEl.querySelectorAll('.chip-btn');
     for (var i = 0; i < chips.length; i++) { chips[i].classList.remove('selected'); }
     if (btn) { btn.classList.add('selected'); }
+    mountFeedback(key);
   }
 
   // Default to Woodlands Fresh Cafe (two feasible slots -> best shows off the
@@ -2945,6 +2970,18 @@ def _payload_notices(result: RecommendationResult) -> list[dict]:
     return notices
 
 
+def _feedback_widget_js() -> str:
+    """The shared feedback widget's JS, read from the webapp static dir so the
+    published Frontend tab reuses the *exact same* control as the live Customer
+    view (in demo mode -- GitHub Pages has no backend). Returns ``""`` if the file
+    is unavailable, so page generation never breaks over a missing asset."""
+    try:
+        path = Path(__file__).resolve().parent.parent / "webapp" / "static" / "feedback.js"
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
 def build_page(results: list[RecommendationResult], config: Config) -> str:
     """Render the full three-tab overview HTML from live workflow results."""
     threshold = f"{config.total_score_threshold:.0%}"
@@ -2956,7 +2993,9 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
         + json.dumps(payload, ensure_ascii=False)
         + "</script>"
     )
-    js_block = "<script>" + _SIM_JS + _TABS_JS + _FRONTEND_JS + "</script>"
+    js_block = (
+        "<script>" + _feedback_widget_js() + _SIM_JS + _TABS_JS + _FRONTEND_JS + "</script>"
+    )
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -3192,6 +3231,10 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
         <div class="chips" id="fe-chips"></div>
       </div>
       <div id="fe-view"></div>
+      <!-- Feedback panel, kept outside #fe-view so the prospect-swap innerHTML
+           doesn't wipe it. Populated by _FRONTEND_JS in demo mode (no backend on
+           GitHub Pages) so this view stays in sync with the live Customer view. -->
+      <div id="fe-feedback"></div>
     </div>
   </section>
 </div>

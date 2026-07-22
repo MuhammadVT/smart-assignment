@@ -27,6 +27,9 @@
   var windowsRationale = document.getElementById('windows-rationale');
 
   var MODE = 'deterministic';
+  // Whether the server has the human-feedback loop enabled (Config.use_human_feedback).
+  // Only then do we render the thumbs-up/down control on a result.
+  var FEEDBACK_ENABLED = false;
   // Persist the session id per browser (not per page load) so the read-only
   // customer view (/frontend) can look up the slots this same session produced.
   var SESSION_KEY = 'sa_session_id';
@@ -698,6 +701,26 @@
     routesPanel.innerHTML = d.routesHtml || '';
     renderMap(d.map);        // assigns each route its colour
     paintRouteCards();       // colour-match the cards to the map markers
+    renderFeedback(d.feedback);   // thumbs-up/down, when the server enabled it
+  }
+
+  // --- Human feedback control ----------------------------------------------
+  // Rendered under a completed result only when the server advertised the
+  // capability AND stamped this payload with a decision_id. The shared widget
+  // (feedback.js) owns the prominent panel, the select-then-send interaction,
+  // and the POST. Purely additive: it records a judgment against this exact
+  // decision and changes nothing about the result on screen.
+  function renderFeedback(fb) {
+    if (!FEEDBACK_ENABLED || !window.SAFeedback) { return; }
+    window.SAFeedback.mount(outEl, fb, {
+      tag: 'your feedback',
+      question: 'Was this the right call?',
+      sub: 'Tell the team if the agent got this delivery-slot decision right or wrong.',
+      upLabel: 'Looks right',
+      downLabel: 'Not right',
+      sessionId: SESSION_ID,
+      annotatorId: 'ops_web'
+    });
   }
 
   // --- Phase 1: deterministic one-shot ---
@@ -826,7 +849,11 @@
   // Resolve the mode, then greet accordingly.
   fetch('/api/mode')
     .then(function (r) { return r.json(); })
-    .then(function (m) { MODE = m.mode || 'deterministic'; return m; })
+    .then(function (m) {
+      MODE = m.mode || 'deterministic';
+      FEEDBACK_ENABLED = !!(m && m.feedback);
+      return m;
+    })
     .catch(function () { return {}; })
     .then(function (m) {
       if (MODE === 'llm') {

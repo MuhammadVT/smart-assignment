@@ -1,40 +1,25 @@
-"""Verify prep_dlvry_tw_data works with ds-utils-lite."""
+"""Verify prep_delivery_data works against the vendored ds-utils-lite dependency."""
 
-import importlib.util
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pandas as pd
-import pytest
 
+import ds_utils
 from ds_utils import Data
 from ds_utils.deploy.mode import Mode
 from ds_utils.sql import SQLAccess
 
-
-REPO_ROOT = Path(__file__).resolve().parents[3]
-PREP_MODULE_PATH = REPO_ROOT / "smart_assignment" / "data_prep" / "prep_dlvry_tw_data.py"
-
-
-def _load_prep_module():
-    spec = importlib.util.spec_from_file_location("prep_dlvry_tw_data", PREP_MODULE_PATH)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+from smart_assignment.data_prep import prep_delivery_data as prep
 
 
 def test_ds_utils_lite_imports():
-    import ds_utils
-
     assert ds_utils.__version__ == "0.3.6-beta"
     assert hasattr(ds_utils, "SQLAccess")
     assert hasattr(ds_utils, "Mode")
     assert hasattr(ds_utils, "Data")
 
 
-def test_pull_routes_data_with_mock_sql():
-    prep = _load_prep_module()
-
+def test_fetch_route_stop_records_with_mock_sql():
     raw = pd.DataFrame(
         {
             "co_nbr": ["067", "067"],
@@ -48,7 +33,7 @@ def test_pull_routes_data_with_mock_sql():
     mock_sql = MagicMock()
     mock_sql.select_sql.return_value = mock_df
 
-    result = prep.pull_routes_data(mock_sql, qry=prep.QUERIES["routes"])
+    result = prep.fetch_route_stop_records(mock_sql, qry=prep.QUERIES["routes"])
 
     mock_sql.select_sql.assert_called_once_with(prep.QUERIES["routes"])
     assert len(result) == 2
@@ -80,8 +65,6 @@ def test_sql_access_select_sql_dict_path(tmp_path):
 
 
 def test_data_and_sql_access_main_block_pattern(tmp_path):
-    prep = _load_prep_module()
-
     run_mode = Mode(Mode.DEV)
     cachey = Data(
         rm=run_mode,
@@ -97,7 +80,7 @@ def test_data_and_sql_access_main_block_pattern(tmp_path):
     expected = pd.DataFrame({"co_nbr": ["067"], "cust_nbr": ["100001"], "route_id": ["R1"]})
     sql.select_sql = MagicMock(return_value=expected.copy())
 
-    result = prep.pull_routes_data(sql)
+    result = prep.fetch_route_stop_records(sql)
 
     assert len(result) == 1
     sql.select_sql.assert_called_once()

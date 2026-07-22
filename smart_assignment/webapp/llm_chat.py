@@ -30,6 +30,7 @@ from typing import AsyncGenerator, Optional
 from smart_assignment.pipeline import run_slot_recommendation
 from smart_assignment.reasoning import DeterministicReasoner
 from smart_assignment.reporting.page import build_workflow_payload
+from smart_assignment.webapp.decision import traced_decision
 from smart_assignment.shared.config import DEFAULT_CONFIG, Config
 from smart_assignment.shared.geo import Geocoder
 from smart_assignment.shared.llm import offload_to_worker_thread
@@ -228,14 +229,25 @@ class LlmChatService:
         # loop here, and for the sage backend that call must run a coroutine on
         # this loop -- impossible if we block it. Offload the blocking re-run to a
         # worker thread so the loop stays free (see offload_to_worker_thread).
-        result = await offload_to_worker_thread(
-            run_slot_recommendation,
-            customer,
-            config=DEFAULT_CONFIG,
-            geocoder=self._geocoder,
-            reasoner=DeterministicReasoner(),
+        with traced_decision(DEFAULT_CONFIG) as decision:
+            result = await offload_to_worker_thread(
+                run_slot_recommendation,
+                customer,
+                config=DEFAULT_CONFIG,
+                geocoder=self._geocoder,
+                reasoner=DeterministicReasoner(),
+            )
+            decision.record(result)
+        payload = build_workflow_payload(
+            result, DEFAULT_CONFIG, reasoning_override=reasoning_override
         )
-        return build_workflow_payload(result, DEFAULT_CONFIG, reasoning_override=reasoning_override)
+        # Transient feedback hints (private ``_``-prefixed keys) consumed and
+        # stripped by app._attach_feedback before the payload is serialized, so
+        # they never reach the browser. They let the feedback stamp carry the
+        # recommend/escalate outcome and a real trace link (see webapp/decision.py).
+        payload["_decision"] = decision.context
+        payload["_trace"] = dict(decision.coords) if decision.coords else None
+        return payload
 
     # -- the turn stream --
 

@@ -310,6 +310,33 @@ def llm_span(config: "Config", name: str, **attributes: Any) -> Iterator[Any]:
         yield span
 
 
+def current_trace_context() -> Optional[Dict[str, str]]:
+    """The active span's ``{trace_id, span_id}`` as lowercase hex, or ``None``.
+
+    Used to stamp a decision's trace coordinates onto an artifact (e.g. a
+    recommendation payload) so a later, out-of-band human annotation can be
+    linked back to the exact trace that produced it. Returns ``None`` when the
+    OpenTelemetry API isn't installed or no valid span is currently recording --
+    so callers must treat trace coordinates as *best-effort*, present only when
+    ``use_tracing`` is on and a span is active. Never raises."""
+    try:
+        from opentelemetry import trace
+    except Exception:  # noqa: BLE001 - API not installed -> no coordinates
+        return None
+    try:
+        ctx = trace.get_current_span().get_span_context()
+        # ``INVALID_SPAN`` (no active span) reports an all-zero, non-valid context.
+        if not getattr(ctx, "is_valid", False):
+            return None
+        return {
+            "trace_id": format(ctx.trace_id, "032x"),
+            "span_id": format(ctx.span_id, "016x"),
+        }
+    except Exception:  # noqa: BLE001 - a lookup hiccup must never break the caller
+        logger.debug("Could not read the current trace context.", exc_info=True)
+        return None
+
+
 def _reset_for_tests() -> None:
     """Clear the cached one-time init state so a test can exercise configuration
     from a clean slate. Not part of the public API."""
