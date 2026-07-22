@@ -598,9 +598,13 @@ differing. This reuses the exact exporter/provider seam in `shared/tracing.py`;
 no vendor SDK is imported.
 
 ```
-decision runs (recommend/escalate + slot)   [pipeline, unchanged]
-        |  webapp stamps the visualization payload with a stable decision_id +
-        |  best-effort trace coords (shared.tracing.current_trace_context)
+decision runs INSIDE one span (webapp.recommendation)   [pipeline, unchanged]
+        |  webapp/decision.traced_decision wraps the run and captures that span's
+        |  trace/span ids WHILE it is live; webapp/decision.feedback_context pulls
+        |  the recommend/escalate outcome + route/window/order from the result.
+        |  both ride the payload as private `_trace` / `_decision` hints that
+        |  app._attach_feedback consumes and strips (they never reach the browser),
+        |  minting a stable decision_id.
         v
 👍 / 👎 (+ optional note) on the result card   [static/app.js, shown only when
         |                                        Config.use_human_feedback is on]
@@ -643,6 +647,21 @@ no-PII-on-spans stance). `feedback_scrub_pii` defaults **on** (safe for an
 off-network / shared deployment); on a trusted company network, where the real
 customer PII is *wanted* as part of the feedback, set
 `SMART_ASSIGNMENT_FEEDBACK_SCRUB_PII=false` and records are stored verbatim.
+
+**Real trace linkage, on every path.** A feedback item must link to a *real*
+trace, but feedback arrives after the decision span closed. So `traced_decision`
+(`webapp/decision.py`) runs the pipeline inside one explicit
+`webapp.recommendation` span and reads its coordinates *while the span is live*,
+threading them onto the payload — rather than best-effort-reading a span that may
+already be gone at emit time. Both request paths use it (the streaming chat
+services and `/api/recommend`), so the link is populated whenever tracing is on,
+regardless of which brain served the turn. With tracing off the span is a no-op
+and feedback falls back to the always-present `decision_id`. The same helper
+module's `feedback_context` puts the recommend/escalate **outcome** (plus route,
+window, order size) into the curation snapshot on every path — so a 👎 on a
+streamed chat result carries the same structured facts a `/api/recommend` one
+did. These travel as private `_trace`/`_decision` payload hints that
+`app._attach_feedback` consumes and always strips.
 
 **One neutral pipe for all annotators.** The schema's `annotator_kind ∈ {HUMAN,
 LLM, CODE}` means an LLM-as-judge score or a deterministic code check can flow

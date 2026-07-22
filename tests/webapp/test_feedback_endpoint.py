@@ -99,3 +99,51 @@ def test_post_feedback_persists(feedback_on):
 def test_post_feedback_rejects_bad_label(feedback_on):
     resp = client.post("/api/feedback", json={"decision_id": "d1", "label": ""})
     assert resp.status_code == 400
+
+
+# --- Increments A + B: outcome context + real trace linkage plumbing ------------
+
+
+def test_attach_feedback_consumes_decision_and_trace_hints(feedback_on):
+    # Simulate what the chat services / recommend stamp on a payload.
+    payload = {
+        "name": "Galleria Grill",
+        "address": "5085 Westheimer Rd",
+        "_decision": {"outcome": "escalate", "recommended_route_id": "RTE-1"},
+        "_trace": {"trace_id": "a" * 32, "span_id": "b" * 16},
+    }
+    app_module._attach_feedback(payload, "s9")
+
+    # The private hints are stripped (never reach the browser)...
+    assert "_decision" not in payload and "_trace" not in payload
+    # ...and the feedback stamp carries the REAL trace link from the hint.
+    fb = payload["feedback"]
+    assert fb["enabled"] is True
+    assert fb["trace_id"] == "a" * 32 and fb["span_id"] == "b" * 16
+    # The remembered context carries the recommend/escalate outcome for curation.
+    remembered = app_module._feedback_context[fb["decision_id"]]["context"]
+    assert remembered["outcome"] == "escalate"
+    assert remembered["recommended_route_id"] == "RTE-1"
+
+
+def test_attach_feedback_strips_hints_even_when_disabled(monkeypatch):
+    monkeypatch.setattr(app_module.DEFAULT_CONFIG, "use_human_feedback", False, raising=False)
+    payload = {"name": "X", "_decision": {"outcome": "recommend"}, "_trace": {"trace_id": "z"}}
+    app_module._attach_feedback(payload, "s1")
+    # No feedback block when off, but the private hints must not leak either.
+    assert "feedback" not in payload
+    assert "_decision" not in payload and "_trace" not in payload
+
+
+def test_recommend_persists_outcome_context(feedback_on):
+    rec = client.post(
+        "/api/recommend",
+        json={"message": "1200 McKinney St, Houston, TX 77010, 90 cases, TUE 07:00-10:00"},
+    ).json()
+    decision_id = rec["payload"]["feedback"]["decision_id"]
+    client.post("/api/feedback", json={"decision_id": decision_id, "label": "thumbs_down"})
+
+    stored = read_records(feedback_on)[0]
+    # Increment A: the recommend/escalate outcome now rides along on every path.
+    assert stored.context.get("outcome") in ("recommend", "escalate")
+    assert stored.context.get("order_quantity_cases") == 90

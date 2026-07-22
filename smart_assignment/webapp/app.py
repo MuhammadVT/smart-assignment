@@ -61,6 +61,7 @@ from smart_assignment.pipeline import run_slot_recommendation
 from smart_assignment.reasoning import DeterministicReasoner
 from smart_assignment.reporting.page import _FE_STYLE, _STYLE, build_workflow_payload
 from smart_assignment.shared.config import DEFAULT_CONFIG
+from smart_assignment.webapp.decision import feedback_context, traced_decision
 from smart_assignment.webapp.deterministic_chat import DeterministicChatService
 from smart_assignment.webapp.llm_chat import LlmChatService, resolve_mode
 from smart_assignment.webapp.parse import describe_slot, parse_intake
@@ -120,29 +121,35 @@ def _remember_feedback_context(decision_id: str, ctx: dict) -> None:
         _feedback_context.popitem(last=False)
 
 
-def _attach_feedback(
-    payload: Optional[dict], session_id: str, *, context: Optional[dict] = None
-) -> Optional[dict]:
+def _attach_feedback(payload: Optional[dict], session_id: str) -> Optional[dict]:
     """Stamp a visualization ``payload`` with a ``feedback`` block so the browser
     can annotate this result, and remember a context snapshot for curation.
 
-    A no-op that leaves the payload untouched (no ``feedback`` key) when human
-    feedback is off, so flag-off output is byte-identical to before. Trace
-    coordinates are best-effort -- present only when tracing is on and a span is
-    active (see ``shared.tracing.current_trace_context``); the ``decision_id`` is
-    always present so feedback works with tracing off."""
-    if not payload or not DEFAULT_CONFIG.use_human_feedback:
-        return payload
-    from smart_assignment.shared.tracing import current_trace_context
+    The chat services and ``/api/recommend`` leave two transient, private hints on
+    the payload -- ``_decision`` (the structured recommend/escalate context) and
+    ``_trace`` (the decision span's coordinates, captured while the span was live;
+    see ``webapp/decision.py``). This is the single place that consumes them, and
+    it ALWAYS strips them (flag on or off) so they never reach the browser.
 
+    A no-op that adds no ``feedback`` key when human feedback is off, so flag-off
+    output is byte-identical to before. Trace coordinates are best-effort: the
+    ``_trace`` hint when tracing is on, else empty -- the ``decision_id`` is always
+    present so feedback works with tracing off."""
+    if not payload:
+        return payload
+    decision_ctx = payload.pop("_decision", None)
+    trace_hint = payload.pop("_trace", None)
+    if not DEFAULT_CONFIG.use_human_feedback:
+        return payload  # hints stripped above; nothing else to do when off
+
+    coords = trace_hint or {}
     decision_id = uuid.uuid4().hex
-    coords = current_trace_context() or {}
     snapshot: dict = {
         "name": payload.get("name", ""),
         "address": payload.get("address", ""),
     }
-    if context:
-        snapshot.update({k: v for k, v in context.items() if v is not None})
+    if decision_ctx:
+        snapshot.update({k: v for k, v in decision_ctx.items() if v is not None})
     _remember_feedback_context(
         decision_id,
         {
@@ -161,27 +168,6 @@ def _attach_feedback(
         "span_id": coords.get("span_id"),
     }
     return payload
-
-
-def _decision_outcome(result) -> Optional[str]:
-    """Best-effort 'recommend' | 'escalate' label for a pipeline result, for the
-    feedback context snapshot. Defensive: any shape it can't read yields ``None``
-    rather than raising into the request."""
-    rec = getattr(result, "recommendation", None)
-    if rec is None:
-        return None
-    decision = getattr(rec, "decision", None)
-    if decision is not None:
-        name = (getattr(decision, "name", None) or str(decision)).upper()
-        if "ESCAL" in name:
-            return "escalate"
-        if "RECOMMEND" in name:
-            return "recommend"
-        return name.lower()
-    review = getattr(rec, "requires_human_review", None)
-    if review is not None:
-        return "escalate" if review else "recommend"
-    return None
 
 
 class RecommendRequest(BaseModel):
@@ -223,25 +209,21 @@ def recommend(req: RecommendRequest) -> RecommendResponse:
         return RecommendResponse(ok=False, reply=parsed.clarify, needs_input=True)
 
     try:
-        result = run_slot_recommendation(
-            parsed.profile,
-            config=DEFAULT_CONFIG,
-            reasoner=DeterministicReasoner(),
-        )
+        with traced_decision(DEFAULT_CONFIG) as trace_ctx:
+            result = run_slot_recommendation(
+                parsed.profile,
+                config=DEFAULT_CONFIG,
+                reasoner=DeterministicReasoner(),
+            )
     except ValueError as exc:
         # Intake rejected the profile (e.g. malformed customer number). Surface
         # the reason as an agent reply instead of a 500.
         return RecommendResponse(ok=False, reply=str(exc), needs_input=True)
 
     payload = build_workflow_payload(result, DEFAULT_CONFIG)
-    _attach_feedback(
-        payload,
-        "",
-        context={
-            "outcome": _decision_outcome(result),
-            "order_quantity_cases": getattr(parsed.profile, "order_quantity_cases", None),
-        },
-    )
+    payload["_decision"] = feedback_context(result)
+    payload["_trace"] = dict(trace_ctx) if trace_ctx else None
+    _attach_feedback(payload, "")
     slot_phrase = describe_slot(parsed.preferred_slot)
     reply = (
         f"Running the workflow for {parsed.address} — "
