@@ -68,6 +68,17 @@ def feedback_context(result: Optional[RecommendationResult]) -> Dict[str, Any]:
     customer = getattr(result, "customer", None)
     if customer is not None:
         ctx["order_quantity_cases"] = getattr(customer, "order_quantity_cases", None)
+        # The stated preference is non-PII (a day + a time window) and is needed to
+        # reconstruct a faithful intake when a curated case is replayed as an eval.
+        slot = getattr(customer, "preferred_slot", None)
+        if slot is not None:
+            try:
+                ctx["preferred_day"] = slot.day.name
+                ctx["preferred_window"] = (
+                    f"{slot.window[0].strftime('%H:%M')}-{slot.window[1].strftime('%H:%M')}"
+                )
+            except Exception:  # noqa: BLE001 - a malformed slot must not break context
+                pass
     return {key: value for key, value in ctx.items() if value is not None}
 
 

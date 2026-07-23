@@ -701,6 +701,21 @@ feasible route/slot), so guessing `escalate` would encode a target they never
 chose. The boundary is the point: human feedback feeds an offline, human-gated
 loop.
 
+**From candidates to a runnable eval — no hand-copying.** Both curation entry
+points emit the *same* candidate-cases JSON: `scripts/curate_feedback.py`
+(vendor-free, over the JSONL log) and `scripts/phoenix_curate.py` (the Phoenix
+path — it joins the `human_feedback` and `webapp.recommendation` spans by trace id
+so you don't do it by hand, and writes that same file, optionally also uploading a
+Phoenix Dataset). `eval/case_source.py` loads either file, reconstructing a
+`CustomerProfile` (including the stated day/window, now carried in
+`feedback_context`) and a `GoldenCase` per candidate; it *skips* any case whose
+address is missing or PII-redacted (a scrub-on capture can't be geocoded) and
+reports why. `python3 -m eval.build_evalset --cases <file>` then turns those into a
+standard ADK evalset JSON — so curated production feedback runs through the exact
+same trajectory eval as the built-in `GOLDEN_CASES`, without editing
+`golden_cases.py`. The committed golden dataset and its sync test are untouched
+(the flag-less `build_evalset` still regenerates exactly that).
+
 ## Step 5, two ways: weighted-sum vs. grounded LLM judgment
 
 Step 5 (recommend-or-escalate) has two interchangeable *decision strategies*
