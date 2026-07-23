@@ -157,6 +157,16 @@ def apply_eval_dataset() -> EvalDataset:
     Loud and idempotent -- it logs exactly what it pinned, so an eval run can
     never quietly inherit a developer's ambient ``SMART_ASSIGNMENT_DATA_SOURCE``."""
     dataset = resolve_eval_dataset()
+    pin_dataset(dataset)
+    return dataset
+
+
+def pin_dataset(dataset: EvalDataset) -> None:
+    """LOCK this process onto a specific ``EvalDataset``: pin its data source,
+    geocoder, snapshot dir (if any), and strict mode, and drop the route cache so
+    the next fetch honors the pin. Split out of ``apply_eval_dataset`` so a scorer
+    can pin a chosen dataset directly (e.g. iterating discovered snapshots) without
+    routing through ``SMART_ASSIGNMENT_EVAL_DATASET``."""
     os.environ[_DATA_SOURCE_ENV] = dataset.data_source
     os.environ[_GEOCODER_ENV] = dataset.geocoder
     os.environ[_STRICT_ENV] = "1"
@@ -180,7 +190,6 @@ def apply_eval_dataset() -> EvalDataset:
         dataset.data_source,
         dataset.geocoder,
     )
-    return dataset
 
 
 def dataset_content_ref(dataset: EvalDataset) -> str:
