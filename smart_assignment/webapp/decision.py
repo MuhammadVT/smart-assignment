@@ -18,16 +18,25 @@ slot, or decision -- and both degrade cleanly when the relevant flag is off.
   already have closed by the time the payload is emitted. When tracing is off it
   is a transparent no-op (the span is a no-op and the coordinates are empty), so
   behavior is unchanged and feedback simply falls back to the ``decision_id``.
+  Its ``DecisionSpan.record(result)`` also attaches the decision's non-PII facts
+  to the span and -- when ``use_trace_dataset_payloads`` is on and PII scrub is
+  off -- the decision's input/output as OpenInference ``input.value`` /
+  ``output.value``, making a trace-backend-native dataset (Phoenix / Langfuse)
+  replay-ready via OPEN conventions (vendor-free).
 """
 
 from __future__ import annotations
 
+import json
+import logging
 from contextlib import contextmanager
-from typing import Any, Dict, Iterator, Optional
+from typing import Any, Dict, Iterator, Optional, Tuple
 
 from smart_assignment.shared.config import Config
 from smart_assignment.shared.models import Decision, RecommendationResult
 from smart_assignment.shared.tracing import current_trace_context, llm_span
+
+logger = logging.getLogger(__name__)
 
 
 def decision_outcome(recommendation: Any) -> Optional[str]:
@@ -66,6 +75,40 @@ def feedback_context(result: Optional[RecommendationResult]) -> Dict[str, Any]:
 _DECISION_ATTR = "smart_assignment.decision."
 
 
+def _replay_payloads(result: RecommendationResult) -> Tuple[str, str]:
+    """Build the decision's ``(input, output)`` as JSON strings for a replay-ready
+    trace dataset: the intake the pipeline received, and the recommendation it
+    produced. Contains PII (name, address) by construction -- the caller gates on
+    scrub-off before attaching it."""
+    customer = result.customer
+    rec = result.recommendation
+    intake: Dict[str, Any] = {
+        "name": customer.name,
+        "address": customer.address,
+        "order_quantity_cases": customer.order_quantity_cases,
+    }
+    slot = getattr(customer, "preferred_slot", None)
+    if slot is not None:
+        intake["preferred_day"] = slot.day.name
+        intake["preferred_window"] = (
+            f"{slot.window[0].strftime('%H:%M')}-{slot.window[1].strftime('%H:%M')}"
+        )
+    output = {
+        "decision": rec.decision.value,
+        "recommended_route_id": rec.recommended_route_id,
+        "recommended_route_name": rec.recommended_route_name,
+        "recommended_day": rec.recommended_day,
+        "recommended_window": rec.recommended_window,
+        "review_reason": rec.review_reason,
+        "reasoning": rec.reasoning,
+    }
+    output = {key: value for key, value in output.items() if value is not None}
+    return (
+        json.dumps(intake, ensure_ascii=False),
+        json.dumps(output, ensure_ascii=False),
+    )
+
+
 class DecisionSpan:
     """Handle yielded by :func:`traced_decision`.
 
@@ -76,14 +119,21 @@ class DecisionSpan:
     role label. After the block, :attr:`coords` holds the span's trace/span ids
     (empty when tracing is off) and :attr:`context` holds the feedback context."""
 
-    def __init__(self) -> None:
+    def __init__(self, config: Optional[Config] = None) -> None:
         self._span: Any = None
+        self._config = config
         self.coords: Dict[str, str] = {}
         self.context: Dict[str, Any] = {}
 
     def record(self, result: Optional[RecommendationResult]) -> Dict[str, Any]:
         """Compute the feedback context from ``result`` and attach its facts to
-        the span. Best-effort: attribute-setting never raises into the caller."""
+        the span. Best-effort: attribute-setting never raises into the caller.
+
+        When ``use_trace_dataset_payloads`` is on AND PII scrub is off, it also
+        attaches the decision's input/output as OpenInference ``input.value`` /
+        ``output.value`` attributes, so a Phoenix/Langfuse dataset built from these
+        spans is replay-ready. Scrub-on always suppresses it (the payload carries
+        PII), so no PII reaches a trace unless the operator opted in on both flags."""
         self.context = feedback_context(result)
         span = self._span
         if span is not None:
@@ -92,7 +142,31 @@ class DecisionSpan:
                     span.set_attribute(_DECISION_ATTR + key, value)
                 except Exception:  # noqa: BLE001 - a tracing hiccup must not break the decision
                     pass
+            self._attach_replay_payloads(span, result)
         return self.context
+
+    def _attach_replay_payloads(self, span: Any, result: Optional[RecommendationResult]) -> None:
+        """Attach OpenInference input/output payloads to the span for dataset
+        replay -- only when opted in (``use_trace_dataset_payloads``) and PII scrub
+        is off. Uses OPEN semantic-convention keys, so it's vendor-free yet natively
+        read by Phoenix and Langfuse. Never raises into the caller."""
+        config = self._config
+        if result is None or config is None:
+            return
+        if not getattr(config, "use_trace_dataset_payloads", False):
+            return
+        if getattr(config, "feedback_scrub_pii", True):
+            return  # PII protection wins: no replay payloads on the trace when scrubbing
+        try:
+            input_json, output_json = _replay_payloads(result)
+            span.set_attribute("input.value", input_json)
+            span.set_attribute("input.mime_type", "application/json")
+            span.set_attribute("output.value", output_json)
+            span.set_attribute("output.mime_type", "application/json")
+            # OpenInference span kind, so Phoenix classifies it as a dataset-able step.
+            span.set_attribute("openinference.span.kind", "CHAIN")
+        except Exception:  # noqa: BLE001 - a tracing hiccup must not break the decision
+            logger.debug("Could not attach replay payloads to the decision span.", exc_info=True)
 
 
 @contextmanager
@@ -114,7 +188,7 @@ def traced_decision(
     decision. The body may ``await`` -- the span stays current across it
     (OpenTelemetry context is task-local). With tracing off the span is a no-op,
     ``coords`` stays ``{}``, and feedback falls back to the ``decision_id``."""
-    handle = DecisionSpan()
+    handle = DecisionSpan(config)
     with llm_span(config, label, role="webapp") as span:
         handle._span = span
         yield handle

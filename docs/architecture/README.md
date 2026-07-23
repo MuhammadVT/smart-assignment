@@ -672,6 +672,20 @@ same structured facts a `/api/recommend` one did. These travel as private
 `_trace`/`_decision` payload hints that `app._attach_feedback` consumes and
 always strips.
 
+**Replay-ready trace datasets, still vendor-free (`use_trace_dataset_payloads`).**
+Filtering thumbs-down spans is enough to *triage*, but to *curate a dataset
+inside* Phoenix/Langfuse you need the case's input and output on the trace. When
+`use_trace_dataset_payloads` is on **and** PII scrub is off, `DecisionSpan.record`
+attaches the intake and the recommendation to the `webapp.recommendation` span as
+OpenInference `input.value` / `output.value` (with `openinference.span.kind`).
+These are *open* semantic-convention keys — Phoenix and Langfuse both read them
+natively to build replay-able dataset examples — so the feature is backend-native
+yet imports no vendor SDK. It's a pure opt-in on top of tracing, and scrub-on
+always suppresses it (the payload carries name/address), so no PII reaches a trace
+unless the operator opted into *both* flags. The vendor-free JSONL curation path
+(`scripts/curate_feedback.py`) is unaffected and remains the portable default;
+this just makes the *backend-native* curation path viable too.
+
 **One neutral pipe for all annotators.** The schema's `annotator_kind ∈ {HUMAN,
 LLM, CODE}` means an LLM-as-judge score or a deterministic code check can flow
 through the *same* record, log, and OTLP span later — so the existing eval
