@@ -1,0 +1,70 @@
+[
+  {
+    "context": {
+      "address": "syn_clean_recommend address, Anytown (synthetic)",
+      "name": "Synthetic syn_clean_recommend",
+      "order_quantity_cases": 100,
+      "preferred_day": "TUE",
+      "preferred_window": "08:00-11:00"
+    },
+    "eval_id": "syn_clean_recommend",
+    "expected_outcome": "recommend",
+    "expected_route_id": "SYN-100",
+    "expected_window": "08:00-11:00",
+    "note": "Near North Loop, small order, window match.",
+    "provenance": {
+      "source": "synthetic"
+    },
+    "query": "Synthetic syn_clean_recommend at syn_clean_recommend address, Anytown (synthetic), 100 cases, prefers TUE 08:00-11:00"
+  },
+  {
+    "context": {
+      "address": "syn_over_capacity address, Anytown (synthetic)",
+      "name": "Synthetic syn_over_capacity",
+      "order_quantity_cases": 900
+    },
+    "eval_id": "syn_over_capacity",
+    "expected_outcome": "escalate",
+    "expected_route_id": null,
+    "expected_window": null,
+    "note": "Near South Loop but a 900-case order overflows the truck.",
+    "provenance": {
+      "source": "synthetic"
+    },
+    "query": "Synthetic syn_over_capacity at syn_over_capacity address, Anytown (synthetic), 900 cases"
+  },
+  {
+    "context": {
+      "address": "syn_out_of_range address, Anytown (synthetic)",
+      "name": "Synthetic syn_out_of_range",
+      "order_quantity_cases": 120
+    },
+    "eval_id": "syn_out_of_range",
+    "expected_outcome": "escalate",
+    "expected_route_id": null,
+    "expected_window": null,
+    "note": "~110 miles from every route -> out of service range.",
+    "provenance": {
+      "source": "synthetic"
+    },
+    "query": "Synthetic syn_out_of_range at syn_out_of_range address, Anytown (synthetic), 120 cases"
+  },
+  {
+    "context": {
+      "address": "syn_east_recommend address, Anytown (synthetic)",
+      "name": "Synthetic syn_east_recommend",
+      "order_quantity_cases": 150,
+      "preferred_day": "THU",
+      "preferred_window": "08:00-11:00"
+    },
+    "eval_id": "syn_east_recommend",
+    "expected_outcome": "recommend",
+    "expected_route_id": "SYN-300",
+    "expected_window": "08:00-11:00",
+    "note": "Near East Loop, comfortable headroom.",
+    "provenance": {
+      "source": "synthetic"
+    },
+    "query": "Synthetic syn_east_recommend at syn_east_recommend address, Anytown (synthetic), 150 cases, prefers THU 08:00-11:00"
+  }
+]

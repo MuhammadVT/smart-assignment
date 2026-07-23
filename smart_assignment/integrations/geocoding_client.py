@@ -21,7 +21,7 @@ import logging
 import os
 import re
 
-from smart_assignment.shared.geo import AddressCandidate, Geocoder
+from smart_assignment.shared.geo import AddressCandidate, AddressNotFoundError, Geocoder
 from smart_assignment.shared.models import GeoPoint
 
 logger = logging.getLogger(__name__)
@@ -81,14 +81,48 @@ class MockGeocoder:
         ]
 
 
+class SnapshotGeocoder:
+    """Replays the geocode results committed in a snapshot dataset's
+    ``geocode.json`` (see integrations/snapshot_data.py), so a self-contained eval
+    resolves addresses to the *same* coordinates the dataset was frozen with -- no
+    network, fully deterministic, exactly like MockGeocoder but data-driven.
+
+    The map is loaded lazily and memoized per directory. A miss is a *loud* error
+    (a snapshot must contain every case address), never a silent pseudo-point --
+    an eval should fail rather than score against a coordinate it never declared."""
+
+    def __init__(self, snapshot_dir: str) -> None:
+        self._dir = snapshot_dir
+        self._map: dict[str, GeoPoint] | None = None
+
+    def _load(self) -> dict[str, GeoPoint]:
+        if self._map is None:
+            from smart_assignment.integrations.snapshot_data import load_geocode
+
+            self._map = load_geocode(self._dir)
+        return self._map
+
+    def geocode(self, address: str) -> GeoPoint:
+        mapping = self._load()
+        point = mapping.get(address)
+        if point is None:
+            raise AddressNotFoundError(
+                address,
+                f"not in the snapshot geocode map ({self._dir}); the snapshot is "
+                "incomplete or the case drifted",
+            )
+        return point
+
+
 def resolve_geocoder() -> Geocoder:
     """The geocoder every surface should use, chosen by SMART_ASSIGNMENT_GEOCODER:
 
-      - "census" → the live US Census geocoder (real, accurate coordinates).
-                   **Default.**
-      - "mock"   → the deterministic offline `MockGeocoder` (curated coords for
-                   the demo addresses; a stable pseudo-point otherwise), for fully
-                   offline runs and tests.
+      - "census"   → the live US Census geocoder (real coordinates). **Default.**
+      - "mock"     → the deterministic offline `MockGeocoder` (curated coords for
+                     the demo addresses; a stable pseudo-point otherwise), for
+                     fully offline runs and tests.
+      - "snapshot" → replay the coordinates committed in the pinned snapshot
+                     dataset (`SnapshotGeocoder`), for self-contained eval.
 
     Resolving in ONE place means the conversational tools, the deterministic
     web-app path, and `run_slot_recommendation` all pick the same provider from
@@ -98,6 +132,19 @@ def resolve_geocoder() -> Geocoder:
     choice = os.environ.get(_GEOCODER_ENV, "census").strip().lower()
     if choice in ("mock", "offline"):
         return MockGeocoder()
+    if choice == "snapshot":
+        from smart_assignment.integrations.snapshot_data import (
+            SNAPSHOT_DIR_ENV,
+            active_snapshot_dir,
+        )
+
+        snapshot_dir = active_snapshot_dir()
+        if not snapshot_dir:
+            raise ValueError(
+                f"{_GEOCODER_ENV}=snapshot but {SNAPSHOT_DIR_ENV} is not set; pin a "
+                "snapshot dataset (eval.dataset.apply_eval_dataset)."
+            )
+        return SnapshotGeocoder(snapshot_dir)
     if choice not in ("census", "live", "real"):
         logger.warning("Unknown %s=%r; using the live census geocoder.", _GEOCODER_ENV, choice)
     # Imported lazily so an offline/mock run never pulls the HTTP client.

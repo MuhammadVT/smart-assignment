@@ -716,6 +716,72 @@ same trajectory eval as the built-in `GOLDEN_CASES`, without editing
 `golden_cases.py`. The committed golden dataset and its sync test are untouched
 (the flag-less `build_evalset` still regenerates exactly that).
 
+### Self-contained snapshot datasets — scoring the model, offline, in CI
+
+Trajectory eval is world-independent, but scoring the *decision* (recommend vs.
+escalate, and which route-slot) needs the world the decision saw. So a curated
+golden dataset carries its own world — the file-backed analogue of the
+code-defined `mock` world, and PII-free the same way. A **snapshot bundle** is one
+directory:
+
+```
+eval/data/snapshots/<name>/
+  routes.json    the world: Route/RouteStop with capacity, committed stops, windows, tiers
+  geocode.json   {address -> {lat, lon}} for every case
+  cases.json     the cases: intake + expected_outcome + expected_route_id/window
+  manifest.json  provenance for visibility (source, model, config, counts)
+```
+
+`integrations/snapshot_data.py` owns the encoding; a **`snapshot` data source**
+(`route_capacity_client`) serves `routes.json` and a **`SnapshotGeocoder`**
+(`geocoding_client`) replays `geocode.json`, both pinned by
+`eval/dataset.py` (which **auto-discovers** any bundle under `eval/data/snapshots/`
+— dropping a directory registers a dataset, no code change — and hashes the bundle
+bytes for a provenance `dataset_content_ref`). So replay is fully offline and
+deterministic, exactly like `mock`.
+
+**Two authoring on-ramps, one format, little manual work:**
+
+```
+ human feedback                          synthetic
+ curate_feedback.py / phoenix_curate.py  eval/synthetic.py
+   -> candidate-cases JSON                 designed world + prospects
+          |                                        |
+   eval/freeze_dataset.py                          |   (already PII-free)
+   run each once vs the real world,                |
+   capture its routes + coords, ANONYMIZE          |
+          \________________________  _____________/
+                                   \/
+                    a self-contained snapshot bundle
+                                   |
+                    eval/outcome_scoring.py  ── run the CURRENT model vs the
+                    (offline, deterministic)    frozen world; score outcome +
+                                                route-slot vs the golden target
+```
+
+**Anonymization (the PII line).** Scoring depends on geometry and capacity, not
+identities, so `freeze_dataset.py` keeps the coordinates / capacity / windows /
+tiers / route-codes and drops the identifiers: the prospect's name and street
+address become synthetic labels (the label keys the geocode map to the real
+coordinates, so distance math is unchanged) and committed-stop customer numbers
+become `STOP-*`. The result is PII-free *by construction* — safe to commit and run
+in a shared CI. (Synthetic datasets are PII-free already, so they skip this.) One
+shared world (the dedup union of every case's candidate routes), each prospect
+evaluated against it — the `mock` pattern generalized. Golden targets come from
+the human's corrected target on a promoted thumbs-down, else the decision captured
+at freeze time (a regression baseline).
+
+**Scoring, two paths, one toggle.** `eval/outcome_scoring.py` re-runs the current
+model over a bundle and checks the recommend/escalate outcome and the route-slot
+(route id + window) against the golden target. `path` (or
+`SMART_ASSIGNMENT_EVAL_MODEL_PATH`) selects `deterministic` (weighted-sum, grounded
+off — offline, no credentials, the **blocking self-contained CI gate** in the
+`test` job) or `llm` (grounded judgment in the loop — advisory in the credentialed
+`agent-eval` job). The scorer is side-effect-free (it restores the data-source /
+geocoder env it pins). This closes the flywheel: production feedback (or a
+synthetic design) → an anonymized, self-contained golden dataset → the current
+model scored against it, automatically, in CI.
+
 ## Step 5, two ways: weighted-sum vs. grounded LLM judgment
 
 Step 5 (recommend-or-escalate) has two interchangeable *decision strategies*
