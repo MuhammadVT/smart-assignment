@@ -145,11 +145,40 @@ def spans_to_candidates(
 # ---------------------------------------------------------------------------
 
 
+def _flatten_dict_columns(frame: Any) -> Any:
+    """Unwrap any dict-valued column into dotted ``"<column>.<subkey>"`` columns.
+
+    The Phoenix 19.x client's default span dataframe flattens *recognized*
+    OpenInference attributes (``input.value``, ``output.value``, ...) into
+    dotted columns, but buckets our own custom ``smart_assignment.*``
+    namespace into a single dict-valued column (e.g. ``attributes.smart_assignment``
+    holding ``{"feedback": {"label": ..., ...}}``) instead. Recursively
+    normalizing those columns restores the dotted-column shape the rest of
+    this module (and its ``_A_*`` attribute-path constants) expects.
+    """
+    import pandas as pd
+
+    for col in list(frame.columns):
+        if frame[col].map(lambda v: isinstance(v, dict)).any():
+            nested = pd.json_normalize(frame[col], sep=".").add_prefix(f"{col}.")
+            nested.index = frame.index
+            frame = pd.concat([frame.drop(columns=[col]), nested], axis=1)
+    return frame
+
+
 def _rows(dataframe: Any, columns: Dict[str, str]) -> List[Dict[str, Any]]:
     """Extract the named ``{source_column: out_key}`` columns from a Phoenix span
     dataframe into plain dict rows, tolerating absent columns (-> None)."""
     records: List[Dict[str, Any]] = []
-    frame = dataframe.reset_index()  # trace/span ids live in the index or columns
+    # A filtered SpanQuery indexes the dataframe by "context.span_id", which the
+    # client also returns as a plain column -- reset_index() would then try to
+    # insert a column that already exists and raise. Drop the (redundant) index
+    # instead of restoring it; every id we need is already a regular column.
+    if dataframe.index.name is not None and dataframe.index.name in dataframe.columns:
+        frame = dataframe.reset_index(drop=True)
+    else:
+        frame = dataframe.reset_index()
+    frame = _flatten_dict_columns(frame)
     for _, row in frame.iterrows():
         record: Dict[str, Any] = {}
         for source, out_key in columns.items():
@@ -169,15 +198,19 @@ def _present(value: Any) -> bool:
 
 def _fetch_candidates(project: str, endpoint: Optional[str], label: str) -> List[Dict[str, Any]]:
     """Query Phoenix for the two span sets and join them into candidate records."""
-    import phoenix as px  # lazy: only needed for a live pull
+    # lazy: only needed for a live pull. Phoenix 19.x removed the legacy
+    # top-level `phoenix.Client`; the client now lives at `phoenix.client.Client`
+    # with namespaced resources (`client.spans`, `client.datasets`, ...).
+    from phoenix.client import Client
+    from phoenix.client.types.spans import SpanQuery
 
-    client = px.Client(endpoint=endpoint) if endpoint else px.Client()
+    client = Client(base_url=endpoint) if endpoint else Client()
 
-    feedback_df = client.get_spans_dataframe(
-        "name == 'human_feedback'", project_name=project
+    feedback_df = client.spans.get_spans_dataframe(
+        query=SpanQuery().where("name == 'human_feedback'"), project_identifier=project
     )
-    decision_df = client.get_spans_dataframe(
-        "name == 'webapp.recommendation'", project_name=project
+    decision_df = client.spans.get_spans_dataframe(
+        query=SpanQuery().where("name == 'webapp.recommendation'"), project_identifier=project
     )
 
     feedback_spans = _rows(
@@ -253,9 +286,9 @@ def _upload_dataset(name: str, candidates: List[Dict[str, Any]], endpoint: Optio
     """Best-effort Phoenix Dataset upload for in-Phoenix experiments (optional)."""
     try:
         import pandas as pd
-        import phoenix as px
+        from phoenix.client import Client
 
-        client = px.Client(endpoint=endpoint) if endpoint else px.Client()
+        client = Client(base_url=endpoint) if endpoint else Client()
         frame = pd.DataFrame(
             [
                 {
@@ -266,9 +299,9 @@ def _upload_dataset(name: str, candidates: List[Dict[str, Any]], endpoint: Optio
                 for c in candidates
             ]
         )
-        client.upload_dataset(
+        client.datasets.create_dataset(
+            name=name,
             dataframe=frame,
-            dataset_name=name,
             input_keys=["input"],
             output_keys=["expected_outcome"],
             metadata_keys=["human_label"],
