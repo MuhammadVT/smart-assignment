@@ -356,6 +356,17 @@ class Config:
     # durable, backend-independent record of every annotation (the curation
     # source of truth). Relative paths resolve against the process CWD.
     feedback_log_path: str = "feedback_data/annotations.jsonl"
+    # When True, the decision span (webapp.recommendation) additionally carries the
+    # decision's *input* (the intake) and *output* (the recommendation) as
+    # OpenInference ``input.value`` / ``output.value`` attributes, so a
+    # trace-backend-native dataset (Phoenix / Langfuse) built from those spans is
+    # *replay-ready* -- not just filterable. It uses OPEN semantic conventions, so
+    # it stays vendor-free while being natively understood by both backends.
+    # Because the intake carries PII (name, address), this fires ONLY when
+    # ``feedback_scrub_pii`` is also off (the same "PII allowed on the backend"
+    # gate as the note-on-span behavior) -- so scrub-on always wins and no PII
+    # reaches a trace. Off by default; a pure opt-in on top of tracing.
+    use_trace_dataset_payloads: bool = False
 
     def tier_harm_weight(self, tier: Optional[str]) -> float:
         """Harm weight for crowding a committed stop of the given Sysco tier --
@@ -454,6 +465,9 @@ class Config:
                 or "feedback_data/annotations.jsonl"
             ).strip()
             or "feedback_data/annotations.jsonl",
+            use_trace_dataset_payloads=_bool_env(
+                "SMART_ASSIGNMENT_USE_TRACE_DATASET_PAYLOADS", False
+            ),
         )
 
 
