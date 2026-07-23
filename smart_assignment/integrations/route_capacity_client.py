@@ -72,7 +72,11 @@ _STRICT_ENV = "SMART_ASSIGNMENT_DATA_SOURCE_STRICT"
 SOURCE_MOCK = "mock"
 SOURCE_CACHE = "cache"
 SOURCE_LIVE_SQL = "live_sql"
-_VALID_SOURCES = (SOURCE_MOCK, SOURCE_CACHE, SOURCE_LIVE_SQL)
+# A self-contained, committed snapshot dataset (routes.json read from the pinned
+# SMART_ASSIGNMENT_SNAPSHOT_DIR) -- the file-backed analogue of the mock world, so
+# a curated golden dataset replays fully offline (see integrations/snapshot_data.py).
+SOURCE_SNAPSHOT = "snapshot"
+_VALID_SOURCES = (SOURCE_MOCK, SOURCE_CACHE, SOURCE_LIVE_SQL, SOURCE_SNAPSHOT)
 
 # Synonyms accepted for each source (incl. the legacy ROUTE_SOURCE values).
 _SOURCE_ALIASES = {
@@ -83,6 +87,7 @@ _SOURCE_ALIASES = {
     "live": SOURCE_LIVE_SQL,
     "sql": SOURCE_LIVE_SQL,
     "prepared": SOURCE_LIVE_SQL,  # legacy ROUTE_SOURCE value
+    "snapshot": SOURCE_SNAPSHOT,
 }
 
 
@@ -560,14 +565,44 @@ def fetch_candidate_routes() -> list[Route]:
     source = _data_source()
     if source == SOURCE_LIVE_SQL:
         return _fetch_candidate_routes_uncached(source)
+    if source == SOURCE_SNAPSHOT:
+        # Keyed by the snapshot directory (not just the source string), so two
+        # different snapshot datasets in one process don't collide in the cache.
+        return list(_cached_snapshot_routes(_require_snapshot_dir()))
     return list(_cached_routes_for(source))
 
 
 @lru_cache(maxsize=None)
 def _cached_routes_for(source: str) -> tuple[Route, ...]:
     # Keyed by source so "mock" and "cache" each get their own cached result.
-    # Never called with "live_sql" -- see fetch_candidate_routes().
+    # Never called with "live_sql"/"snapshot" -- see fetch_candidate_routes().
     return tuple(_fetch_candidate_routes_uncached(source))
+
+
+@lru_cache(maxsize=None)
+def _cached_snapshot_routes(snapshot_dir: str) -> tuple[Route, ...]:
+    """Memoized routes for one snapshot directory. Lazy import keeps the snapshot
+    substrate out of the import path for the mock/cache/live_sql sources."""
+    from smart_assignment.integrations.snapshot_data import load_routes
+
+    return tuple(load_routes(snapshot_dir))
+
+
+def _require_snapshot_dir() -> str:
+    """The pinned snapshot directory, or a loud error -- a snapshot source with no
+    directory is a misconfiguration, not something to silently fall back from."""
+    from smart_assignment.integrations.snapshot_data import (
+        SNAPSHOT_DIR_ENV,
+        active_snapshot_dir,
+    )
+
+    snapshot_dir = active_snapshot_dir()
+    if not snapshot_dir:
+        raise RuntimeError(
+            f"Data source is 'snapshot' but {SNAPSHOT_DIR_ENV} is not set. Pin a "
+            "snapshot dataset via eval.dataset.apply_eval_dataset (or set the env)."
+        )
+    return snapshot_dir
 
 
 def clear_route_cache() -> None:
@@ -586,6 +621,7 @@ def clear_route_cache() -> None:
     (dataclasses.replace) if you need a modified variant.
     """
     _cached_routes_for.cache_clear()
+    _cached_snapshot_routes.cache_clear()
 
 
 def _fetch_candidate_routes_uncached(source: str) -> list[Route]:

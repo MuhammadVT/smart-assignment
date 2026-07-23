@@ -44,7 +44,8 @@ import hashlib
 import logging
 import os
 from dataclasses import dataclass
-from typing import Dict
+from pathlib import Path
+from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,12 @@ DEFAULT_EVAL_DATASET = "mock"
 _DATA_SOURCE_ENV = "SMART_ASSIGNMENT_DATA_SOURCE"
 _GEOCODER_ENV = "SMART_ASSIGNMENT_GEOCODER"
 _STRICT_ENV = "SMART_ASSIGNMENT_DATA_SOURCE_STRICT"
+_SNAPSHOT_DIR_ENV = "SMART_ASSIGNMENT_SNAPSHOT_DIR"
+
+# Where committed self-contained snapshot datasets live (one directory each).
+# Overridable for tests via SMART_ASSIGNMENT_SNAPSHOTS_ROOT.
+_SNAPSHOTS_ROOT_ENV = "SMART_ASSIGNMENT_SNAPSHOTS_ROOT"
+_DEFAULT_SNAPSHOTS_ROOT = Path(__file__).parent / "data" / "snapshots"
 
 
 @dataclass(frozen=True)
@@ -74,27 +81,69 @@ class EvalDataset:
     data_source: str
     geocoder: str
     kind: str
+    # For ``kind == "snapshot"``: the bundle directory this dataset reads from.
+    path: Optional[str] = None
 
 
-# The datasets eval knows how to lock onto. Extend THIS map (not any call site)
-# to add a scrubbed-synthetic or sanitized-real snapshot: point it at that
-# source + geocoder and give it a name; the declare/lock/record machinery is
-# unchanged. Only ``mock`` exists today (fully committed, offline, PII-free).
+# The code-defined datasets eval always knows. ``mock`` is the committed, offline,
+# PII-free world. Self-contained *snapshot* datasets are DISCOVERED from disk (see
+# _discover_snapshot_datasets), so adding one is dropping a bundle directory under
+# eval/data/snapshots/ -- no code change, no call-site edit.
 _KNOWN_DATASETS: Dict[str, EvalDataset] = {
     "mock": EvalDataset(name="mock", data_source="mock", geocoder="mock", kind="code"),
 }
 
 
+def _snapshots_root() -> Path:
+    override = os.environ.get(_SNAPSHOTS_ROOT_ENV)
+    return Path(override) if override and override.strip() else _DEFAULT_SNAPSHOTS_ROOT
+
+
+def _discover_snapshot_datasets() -> Dict[str, EvalDataset]:
+    """Every self-contained snapshot bundle under the snapshots root, as an
+    ``EvalDataset`` keyed by directory name. A bundle is a directory containing a
+    ``manifest.json`` (written by the freeze/synthetic authors). Filesystem-only
+    and cheap; returns ``{}`` when the root is absent. A discovered name never
+    shadows a built-in (``mock``)."""
+    root = _snapshots_root()
+    discovered: Dict[str, EvalDataset] = {}
+    if not root.is_dir():
+        return discovered
+    for entry in sorted(root.iterdir()):
+        if not entry.is_dir() or (entry / "manifest.json").exists() is False:
+            continue
+        name = entry.name
+        if name in _KNOWN_DATASETS:
+            continue
+        discovered[name] = EvalDataset(
+            name=name,
+            data_source="snapshot",
+            geocoder="snapshot",
+            kind="snapshot",
+            path=str(entry),
+        )
+    return discovered
+
+
+def all_datasets() -> Dict[str, EvalDataset]:
+    """Built-in datasets plus every discovered snapshot bundle. This is the full
+    set eval can lock onto."""
+    merged: Dict[str, EvalDataset] = dict(_KNOWN_DATASETS)
+    merged.update(_discover_snapshot_datasets())
+    return merged
+
+
 def resolve_eval_dataset() -> EvalDataset:
     """The declared eval dataset (``SMART_ASSIGNMENT_EVAL_DATASET``, default
     ``mock``). Raises ``ValueError`` on an unknown name -- listing the valid set
-    -- rather than silently picking one."""
+    (built-ins + discovered snapshots) -- rather than silently picking one."""
     name = (os.environ.get(EVAL_DATASET_ENV) or DEFAULT_EVAL_DATASET).strip()
-    dataset = _KNOWN_DATASETS.get(name)
+    datasets = all_datasets()
+    dataset = datasets.get(name)
     if dataset is None:
         raise ValueError(
             f"{EVAL_DATASET_ENV}={name!r} is not a known eval dataset. "
-            f"Valid: {sorted(_KNOWN_DATASETS)}."
+            f"Valid: {sorted(datasets)}."
         )
     return dataset
 
@@ -111,6 +160,11 @@ def apply_eval_dataset() -> EvalDataset:
     os.environ[_DATA_SOURCE_ENV] = dataset.data_source
     os.environ[_GEOCODER_ENV] = dataset.geocoder
     os.environ[_STRICT_ENV] = "1"
+    # A snapshot dataset also pins WHICH bundle the snapshot source + geocoder read.
+    if dataset.kind == "snapshot" and dataset.path:
+        os.environ[_SNAPSHOT_DIR_ENV] = dataset.path
+    else:
+        os.environ.pop(_SNAPSHOT_DIR_ENV, None)
     # Drop any route cache populated before the pin (e.g. an ambient source read
     # at import elsewhere) so the next fetch honors the pinned source. Best-effort
     # and lazy so importing this module never pulls the heavy route client.
@@ -147,7 +201,18 @@ def dataset_content_ref(dataset: EvalDataset) -> str:
         # data itself changes.
         payload = repr(list(SAMPLE_CUSTOMERS)) + repr(_mock_routes())
         return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
-    raise NotImplementedError(  # pragma: no cover - no snapshot datasets exist yet
+    if dataset.kind == "snapshot" and dataset.path:
+        # Hash the bundle's data bytes (routes + geocode + cases), so the ref moves
+        # iff the committed dataset content changes -- the file-backed analogue of
+        # hashing the mock fixtures above. The manifest (provenance) is excluded so
+        # a metadata-only edit doesn't spuriously change the data ref.
+        base = Path(dataset.path)
+        digest = hashlib.sha256()
+        for name in ("routes.json", "geocode.json", "cases.json"):
+            path = base / name
+            digest.update(path.read_bytes() if path.exists() else b"")
+        return "sha256:" + digest.hexdigest()[:16]
+    raise NotImplementedError(
         f"No content ref implemented for dataset {dataset.name!r} (kind {dataset.kind!r})."
     )
 
