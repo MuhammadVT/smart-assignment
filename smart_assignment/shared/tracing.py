@@ -94,6 +94,18 @@ def _service_name() -> str:
     return os.environ.get("OTEL_SERVICE_NAME", "smart-assignment").strip() or "smart-assignment"
 
 
+# Phoenix buckets ingested spans into a "project" purely by this OpenInference
+# resource attribute (see ``phoenix.utilities.project.get_project_name``); it does
+# NOT look at the standard OTel ``service.name``. Without it, every span lands in
+# Phoenix's "default" project regardless of ``OTEL_SERVICE_NAME`` -- silently
+# breaking anything that queries Phoenix by project name (e.g.
+# ``scripts/phoenix_curate.py``, whose ``--project`` default is
+# ``OTEL_SERVICE_NAME``). Set as a plain string rather than importing
+# ``openinference.semconv`` to keep this module's lazy, credential-free import
+# discipline; the key is stable OpenInference semantic-convention naming.
+_PROJECT_NAME_ATTR = "openinference.project.name"
+
+
 def _langfuse_otlp_settings() -> Optional[Tuple[str, Dict[str, str]]]:
     """Derive an OTLP HTTP endpoint + Basic-auth header from the ``LANGFUSE_*``
     env vars, or ``None`` if they are not all set.
@@ -171,7 +183,11 @@ def _install_provider(exporter: Any) -> Any:
         logger.info("Attached the OTLP exporter to the existing global TracerProvider.")
         provider = current
     else:
-        provider = TracerProvider(resource=Resource.create({"service.name": _service_name()}))
+        provider = TracerProvider(
+            resource=Resource.create(
+                {"service.name": _service_name(), _PROJECT_NAME_ATTR: _service_name()}
+            )
+        )
         provider.add_span_processor(BatchSpanProcessor(exporter))
         trace.set_tracer_provider(provider)
         logger.info("Installed a global TracerProvider for smart-assignment tracing.")
