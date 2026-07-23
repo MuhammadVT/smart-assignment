@@ -237,12 +237,39 @@ def _fetch_candidates(project: str, endpoint: Optional[str], label: str) -> List
     return spans_to_candidates(feedback_spans, decision_spans, label=label)
 
 
+def _project_name_header(headers_env: str) -> Optional[str]:
+    """Pick the ``x-project-name`` value out of an ``OTEL_EXPORTER_OTLP_HEADERS``-style
+    string (comma-separated ``key=value`` pairs), or ``None`` if absent.
+
+    Mirrors Phoenix's own OTLP project-routing precedence -- the ``x-project-name``
+    header wins over the ``openinference.project.name`` resource attribute wins over
+    the server default (see ``phoenix.server.api.routers.v1.traces.export_traces``)
+    -- so this script queries the same project the app's spans actually land in
+    when an operator routes via the header rather than (or in addition to) the
+    resource attribute."""
+    from urllib.parse import unquote
+
+    for pair in headers_env.split(","):
+        key, sep, value = pair.strip().partition("=")
+        if sep and unquote(key).strip().lower() == "x-project-name":
+            return unquote(value).strip() or None
+    return None
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--project",
-        default=os.environ.get("OTEL_SERVICE_NAME", "smart-assignment"),
-        help="Phoenix project name (defaults to OTEL_SERVICE_NAME or 'smart-assignment').",
+        default=(
+            _project_name_header(os.environ.get("OTEL_EXPORTER_OTLP_HEADERS", ""))
+            or os.environ.get("OTEL_SERVICE_NAME", "smart-assignment")
+        ),
+        help=(
+            "Phoenix project name (defaults to the x-project-name header in "
+            "OTEL_EXPORTER_OTLP_HEADERS if set, else OTEL_SERVICE_NAME, else "
+            "'smart-assignment' -- the same precedence Phoenix itself uses to "
+            "route ingested spans to a project)."
+        ),
     )
     parser.add_argument(
         "--endpoint",

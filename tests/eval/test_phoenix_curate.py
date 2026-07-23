@@ -89,3 +89,15 @@ def test_as_obj_and_query_helpers():
          "preferred_day": "TUE", "preferred_window": "07:00-10:00"}
     )
     assert "N" in q and "5 cases" in q and "prefers TUE 07:00-10:00" in q
+
+
+def test_project_name_header_extracts_x_project_name():
+    f = phoenix_curate._project_name_header
+    assert f("x-project-name=smart-assignment-eval") == "smart-assignment-eval"
+    assert f("authorization=Bearer abc, x-project-name=smart-assignment-eval") == (
+        "smart-assignment-eval"
+    )
+    assert f(" x-project-name = smart-assignment-eval ") == "smart-assignment-eval"
+    assert f("X-Project-Name=Smart-Assignment-Eval") == "Smart-Assignment-Eval"
+    assert f("authorization=Bearer abc") is None
+    assert f("") is None
