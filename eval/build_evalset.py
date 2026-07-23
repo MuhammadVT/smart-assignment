@@ -23,6 +23,7 @@ Run ``python3 -m eval.build_evalset`` to (re)generate the committed dataset.
 
 from __future__ import annotations
 
+import argparse
 import json
 import pathlib
 from typing import Any, Dict, List, Optional
@@ -137,8 +138,44 @@ def render_dataset(
 
 
 def main() -> None:
-    _DATASET_PATH.write_text(render_dataset(), encoding="utf-8")
-    print(f"Wrote {len(GOLDEN_CASES)} eval case(s) to {_DATASET_PATH}")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--cases",
+        default=None,
+        help=(
+            "Build the evalset from a curated-candidates JSON file "
+            "(scripts/curate_feedback.py or scripts/phoenix_curate.py output) "
+            "instead of the built-in GOLDEN_CASES. Reconstructs each case's "
+            "profile via eval/case_source.py -- no hand-copying into golden_cases.py."
+        ),
+    )
+    parser.add_argument(
+        "--out",
+        default=None,
+        help="Where to write the evalset JSON (defaults to the committed golden dataset).",
+    )
+    args = parser.parse_args()
+
+    if args.cases:
+        # File-backed cases: turn curated production feedback into a runnable
+        # ADK evalset without touching the committed golden set.
+        from eval.case_source import load_curated_cases
+
+        cases, skipped = load_curated_cases(args.cases)
+        out_path = (
+            pathlib.Path(args.out)
+            if args.out
+            else _DATASET_PATH.with_name("feedback.test.json")
+        )
+        out_path.write_text(render_dataset(cases), encoding="utf-8")
+        print(f"Wrote {len(cases)} curated eval case(s) from {args.cases} to {out_path}")
+        for entry in skipped:
+            print(f"  skipped {entry['eval_id']}: {entry['reason']}")
+        return
+
+    out_path = pathlib.Path(args.out) if args.out else _DATASET_PATH
+    out_path.write_text(render_dataset(), encoding="utf-8")
+    print(f"Wrote {len(GOLDEN_CASES)} eval case(s) to {out_path}")
 
 
 if __name__ == "__main__":
