@@ -62,6 +62,16 @@ jobs:
       - name: Run tests
         run: python3 -m pytest -q
 
+      - name: Score curated snapshot datasets (current model, deterministic)
+        # The self-contained eval gate: replay the current model against every
+        # committed snapshot dataset (each carries its own world -- see
+        # eval/data/snapshots/ + integrations/snapshot_data.py) and check the
+        # recommend/escalate outcome + route-slot against the golden targets.
+        # Fully offline, no credentials; blocks a regression. (Also asserted by
+        # tests/eval/test_outcome_scoring.py above -- this makes it a named,
+        # at-a-glance CI step and exercises the CLI.)
+        run: python3 -m eval.outcome_scoring --path deterministic
+
   # Agent-level evaluation (ADK AgentEvaluator): replays scripted intake
   # conversations against the real root_agent and scores tool trajectory. Unlike
   # the hermetic `test` job it needs a live LLM backend, so it runs separately and
@@ -110,6 +120,24 @@ jobs:
             exit 0
           fi
           python3 -m pytest eval/test_eval.py -q
+
+      - name: Score curated snapshot datasets (LLM path, advisory)
+        # The same snapshot gate as the `test` job, but with the grounded LLM
+        # decision in the loop (SMART_ASSIGNMENT_EVAL_MODEL_PATH=llm). Advisory:
+        # needs credentials and grounded reasoning is non-deterministic, so it
+        # reports divergences without blocking. Skips cleanly without SAGE_*.
+        env:
+          SMART_ASSIGNMENT_LLM_BACKEND: sage
+          SMART_ASSIGNMENT_SAGE_MODEL: sage-gemini-2.5-flash
+          SAGE_CLIENT_ID: ${{ secrets.SAGE_CLIENT_ID }}
+          SAGE_CLIENT_SECRET: ${{ secrets.SAGE_CLIENT_SECRET }}
+          SAGE_ENVIRONMENT: ${{ secrets.SAGE_ENVIRONMENT }}
+        run: |
+          if [ -z "$SAGE_CLIENT_ID" ]; then
+            echo "No SAGE_* credentials configured; skipping LLM-path scoring (advisory)."
+            exit 0
+          fi
+          python3 -m eval.outcome_scoring --path llm
 
   # G-Eval quality metrics (DeepEval): brief_quality (escalate-outcome captures)
   # and response_clarity (recommend-outcome captures), scored directly against
