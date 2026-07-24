@@ -716,6 +716,39 @@ same trajectory eval as the built-in `GOLDEN_CASES`, without editing
 `golden_cases.py`. The committed golden dataset and its sync test are untouched
 (the flag-less `build_evalset` still regenerates exactly that).
 
+### Judge calibration — trusting the auto-judges (Phase 0, advisory)
+
+The automated judges (`brief_quality`, `response_clarity`) are themselves LLMs, so
+their scores are only worth gating on once benchmarked against human ground truth.
+`eval/judge_calibration.py` measures that agreement — Cohen's κ (with a rubber-stamp
+guard so a judge that passes everything on 👍-skewed labels scores ~0, not ~0.9), a
+**dangerous-cell rate** (how often the judge passes what a human rejected), and a
+trust band (`insufficient` / `distrust` / `advisory` / `gate`). It's purely
+**advisory** and gated by `Config.use_judge_calibration` (default off): it changes
+no decision and gates nothing; `scripts/calibrate_judges.py` is a no-op with the
+flag off.
+
+The crux is that human feedback is **holistic** (a thumb on the whole decision)
+while judges are **dimensional**, so the harness never fabricates a per-judge label
+from a thumb. It tiers the signal: an explicit per-dimension annotation (Tier 3)
+wins; else a note-tag (Tier 2 — a transparent keyword map, plus an opt-in LLM
+suggestion that degrades to keyword-only on any failure); else the thumb is routed
+to the outcome-appropriate judge (Tier 1.5 — escalate→`brief_quality`,
+recommend→`response_clarity`, the same split `test_quality.py` uses) and *only* that
+one; and separately a Tier-1 **composite** predicts a thumb from all judge verdicts
+and calibrates that against the holistic thumb. Every aligned pair is tagged with
+its tier, so the sharp (dimensional) agreement reads separately from the coarse
+(holistic) one. Dimension names are exactly the `deployment/phoenix/README.md`
+vocabulary (and the judge names), so human label, Phoenix annotation, and judge
+speak one language.
+
+Human labels come through **one shape (`HumanLabel`) from any source** — vendor-free
+(the JSONL log, where a Tier-3 annotation is a record with a `"<dimension>:<verdict>"`
+label, no schema change), **Phoenix** (annotations on the decision trace, today),
+or **Langfuse** (scores, later) — all normalized by the shared parser, with the live
+client calls lazily imported and defensive. No replay and no data source: calibration
+needs only the `(human_label, judge_verdict)` pairs that already exist.
+
 ### Self-contained snapshot datasets — scoring the model, offline, in CI
 
 Trajectory eval is world-independent, but scoring the *decision* (recommend vs.

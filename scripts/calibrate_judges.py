@@ -22,13 +22,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
+from pathlib import Path
 
-from eval.judge_calibration import (
-    calibrate,
-    human_labels_from_feedback,
-    verdicts_from_mapping,
-)
-from smart_assignment.shared.config import DEFAULT_CONFIG
+# This CLI uses the repo-root ``eval`` package; ensure the repo root is importable
+# when run directly (``python scripts/calibrate_judges.py``), not only via ``-m``.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from eval.annotation_sources import load_labels  # noqa: E402
+from eval.judge_calibration import calibrate, verdicts_from_mapping  # noqa: E402
+from smart_assignment.shared.config import DEFAULT_CONFIG  # noqa: E402
 
 
 def _print_report(report: dict) -> None:
@@ -46,18 +49,25 @@ def _print_report(report: dict) -> None:
     # Surface the dangerous disagreements for the most-used judges.
     for name, r in rows:
         if r["top_disagreements"]:
-            print(f"\n{name} — top disagreements (judge vs human):")
+            print(f"\n{name} - top disagreements (judge vs human):")
             for d in r["top_disagreements"][:5]:
-                note = f" — “{d['note']}”" if d.get("note") else ""
+                note = f' - "{d["note"]}"' if d.get("note") else ""
                 print(f"  [{d['source']}] {d['kind']} {d['decision_id']}{note}")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
+        "--source",
+        default="vendorfree",
+        choices=("vendorfree", "phoenix", "langfuse"),
+        help="Where human labels come from (default: vendorfree JSONL log). "
+        "phoenix/langfuse read connection details from env.",
+    )
+    parser.add_argument(
         "--log",
         default=DEFAULT_CONFIG.feedback_log_path,
-        help="Feedback JSONL log with the human labels (default: Config.feedback_log_path).",
+        help="Feedback JSONL log for the vendorfree source (default: Config.feedback_log_path).",
     )
     parser.add_argument(
         "--verdicts",
@@ -90,7 +100,7 @@ def main() -> None:
         )
         return
 
-    labels = human_labels_from_feedback(args.log)
+    labels = load_labels(args.source, log=args.log)
     with open(args.verdicts, "r", encoding="utf-8") as handle:
         verdicts = verdicts_from_mapping(json.load(handle))
 
