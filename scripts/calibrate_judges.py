@@ -71,6 +71,16 @@ def main() -> None:
         default=20,
         help="Minimum aligned pairs before a trust band is reported (else 'insufficient').",
     )
+    parser.add_argument(
+        "--no-note-tagging",
+        action="store_true",
+        help="Disable Tier-2 keyword note-tagging (holistic thumbs route by outcome only).",
+    )
+    parser.add_argument(
+        "--use-llm-tagging",
+        action="store_true",
+        help="Also union LLM-suggested dimension tags onto the keyword tags (opt-in, advisory).",
+    )
     args = parser.parse_args()
 
     if not DEFAULT_CONFIG.use_judge_calibration:
@@ -84,7 +94,13 @@ def main() -> None:
     with open(args.verdicts, "r", encoding="utf-8") as handle:
         verdicts = verdicts_from_mapping(json.load(handle))
 
-    report = calibrate(labels, verdicts, min_n=args.min_n)
+    note_tagger = None
+    if not args.no_note_tagging:
+        from eval.note_tagging import make_note_tagger
+
+        note_tagger = make_note_tagger(DEFAULT_CONFIG, use_llm=args.use_llm_tagging)
+
+    report = calibrate(labels, verdicts, note_tagger=note_tagger, min_n=args.min_n)
     _print_report(report)
 
     if args.out:
