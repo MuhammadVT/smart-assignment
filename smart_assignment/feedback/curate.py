@@ -110,6 +110,10 @@ def _query_from_context(context: Dict[str, Any]) -> Optional[str]:
     cases = context.get("order_quantity_cases")
     if cases:
         parts.append(f"{cases} cases")
+    day = context.get("preferred_day")
+    window = context.get("preferred_window")
+    if day and window:
+        parts.append(f"prefers {day} {window}")
     return ", ".join(parts) if parts else None
 
 

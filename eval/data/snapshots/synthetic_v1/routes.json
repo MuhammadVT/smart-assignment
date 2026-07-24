@@ -1,0 +1,158 @@
+[
+  {
+    "available_windows": [
+      [
+        "08:00:00",
+        "11:00:00"
+      ]
+    ],
+    "avg_load_cases": 500.0,
+    "avg_load_cubes": 0.0,
+    "avg_load_weight": 0.0,
+    "committed_stops": [
+      {
+        "customer_number": "STOP-100-000",
+        "customer_tier": "5",
+        "delivery_time_window": [
+          "08:00:00",
+          "11:00:00"
+        ],
+        "location": {
+          "lat": 40.045,
+          "lon": -100.005
+        }
+      },
+      {
+        "customer_number": "STOP-100-001",
+        "customer_tier": "4",
+        "delivery_time_window": [
+          "08:00:00",
+          "11:00:00"
+        ],
+        "location": {
+          "lat": 40.052,
+          "lon": -99.995
+        }
+      },
+      {
+        "customer_number": "STOP-100-002",
+        "customer_tier": "Other",
+        "delivery_time_window": [
+          "08:00:00",
+          "11:00:00"
+        ],
+        "location": {
+          "lat": 40.048,
+          "lon": -100.01
+        }
+      }
+    ],
+    "day": "TUE",
+    "name": "North Loop",
+    "route_id": "SYN-100",
+    "service_center": {
+      "lat": 40.05,
+      "lon": -100.0
+    },
+    "service_radius_miles": 20.0,
+    "vehicle_capacity_cases": 1000.0,
+    "vehicle_capacity_cubes": 0.0,
+    "vehicle_capacity_weight": 0.0
+  },
+  {
+    "available_windows": [
+      [
+        "13:00:00",
+        "16:00:00"
+      ]
+    ],
+    "avg_load_cases": 600.0,
+    "avg_load_cubes": 0.0,
+    "avg_load_weight": 0.0,
+    "committed_stops": [
+      {
+        "customer_number": "STOP-200-000",
+        "customer_tier": "5",
+        "delivery_time_window": [
+          "13:00:00",
+          "16:00:00"
+        ],
+        "location": {
+          "lat": 39.955,
+          "lon": -100.004
+        }
+      },
+      {
+        "customer_number": "STOP-200-001",
+        "customer_tier": "Perks",
+        "delivery_time_window": [
+          "13:00:00",
+          "16:00:00"
+        ],
+        "location": {
+          "lat": 39.948,
+          "lon": -99.996
+        }
+      }
+    ],
+    "day": "WED",
+    "name": "South Loop",
+    "route_id": "SYN-200",
+    "service_center": {
+      "lat": 39.95,
+      "lon": -100.0
+    },
+    "service_radius_miles": 20.0,
+    "vehicle_capacity_cases": 800.0,
+    "vehicle_capacity_cubes": 0.0,
+    "vehicle_capacity_weight": 0.0
+  },
+  {
+    "available_windows": [
+      [
+        "08:00:00",
+        "11:00:00"
+      ]
+    ],
+    "avg_load_cases": 400.0,
+    "avg_load_cubes": 0.0,
+    "avg_load_weight": 0.0,
+    "committed_stops": [
+      {
+        "customer_number": "STOP-300-000",
+        "customer_tier": "4",
+        "delivery_time_window": [
+          "08:00:00",
+          "11:00:00"
+        ],
+        "location": {
+          "lat": 40.005,
+          "lon": -99.905
+        }
+      },
+      {
+        "customer_number": "STOP-300-001",
+        "customer_tier": "Other",
+        "delivery_time_window": [
+          "08:00:00",
+          "11:00:00"
+        ],
+        "location": {
+          "lat": 39.995,
+          "lon": -99.895
+        }
+      }
+    ],
+    "day": "THU",
+    "name": "East Loop",
+    "route_id": "SYN-300",
+    "service_center": {
+      "lat": 40.0,
+      "lon": -99.9
+    },
+    "service_radius_miles": 15.0,
+    "vehicle_capacity_cases": 1200.0,
+    "vehicle_capacity_cubes": 0.0,
+    "vehicle_capacity_weight": 0.0
+  }
+]

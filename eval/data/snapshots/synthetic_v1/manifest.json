@@ -1,0 +1,14 @@
+{
+  "anonymized": true,
+  "captured_with": {
+    "backend": "sage",
+    "model": "sage-gemini-2.5-flash",
+    "total_score_threshold": 0.6,
+    "use_route_slot_scoring": false
+  },
+  "case_count": 4,
+  "created_at": null,
+  "name": "synthetic_v1",
+  "route_count": 3,
+  "source": "synthetic"
+}

@@ -672,6 +672,20 @@ same structured facts a `/api/recommend` one did. These travel as private
 `_trace`/`_decision` payload hints that `app._attach_feedback` consumes and
 always strips.
 
+**Replay-ready trace datasets, still vendor-free (`use_trace_dataset_payloads`).**
+Filtering thumbs-down spans is enough to *triage*, but to *curate a dataset
+inside* Phoenix/Langfuse you need the case's input and output on the trace. When
+`use_trace_dataset_payloads` is on **and** PII scrub is off, `DecisionSpan.record`
+attaches the intake and the recommendation to the `webapp.recommendation` span as
+OpenInference `input.value` / `output.value` (with `openinference.span.kind`).
+These are *open* semantic-convention keys — Phoenix and Langfuse both read them
+natively to build replay-able dataset examples — so the feature is backend-native
+yet imports no vendor SDK. It's a pure opt-in on top of tracing, and scrub-on
+always suppresses it (the payload carries name/address), so no PII reaches a trace
+unless the operator opted into *both* flags. The vendor-free JSONL curation path
+(`scripts/curate_feedback.py`) is unaffected and remains the portable default;
+this just makes the *backend-native* curation path viable too.
+
 **One neutral pipe for all annotators.** The schema's `annotator_kind ∈ {HUMAN,
 LLM, CODE}` means an LLM-as-judge score or a deterministic code check can flow
 through the *same* record, log, and OTLP span later — so the existing eval
@@ -686,6 +700,120 @@ not *how* (the reviewer may have wanted an escalation, or simply a different
 feasible route/slot), so guessing `escalate` would encode a target they never
 chose. The boundary is the point: human feedback feeds an offline, human-gated
 loop.
+
+**From candidates to a runnable eval — no hand-copying.** Both curation entry
+points emit the *same* candidate-cases JSON: `scripts/curate_feedback.py`
+(vendor-free, over the JSONL log) and `scripts/phoenix_curate.py` (the Phoenix
+path — it joins the `human_feedback` and `webapp.recommendation` spans by trace id
+so you don't do it by hand, and writes that same file, optionally also uploading a
+Phoenix Dataset). `eval/case_source.py` loads either file, reconstructing a
+`CustomerProfile` (including the stated day/window, now carried in
+`feedback_context`) and a `GoldenCase` per candidate; it *skips* any case whose
+address is missing or PII-redacted (a scrub-on capture can't be geocoded) and
+reports why. `python3 -m eval.build_evalset --cases <file>` then turns those into a
+standard ADK evalset JSON — so curated production feedback runs through the exact
+same trajectory eval as the built-in `GOLDEN_CASES`, without editing
+`golden_cases.py`. The committed golden dataset and its sync test are untouched
+(the flag-less `build_evalset` still regenerates exactly that).
+
+### Judge calibration — trusting the auto-judges (Phase 0, advisory)
+
+The automated judges (`brief_quality`, `response_clarity`) are themselves LLMs, so
+their scores are only worth gating on once benchmarked against human ground truth.
+`eval/judge_calibration.py` measures that agreement — Cohen's κ (with a rubber-stamp
+guard so a judge that passes everything on 👍-skewed labels scores ~0, not ~0.9), a
+**dangerous-cell rate** (how often the judge passes what a human rejected), and a
+trust band (`insufficient` / `distrust` / `advisory` / `gate`). It's purely
+**advisory** and gated by `Config.use_judge_calibration` (default off): it changes
+no decision and gates nothing; `scripts/calibrate_judges.py` is a no-op with the
+flag off.
+
+The crux is that human feedback is **holistic** (a thumb on the whole decision)
+while judges are **dimensional**, so the harness never fabricates a per-judge label
+from a thumb. It tiers the signal: an explicit per-dimension annotation (Tier 3)
+wins; else a note-tag (Tier 2 — a transparent keyword map, plus an opt-in LLM
+suggestion that degrades to keyword-only on any failure); else the thumb is routed
+to the outcome-appropriate judge (Tier 1.5 — escalate→`brief_quality`,
+recommend→`response_clarity`, the same split `test_quality.py` uses) and *only* that
+one; and separately a Tier-1 **composite** predicts a thumb from all judge verdicts
+and calibrates that against the holistic thumb. Every aligned pair is tagged with
+its tier, so the sharp (dimensional) agreement reads separately from the coarse
+(holistic) one. Dimension names are exactly the `deployment/phoenix/README.md`
+vocabulary (and the judge names), so human label, Phoenix annotation, and judge
+speak one language.
+
+Human labels come through **one shape (`HumanLabel`) from any source** — vendor-free
+(the JSONL log, where a Tier-3 annotation is a record with a `"<dimension>:<verdict>"`
+label, no schema change), **Phoenix** (annotations on the decision trace, today),
+or **Langfuse** (scores, later) — all normalized by the shared parser, with the live
+client calls lazily imported and defensive. No replay and no data source: calibration
+needs only the `(human_label, judge_verdict)` pairs that already exist.
+
+### Self-contained snapshot datasets — scoring the model, offline, in CI
+
+Trajectory eval is world-independent, but scoring the *decision* (recommend vs.
+escalate, and which route-slot) needs the world the decision saw. So a curated
+golden dataset carries its own world — the file-backed analogue of the
+code-defined `mock` world, and PII-free the same way. A **snapshot bundle** is one
+directory:
+
+```
+eval/data/snapshots/<name>/
+  routes.json    the world: Route/RouteStop with capacity, committed stops, windows, tiers
+  geocode.json   {address -> {lat, lon}} for every case
+  cases.json     the cases: intake + expected_outcome + expected_route_id/window
+  manifest.json  provenance for visibility (source, model, config, counts)
+```
+
+`integrations/snapshot_data.py` owns the encoding; a **`snapshot` data source**
+(`route_capacity_client`) serves `routes.json` and a **`SnapshotGeocoder`**
+(`geocoding_client`) replays `geocode.json`, both pinned by
+`eval/dataset.py` (which **auto-discovers** any bundle under `eval/data/snapshots/`
+— dropping a directory registers a dataset, no code change — and hashes the bundle
+bytes for a provenance `dataset_content_ref`). So replay is fully offline and
+deterministic, exactly like `mock`.
+
+**Two authoring on-ramps, one format, little manual work:**
+
+```
+ human feedback                          synthetic
+ curate_feedback.py / phoenix_curate.py  eval/synthetic.py
+   -> candidate-cases JSON                 designed world + prospects
+          |                                        |
+   eval/freeze_dataset.py                          |   (already PII-free)
+   run each once vs the real world,                |
+   capture its routes + coords, ANONYMIZE          |
+          \________________________  _____________/
+                                   \/
+                    a self-contained snapshot bundle
+                                   |
+                    eval/outcome_scoring.py  ── run the CURRENT model vs the
+                    (offline, deterministic)    frozen world; score outcome +
+                                                route-slot vs the golden target
+```
+
+**Anonymization (the PII line).** Scoring depends on geometry and capacity, not
+identities, so `freeze_dataset.py` keeps the coordinates / capacity / windows /
+tiers / route-codes and drops the identifiers: the prospect's name and street
+address become synthetic labels (the label keys the geocode map to the real
+coordinates, so distance math is unchanged) and committed-stop customer numbers
+become `STOP-*`. The result is PII-free *by construction* — safe to commit and run
+in a shared CI. (Synthetic datasets are PII-free already, so they skip this.) One
+shared world (the dedup union of every case's candidate routes), each prospect
+evaluated against it — the `mock` pattern generalized. Golden targets come from
+the human's corrected target on a promoted thumbs-down, else the decision captured
+at freeze time (a regression baseline).
+
+**Scoring, two paths, one toggle.** `eval/outcome_scoring.py` re-runs the current
+model over a bundle and checks the recommend/escalate outcome and the route-slot
+(route id + window) against the golden target. `path` (or
+`SMART_ASSIGNMENT_EVAL_MODEL_PATH`) selects `deterministic` (weighted-sum, grounded
+off — offline, no credentials, the **blocking self-contained CI gate** in the
+`test` job) or `llm` (grounded judgment in the loop — advisory in the credentialed
+`agent-eval` job). The scorer is side-effect-free (it restores the data-source /
+geocoder env it pins). This closes the flywheel: production feedback (or a
+synthetic design) → an anonymized, self-contained golden dataset → the current
+model scored against it, automatically, in CI.
 
 ## Step 5, two ways: weighted-sum vs. grounded LLM judgment
 
