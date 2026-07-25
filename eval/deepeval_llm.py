@@ -12,7 +12,7 @@ Why one adapter instead of a Sage-only one (contrast with
 registry-level bridge was the only way in): DeepEval imposes no such
 constraint. ``GEval(model=...)`` happily accepts any ``DeepEvalBaseLLM``
 instance, so the natural fit is to reuse ``generate_text(config, prompt)`` --
-the SAME function ``judgment/``, ``triage/``, ``slotpick/`` etc. already call
+the SAME function ``routeslot/``, ``triage/`` etc. already call
 for every other grounded decision in this repo, which already branches on
 ``Config.llm_backend`` internally. No second, divergent judge-model resolution
 path to maintain.

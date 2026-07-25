@@ -34,6 +34,9 @@ _ANNOTATOR_KINDS = frozenset({ANNOTATOR_HUMAN, ANNOTATOR_LLM, ANNOTATOR_CODE})
 # grounded step later without a schema change.
 DECISION_FINAL_RESPONSE = "final_response"
 DECISION_RECOMMEND_OR_ESCALATE = "recommend_or_escalate"
+# Retained for backward compatibility: annotations written before the slot pick
+# was absorbed into the route-slot decision still carry this value, and the
+# durable log is the audit source of truth -- dropping it would invalidate them.
 DECISION_SLOTPICK = "slotpick"
 DECISION_ROUTE_SLOT = "route_slot"
 DECISION_ADDRESS_RESOLVE = "address_resolve"

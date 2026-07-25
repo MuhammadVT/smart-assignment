@@ -43,7 +43,7 @@ def test_package_imports_without_credentials():
 
 
 def test_run_slot_recommendation_runs_offline():
-    """The full pipeline runs with no creds (LLMReasoner self-falls-back)."""
+    """The full pipeline runs with no creds (the grounded layer self-falls-back)."""
     result = _run(
         "from smart_assignment.mock_customers import SAMPLE_CUSTOMERS\n"
         "from smart_assignment.pipeline import run_slot_recommendation\n"

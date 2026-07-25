@@ -1,11 +1,6 @@
 """
 Instruction text for `root_agent` (see agent.py), kept separate from the
 agent's wiring so prompt iteration doesn't require touching tool/agent code.
-
-Not to be confused with reasoning_prompts.py, which builds the prompt for
-the pipeline's *optional* LLM-narrated reasoning trace (a separate, deeper
-layer used inside `recommend_or_escalate`'s underlying pipeline step) --
-this file is the top-level conversational agent's own system instruction.
 """
 
 from __future__ import annotations

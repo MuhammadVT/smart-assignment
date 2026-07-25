@@ -107,8 +107,11 @@ def main() -> None:
     print(
         f"config: top_n={DEFAULT_CONFIG.top_n_candidate_routes} "
         f"max_util={DEFAULT_CONFIG.max_utilization_after_assignment:.0%} "
-        f"total_score_threshold={DEFAULT_CONFIG.total_score_threshold:.0%} "
-        f"weights={DEFAULT_CONFIG.factor_weights}"
+        f"route_slot_bar={DEFAULT_CONFIG.route_slot_score_threshold:.0%} "
+        f"rs_weights=geo {DEFAULT_CONFIG.rs_weight_geo:.2f} / "
+        f"cap {DEFAULT_CONFIG.rs_weight_capacity:.2f} / "
+        f"win {DEFAULT_CONFIG.rs_weight_window:.2f} / "
+        f"avail {DEFAULT_CONFIG.rs_weight_availability:.2f}"
     )
 
     for customer in customers:

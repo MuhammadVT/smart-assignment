@@ -28,7 +28,6 @@ import os
 from typing import AsyncGenerator, Optional
 
 from smart_assignment.pipeline import run_slot_recommendation
-from smart_assignment.reasoning import DeterministicReasoner
 from smart_assignment.reporting.page import build_workflow_payload
 from smart_assignment.webapp.decision import traced_decision
 from smart_assignment.shared.config import DEFAULT_CONFIG, Config
@@ -235,7 +234,6 @@ class LlmChatService:
                 customer,
                 config=DEFAULT_CONFIG,
                 geocoder=self._geocoder,
-                reasoner=DeterministicReasoner(),
             )
             decision.record(result)
         payload = build_workflow_payload(

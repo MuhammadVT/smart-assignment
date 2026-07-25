@@ -15,7 +15,7 @@ from .conftest import AFTERNOON, MORNING, choice_dict, customer, scored_eval, sc
 
 def _cfg(**kw):
     """A route-slot config pinned to the THRESHOLD (flag-off) rollback path."""
-    return Config(use_route_slot_scoring=True, use_grounded_route_slot_escalation=False, **kw)
+    return Config(use_grounded_route_slot_escalation=False, **kw)
 
 
 def _evals():
@@ -25,6 +25,29 @@ def _evals():
     ])
     b = scored_eval("RTE-B", "Bravo", [scored_slot(MORNING, avail=0.90, total=0.66)])
     return [a, b]
+
+
+def test_total_score_is_the_winners_own_score_untouched_by_the_runner_up():
+    # A near-tie between two GOOD options is not penalized -- the winning
+    # route-slot's own score stands on its own, regardless of how close the
+    # runner-up scored. It is intentionally NOT a margin over the runner-up.
+    close = [
+        scored_eval("RTE-A", "Alpha", [scored_slot(MORNING, avail=0.5, total=0.75)]),
+        scored_eval("RTE-B", "Bravo", [scored_slot(MORNING, avail=0.5, total=0.74)]),
+    ]
+    rec = decide_route_slot(customer(), close, _cfg())
+    assert rec.decision is Decision.RECOMMENDED
+    assert rec.total_score == 0.75
+
+    # A near-tie between two MEDIOCRE options stays mediocre -- still below the
+    # bar, so it correctly escalates rather than being rescued by the tie.
+    weak = [
+        scored_eval("RTE-A", "Alpha", [scored_slot(MORNING, avail=0.5, total=0.54)]),
+        scored_eval("RTE-B", "Bravo", [scored_slot(MORNING, avail=0.5, total=0.53)]),
+    ]
+    rec = decide_route_slot(customer(), weak, _cfg())
+    assert rec.decision is Decision.ESCALATED_LOW_SCORE
+    assert rec.total_score == 0.54
 
 
 def test_deterministic_picks_the_highest_total_route_slot():
@@ -77,7 +100,7 @@ def test_no_feasible_route_escalates():
 
 
 def test_grounded_pick_diverges_to_a_more_open_slot():
-    cfg = _cfg(use_grounded_judgment=True)
+    cfg = _cfg(use_grounded_route_slot_pick=True)
 
     # Options are sorted by descending total: idx0=RTE-A morning (0.80),
     # idx1=RTE-B morning (0.66, openness 0.90), idx2=RTE-A afternoon (0.60).
@@ -101,7 +124,7 @@ def test_grounded_pick_diverges_to_a_more_open_slot():
 
 
 def test_grounded_falls_back_to_deterministic_on_backend_error():
-    cfg = _cfg(use_grounded_judgment=True)
+    cfg = _cfg(use_grounded_route_slot_pick=True)
 
     def boom(config, prompt):
         raise RuntimeError("SAGE_CLIENT_ID missing")
@@ -113,7 +136,7 @@ def test_grounded_falls_back_to_deterministic_on_backend_error():
 
 
 def test_grounded_falls_back_on_persistently_ungrounded_choice():
-    cfg = _cfg(use_grounded_judgment=True)
+    cfg = _cfg(use_grounded_route_slot_pick=True)
 
     def liar(config, prompt):
         # Well-formed shape, but a fabricated citation (idx1 openness is 0.90).
@@ -139,7 +162,7 @@ def test_llm_menu_excludes_below_threshold_route_slots():
         scored_slot(MORNING, avail=0.7, total=0.80),
         scored_slot(AFTERNOON, avail=0.3, total=0.50),
     ])]
-    cfg = _cfg(use_grounded_judgment=True, route_slot_score_threshold=0.55)
+    cfg = _cfg(use_grounded_route_slot_pick=True, route_slot_score_threshold=0.55)
     seen = {}
 
     def capture(config, prompt):
@@ -160,7 +183,7 @@ def test_llm_menu_excludes_below_threshold_route_slots():
 
 def test_low_score_escalation_never_calls_the_llm():
     evals = [scored_eval("RTE-A", "Alpha", [scored_slot(MORNING, avail=0.3, total=0.40)])]
-    cfg = _cfg(use_grounded_judgment=True, route_slot_score_threshold=0.55)
+    cfg = _cfg(use_grounded_route_slot_pick=True, route_slot_score_threshold=0.55)
 
     def boom(config, prompt):
         raise AssertionError("LLM must not be consulted when nothing clears the bar")

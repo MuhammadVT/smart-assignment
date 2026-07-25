@@ -183,7 +183,7 @@ class ScoredSlot:
     route-slot scoring path (see shared/scoring.score_route_slot). `total_score`
     is this slot's weighted total; `factor_scores` its per-slot breakdown
     (geo/capacity shared from the route, window_match/availability slot-specific).
-    Only populated when `Config.use_route_slot_scoring` is on.
+    Populated for every feasible route that produced at least one candidate slot.
     """
 
     slot: SlotOption
@@ -254,10 +254,10 @@ class SlotRecommendation:
     The explainable output of the workflow for one customer.
 
     `total_score` is the winning route's own weighted score from Step 4 (see
-    `shared/scoring.score_candidate`) — not a separately-computed "confidence."
+    `shared/scoring.score_route_slot`) — not a separately-computed "confidence."
     A route's own merit shouldn't be discounted just because another candidate
     happened to score nearly as well, so the escalation gate compares this
-    number directly against `Config.total_score_threshold`.
+    number directly against `Config.route_slot_score_threshold`.
 
     `customer_number` is optional -- most new customers are prospects with no
     Sysco number yet, so `customer_address` is always populated as the
@@ -275,9 +275,8 @@ class SlotRecommendation:
     recommended_day: Optional[str] = None
     recommended_window: Optional[str] = None
     recommended_window_basis: Optional[str] = None  # why this slot was chosen (audit trail)
-    # Set only when the grounded slot selector (see the `slotpick` package)
-    # picked the recommended slot from the route's candidate menu -- its
-    # grounded rationale. None on the deterministic path.
+    # Set only when a verified grounded route-slot choice produced the pick --
+    # its grounded rationale. None on the deterministic path.
     recommended_window_rationale: Optional[str] = None
     # Structured, grounded explanation of a RECOMMENDED route-slot pick, populated
     # only when the grounded route-slot decision (see the `routeslot` package)

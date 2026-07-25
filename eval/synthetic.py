@@ -167,7 +167,6 @@ def build_synthetic_bundle(
     """Assemble the four bundle parts for the designed world. Expected fields are
     captured by running the current pipeline against the injected world."""
     from smart_assignment.pipeline import run_slot_recommendation
-    from smart_assignment.reasoning import DeterministicReasoner
 
     routes = synthetic_routes()
     prospects = synthetic_prospects()
@@ -181,7 +180,6 @@ def build_synthetic_bundle(
             routes=routes,
             geocoder=geocoder,
             config=config,
-            reasoner=DeterministicReasoner(),
         )
         rec = result.recommendation
         outcome = "recommend" if rec.decision == Decision.RECOMMENDED else "escalate"
@@ -223,8 +221,9 @@ def build_synthetic_bundle(
         "captured_with": {
             "backend": config.llm_backend,
             "model": config.resolved_model(ROLE_ROOT_AGENT),
-            "total_score_threshold": config.total_score_threshold,
-            "use_route_slot_scoring": config.use_route_slot_scoring,
+            "route_slot_score_threshold": config.route_slot_score_threshold,
+            "use_grounded_route_slot_pick": config.use_grounded_route_slot_pick,
+            "use_grounded_route_slot_escalation": config.use_grounded_route_slot_escalation,
         },
     }
     return routes, geocode, cases, manifest

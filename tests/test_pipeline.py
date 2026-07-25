@@ -1,7 +1,7 @@
 """
 Tests for the slot_recommendation pipeline's end-to-end decisions and the
-total-score gating math. All deterministic -- the LLM reasoning layer is
-bypassed via the DeterministicReasoner so no API key/network is used.
+total-score gating math. All deterministic -- the grounded LLM layer is off
+by default, so no API key/network is used.
 """
 
 from __future__ import annotations
@@ -9,15 +9,12 @@ from __future__ import annotations
 from datetime import time
 
 from smart_assignment.pipeline import run_slot_recommendation
-from smart_assignment.reasoning import DeterministicReasoner, compute_total_score
 from smart_assignment.shared.config import Config
 from smart_assignment.shared.models import CustomerProfile, DayOfWeek, Decision, PreferredSlot
 
-_DETERMINISTIC = DeterministicReasoner()
-
 
 def _run(customer, config=None):
-    return run_slot_recommendation(customer, config=config or Config(), reasoner=_DETERMINISTIC)
+    return run_slot_recommendation(customer, config=config or Config())
 
 
 def test_clear_case_is_recommended():
@@ -110,22 +107,8 @@ def test_large_order_escalates_low_total_score():
     )
     rec = _run(customer).recommendation
     assert rec.decision == Decision.ESCALATED_LOW_SCORE
-    assert rec.total_score < Config().total_score_threshold
+    assert rec.total_score < Config().route_slot_score_threshold
     assert rec.recommended_route_id is not None  # a slot IS proposed for the human
 
 
 # --- total-score gating math -------------------------------------------------
-
-
-def test_total_score_is_the_winners_own_score_untouched_by_the_runner_up():
-    class _Cand:
-        def __init__(self, score):
-            self.total_score = score
-
-    # A tie between two GOOD options is not penalized -- the winner's own
-    # score stands on its own, regardless of how close the runner-up scored.
-    assert compute_total_score([_Cand(0.75), _Cand(0.74)]) == 0.75
-    # A tie between two MEDIOCRE options stays mediocre -- correctly still low.
-    assert compute_total_score([_Cand(0.55), _Cand(0.54)]) == 0.55
-    # No feasible candidates at all.
-    assert compute_total_score([]) == 0.0

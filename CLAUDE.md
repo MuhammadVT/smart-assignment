@@ -41,16 +41,18 @@ However you build a decision layer, these must survive. They're the point:
   made. Every fallback logs its reason.
 - **Opt-in, no regressions.** New LLM behavior is gated by a `Config.use_*` flag,
   default off; with the flag off, prior behavior is reproduced exactly.
-- **A layer changes only what it owns.** `slotpick` re-orders the slot for the
-  chosen route but never touches the route, score, or decision; `triage` composes
-  a handoff brief but never changes the decision. Keep that discipline.
+- **A layer changes only what it owns.** `routeslot` owns the (route, slot)
+  choice and the recommend/escalate call; `triage` composes a handoff brief but
+  never changes the decision; `address_resolve` proposes an address for the user
+  to confirm but never adopts one. Keep that discipline.
 
 ## The proven recipe (the *how* — a strong default)
 
 Every LLM decision layer in this repo follows the same shape, and it's the
-recommended starting point. Three reference implementations: `judgment/`
-(recommend vs. escalate), `triage/` (escalation brief), `slotpick/` (final
-delivery-slot pick). Match it unless you have a better way to meet the guarantees:
+recommended starting point. Three reference implementations: `routeslot/`
+(the (route, slot) pick + recommend vs. escalate), `triage/` (escalation brief),
+`address_resolve/` (address-candidate pick). Match it unless you have a better
+way to meet the guarantees:
 
 1. **Enumerate the valid options deterministically** (see any `evidence.py`); the
    LLM chooses *from that set*, by index/id.
@@ -95,9 +97,9 @@ Independent of the LLM specifics, aim for code that stays easy to change:
   (evidence / schema / verify / prompt / fallback are deliberately separate);
   depend on small interfaces, not concrete internals.
 - **Easy to plug in and extend.** New decision layers should slot in behind a flag
-  and a config knob without touching unrelated call sites — as `judgment/`,
-  `triage/`, and `slotpick/` do. Prefer adding a strategy over branching an
-  existing one.
+  and a config knob without touching unrelated call sites — as `routeslot/`,
+  `triage/`, and `address_resolve/` do. Prefer adding a strategy over branching
+  an existing one.
 - **Favor simplicity; avoid over-engineering.** Build for the requirement in front
   of you, not an imagined one. The simplest design that meets the guarantees wins.
 - **Keep imports credential-free.** Construct agents/backends lazily so importing a

@@ -246,12 +246,11 @@ python3 -m eval.capture --ids bayou_city_bistro_recommend
 A **different granularity** from `test_quality.py`: not what the agent tells
 the customer, but whether a grounded decision layer's own internal rationale
 actually follows from the raw evidence it was given. Every grounded layer
-(`judgment/`, `routeslot/`, `slotpick/`, `triage/`, `address_resolve/`) already
+(`routeslot/`, `triage/`, `address_resolve/`) already
 runs a rigorous *deterministic* verifier — citations must resolve to real
 packet facts, and a regex-based prose scan grounds every number/route-id/day/
-time mentioned anywhere in the free text. But `judgment/verifier.py`'s own
-docstring (and `routeslot/verifier.py`'s, identically) names the exact
-residual gap deterministic checking cannot close:
+time mentioned anywhere in the free text. But `routeslot/verifier.py`'s own
+docstring names the exact residual gap deterministic checking cannot close:
 
 > "a rationale can attach a *correct* number to the wrong noun (...), and a
 > comparison citation can be true yet support a different sentence than the
@@ -260,16 +259,11 @@ residual gap deterministic checking cannot close:
 That's a job for an LLM judge — `rationale_faithfulness`, a reference-free
 G-Eval rubric scored against `routeslot/`'s real evidence packet.
 
-**Why `routeslot/`, not `judgment/`.** With
-`SMART_ASSIGNMENT_USE_ROUTE_SLOT_SCORING=true` (this repo's default),
-`judgment/`'s `GroundedJudge` is bypassed entirely — see
-`tools/slot_recommendation.py`. The grounded call actually producing rationale
-text is `routeslot/decide.py`'s `_grounded_index`, which builds the
+**Why `routeslot/`.** It is the only decision layer: the grounded call
+producing rationale text is `routeslot/decide.py`, which builds the
 `decision_summary`/`primary_reasons`/`key_tradeoff`/`runner_up` narrative that
 becomes the agent's final response (the same text `response_clarity` scores
-above). Testing `routeslot/` tests the code path actually running. `judgment/`
-shares the identical evidence/schema/verifier recipe and could get the same
-treatment later.
+above). Testing `routeslot/` tests the code path actually running.
 
 Unlike `test_quality.py`, this file needs **no capture step and touches
 nothing under `eval/data/`**: faithfulness is judged against the evidence

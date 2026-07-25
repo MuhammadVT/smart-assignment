@@ -1,24 +1,34 @@
 """
-Unit tests for the weighted scoring layer (shared/scoring.py).
+Unit tests for the route-level factors in the scoring layer (shared/scoring.py).
+
+The (route, slot) composition itself -- slot openness, the window_match day
+gate, and which factors are active -- is covered in tests/routeslot/test_scoring.
 """
 
 from __future__ import annotations
 
-from datetime import time
-
 from smart_assignment.shared.constraints import build_context
-from smart_assignment.shared.models import DayOfWeek
-from smart_assignment.shared.scoring import capacity_buffer, score_candidate, window_match
+from smart_assignment.shared.scoring import capacity_buffer, score_route_slot
+from smart_assignment.shared.slot_selection import identify_available_slots
+
+
+def _first_slot(customer, route, config):
+    slots = identify_available_slots(customer.location, route, config)
+    assert slots, "the fixture route should yield at least one candidate slot"
+    return slots[0]
 
 
 def test_score_is_normalized(sample_customer, open_route, config):
     ctx = build_context(sample_customer, open_route)
-    breakdown, total = score_candidate(sample_customer, open_route, ctx, config)
+    slot = _first_slot(sample_customer, open_route, config)
+    breakdown, total = score_route_slot(sample_customer, open_route, ctx, slot, config)
     assert 0.0 <= total <= 1.0
+    # sample_customer states a preference, so all four factors are active.
     assert {f.name for f in breakdown} == {
         "geographic_clustering",
         "capacity_buffer",
         "window_match",
+        "slot_availability",
     }
 
 
@@ -58,68 +68,10 @@ def test_capacity_buffer_reaches_zero_at_the_ceiling(sample_customer, open_route
 
 def test_factor_weights_respect_config(sample_customer, open_route, config):
     ctx = build_context(sample_customer, open_route)
-    breakdown, _ = score_candidate(sample_customer, open_route, ctx, config)
+    slot = _first_slot(sample_customer, open_route, config)
+    breakdown, _ = score_route_slot(sample_customer, open_route, ctx, slot, config)
     weights = {f.name: f.weight for f in breakdown}
-    # Priority order from spec: clustering > capacity buffer > window match.
+    # Priority order: clustering > capacity buffer > the slot-level factors.
     assert weights["geographic_clustering"] > weights["capacity_buffer"]
     assert weights["capacity_buffer"] > weights["window_match"]
-
-
-# --- window_match: day is a gate, not partial credit --------------------
-
-
-def test_window_match_full_day_and_time_overlap_scores_one(sample_customer, open_route, config):
-    # sample_customer prefers TUE 07:00-10:00; open_route runs TUE 07:00-10:00.
-    ctx = build_context(sample_customer, open_route)
-    f = window_match(sample_customer, open_route, ctx, config)
-    assert f.value == 1.0
-
-
-def test_window_match_wrong_day_scores_zero_despite_full_time_overlap(
-    sample_customer, open_route, config
-):
-    # Same time-of-day window (07:00-10:00), but the route runs on WED, not
-    # the TUE the customer asked for. A numerically-overlapping clock time on
-    # the wrong day is not a real match.
-    open_route.day = DayOfWeek.WED
-    ctx = build_context(sample_customer, open_route)
-    f = window_match(sample_customer, open_route, ctx, config)
-    assert f.value == 0.0
-
-
-def test_window_match_right_day_zero_time_overlap_scores_zero(
-    sample_customer, open_route, config
-):
-    # Right day, but a window nowhere near the customer's preferred hours.
-    open_route.available_windows = [(time(13, 0), time(15, 0))]
-    ctx = build_context(sample_customer, open_route)
-    f = window_match(sample_customer, open_route, ctx, config)
-    assert f.value == 0.0
-
-
-def test_window_match_right_day_partial_time_overlap_is_proportional(
-    sample_customer, open_route, config
-):
-    # Right day, and a window that covers 2 of the preferred 3 hours (120 of
-    # 180 minutes) -- partial credit is still fine once the day itself is
-    # right; it's only a day mismatch (or zero overlap) that gates to 0.
-    open_route.available_windows = [(time(8, 0), time(11, 0))]
-    ctx = build_context(sample_customer, open_route)
-    f = window_match(sample_customer, open_route, ctx, config)
-    assert f.value == 120 / 180
-
-
-def test_window_match_neutral_score_when_no_preference(open_route, config):
-    from smart_assignment.shared.models import CustomerProfile, GeoPoint
-
-    customer = CustomerProfile(
-        customer_number="067-100099",
-        name="No Preference Cafe",
-        address="1200 McKinney St, Houston, TX 77010",
-        order_quantity_cases=50,
-        preferred_slot=None,
-        location=GeoPoint(29.7570, -95.3670),
-    )
-    ctx = build_context(customer, open_route)
-    f = window_match(customer, open_route, ctx, config)
-    assert f.value == config.window_neutral_score
+    assert weights["window_match"] == weights["slot_availability"]

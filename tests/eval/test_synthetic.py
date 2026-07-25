@@ -10,7 +10,6 @@ from eval.synthetic import build_synthetic_bundle, generate_to_dir
 from smart_assignment.integrations import route_capacity_client as rcc
 from smart_assignment.integrations import snapshot_data
 from smart_assignment.pipeline import run_slot_recommendation
-from smart_assignment.reasoning import DeterministicReasoner
 from smart_assignment.shared.config import Config
 
 
@@ -39,7 +38,7 @@ def test_synthetic_roundtrip_reproduces(tmp_path, monkeypatch):
     for case_dict in snapshot_data.load_cases(str(bundle)):
         case = candidate_to_case(case_dict)
         result = run_slot_recommendation(
-            case.customer, config=config, reasoner=DeterministicReasoner()
+            case.customer, config=config
         )
         assert _outcome(result.recommendation.decision) == case_dict["expected_outcome"]
 

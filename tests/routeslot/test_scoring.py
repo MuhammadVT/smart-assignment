@@ -10,6 +10,7 @@ from smart_assignment.shared.config import (
     FACTOR_WINDOW_MATCH,
 )
 from smart_assignment.shared.constraints import build_context
+from smart_assignment.shared.models import DayOfWeek
 from smart_assignment.shared.scoring import (
     score_route_slot,
     slot_openness,
@@ -17,6 +18,15 @@ from smart_assignment.shared.scoring import (
 )
 
 from .conftest import MORNING, customer, route, slot_option, stop
+
+
+def _window_match(cust, r, window, cfg=None):
+    """The window_match factor for one (route, slot) pair, or None when the
+    factor is absent (no stated preference)."""
+    cfg = cfg or Config()
+    ctx = build_context(cust, r, cfg)
+    breakdown, _ = score_route_slot(cust, r, ctx, slot_option(window), cfg)
+    return next((fs for fs in breakdown if fs.name == FACTOR_WINDOW_MATCH), None)
 
 
 def test_tier_harm_ordering():
@@ -65,3 +75,31 @@ def test_score_route_slot_includes_window_match_with_a_preference():
     ctx = build_context(cust, r, cfg)
     breakdown, _ = score_route_slot(cust, r, ctx, slot_option(MORNING), cfg)
     assert FACTOR_WINDOW_MATCH in {fs.name for fs in breakdown}
+
+
+# --- window_match: the day is a gate, not partial credit --------------------
+
+
+def test_window_match_full_day_and_time_overlap_scores_one():
+    # Customer prefers TUE 08:30-11:30; the route runs TUE and the candidate
+    # slot is exactly that window.
+    f = _window_match(customer(pref=MORNING), route(), MORNING)
+    assert f is not None and f.value == 1.0
+
+
+def test_window_match_wrong_day_scores_zero_despite_full_time_overlap():
+    # Identical clock window, but the route runs WED rather than the preferred
+    # TUE. A numerically-overlapping time on the wrong day is not a real match.
+    f = _window_match(customer(pref=MORNING), route(day=DayOfWeek.WED), MORNING)
+    assert f is not None and f.value == 0.0
+
+
+def test_window_match_right_day_zero_time_overlap_scores_zero():
+    f = _window_match(customer(pref=MORNING), route(), (time(13, 0), time(15, 0)))
+    assert f is not None and f.value == 0.0
+
+
+def test_window_match_right_day_partial_time_overlap_is_proportional():
+    # Preferred 08:30-11:30 (180 min); the slot 10:00-13:00 covers 90 of them.
+    f = _window_match(customer(pref=MORNING), route(), (time(10, 0), time(13, 0)))
+    assert f is not None and f.value == 90 / 180

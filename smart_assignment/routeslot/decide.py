@@ -1,8 +1,7 @@
 """
 The route-slot decision: pick the best (route, slot) option and decide
-recommend-vs-escalate. This supersedes the two-stage "judge the route, then pick
-the slot" flow when `Config.use_route_slot_scoring` is on -- the slot choice is
-absorbed into one grounded decision over route-slot options.
+recommend-vs-escalate. The decision UNIT is the pair, so slot availability
+influences which ROUTE wins and the slot choice is absorbed into one decision.
 
 The recommend-vs-escalate boundary is a DETERMINISTIC threshold
 (`route_slot_score_threshold`): a route-slot must clear it to auto-assign. The LLM
@@ -125,11 +124,11 @@ def _threshold_decide(
     choice_fn: Optional[ChoiceFn],
     allow_llm: bool = True,
 ) -> SlotRecommendation:
-    """The threshold-gated path (rollback, and the fallback for the grounded path):
-    the 0.55 bar decides recommend-vs-escalate, and the LLM -- when
-    `use_grounded_judgment` is on and `allow_llm` -- only PICKS among the above-bar
-    options. `allow_llm=False` forces a pure-deterministic decision (used as the
-    grounded path's fallback so a failed LLM call isn't retried)."""
+    """The threshold-gated path (and the fallback for the grounded path): the 0.55
+    bar decides recommend-vs-escalate, and the LLM -- when
+    `use_grounded_route_slot_pick` is on and `allow_llm` -- only PICKS among the
+    above-bar options. `allow_llm=False` forces a pure-deterministic decision (used
+    as the grounded path's fallback so a failed LLM call isn't retried)."""
     threshold = config.route_slot_score_threshold
     eligible = [p for p in all_pairs if p.scored.total_score >= threshold]
     if not eligible:
@@ -143,7 +142,7 @@ def _threshold_decide(
     index = 0  # deterministic best (packet is sorted by descending total)
     grounded_choice: Optional[RouteSlotChoice] = None
     grounded_fallback_reason: Optional[str] = None
-    if allow_llm and config.use_grounded_judgment:
+    if allow_llm and config.use_grounded_route_slot_pick:
         picked, choice, reason = _grounded_index(packet, config, choice_fn)
         if picked is not None:
             index, grounded_choice = picked, choice

@@ -17,7 +17,7 @@ from .conftest import AFTERNOON, MORNING, choice_dict, customer, scored_eval, sc
 
 
 def _cfg(**kw):
-    base = dict(use_route_slot_scoring=True, use_grounded_route_slot_escalation=True)
+    base = dict(use_grounded_route_slot_escalation=True)
     base.update(kw)
     return Config(**base)
 
