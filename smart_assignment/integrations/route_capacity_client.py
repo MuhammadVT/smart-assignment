@@ -10,9 +10,8 @@ The source is chosen by `SMART_ASSIGNMENT_DATA_SOURCE`, one of:
                  surfaces (adk web, the web app), which is what you want for
                  development and demos.
   - "live_sql" — pull from live SQL, falling back to the cache per table if a
-                 pull fails (the old "prepared" behavior). Data can change
-                 between runs, so two surfaces may disagree — use it only when
-                 you actually want fresh data.
+                 pull fails. Data can change between runs, so two surfaces may
+                 disagree — use it only when you actually want fresh data.
 
 If the cache is requested (or defaulted to) but the snapshot files are missing
 (e.g. a fresh checkout that never built one), we fall back to "mock" with a
@@ -20,9 +19,7 @@ loud warning rather than crash -- UNLESS strict mode is on
 (`SMART_ASSIGNMENT_DATA_SOURCE_STRICT`, off by default; see
 `_strict_data_source`), in which case the load failure is raised instead of
 silently substituting mock. The eval harness turns strict on so an eval never
-scores against silently-swapped data (see `eval/dataset.py`). The legacy
-`SMART_ASSIGNMENT_ROUTE_SOURCE` (values mock|prepared) is still honored with a
-deprecation warning: "prepared" maps to "live_sql".
+scores against silently-swapped data (see `eval/dataset.py`).
 
 Results for the two deterministic sources ("mock" and "cache") are memoized
 per-process, so a long-running surface (the web app, adk web) parses the
@@ -66,7 +63,6 @@ from smart_assignment.shared.models import (
 logger = logging.getLogger(__name__)
 
 _DATA_SOURCE_ENV = "SMART_ASSIGNMENT_DATA_SOURCE"
-_LEGACY_ROUTE_SOURCE_ENV = "SMART_ASSIGNMENT_ROUTE_SOURCE"
 _STRICT_ENV = "SMART_ASSIGNMENT_DATA_SOURCE_STRICT"
 
 SOURCE_MOCK = "mock"
@@ -78,7 +74,7 @@ SOURCE_LIVE_SQL = "live_sql"
 SOURCE_SNAPSHOT = "snapshot"
 _VALID_SOURCES = (SOURCE_MOCK, SOURCE_CACHE, SOURCE_LIVE_SQL, SOURCE_SNAPSHOT)
 
-# Synonyms accepted for each source (incl. the legacy ROUTE_SOURCE values).
+# Synonyms accepted for each source.
 _SOURCE_ALIASES = {
     "mock": SOURCE_MOCK,
     "cache": SOURCE_CACHE,
@@ -86,26 +82,14 @@ _SOURCE_ALIASES = {
     "live_sql": SOURCE_LIVE_SQL,
     "live": SOURCE_LIVE_SQL,
     "sql": SOURCE_LIVE_SQL,
-    "prepared": SOURCE_LIVE_SQL,  # legacy ROUTE_SOURCE value
     "snapshot": SOURCE_SNAPSHOT,
 }
 
 
 def _data_source() -> str:
-    """Resolve the active data source (default "cache"). Honors the legacy
-    SMART_ASSIGNMENT_ROUTE_SOURCE with a deprecation warning; an unrecognized
-    value falls back to "cache" with a warning."""
+    """Resolve the active data source (default "cache"). An unrecognized value
+    falls back to "cache" with a warning."""
     raw = os.environ.get(_DATA_SOURCE_ENV)
-    if raw is None:
-        legacy = os.environ.get(_LEGACY_ROUTE_SOURCE_ENV)
-        if legacy is not None and legacy.strip():
-            logger.warning(
-                "%s is deprecated; use %s (mock|cache|live_sql). Honoring %r for now.",
-                _LEGACY_ROUTE_SOURCE_ENV,
-                _DATA_SOURCE_ENV,
-                legacy,
-            )
-            raw = legacy
     value = (raw or SOURCE_CACHE).strip().lower()
     resolved = _SOURCE_ALIASES.get(value)
     if resolved is None:
