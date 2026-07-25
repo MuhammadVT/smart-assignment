@@ -16,9 +16,20 @@ The source is chosen by `SMART_ASSIGNMENT_DATA_SOURCE`, one of:
 
 If the cache is requested (or defaulted to) but the snapshot files are missing
 (e.g. a fresh checkout that never built one), we fall back to "mock" with a
-loud warning rather than crash. The legacy `SMART_ASSIGNMENT_ROUTE_SOURCE`
-(values mock|prepared) is still honored with a deprecation warning:
-"prepared" maps to "live_sql".
+loud warning rather than crash -- UNLESS strict mode is on
+(`SMART_ASSIGNMENT_DATA_SOURCE_STRICT`, off by default; see
+`_strict_data_source`), in which case the load failure is raised instead of
+silently substituting mock. The eval harness turns strict on so an eval never
+scores against silently-swapped data (see `eval/dataset.py`). The legacy
+`SMART_ASSIGNMENT_ROUTE_SOURCE` (values mock|prepared) is still honored with a
+deprecation warning: "prepared" maps to "live_sql".
+
+Results for the two deterministic sources ("mock" and "cache") are memoized
+per-process, so a long-running surface (the web app, adk web) parses the
+parquet snapshot once instead of on every agent tool call. "live_sql" is never
+memoized -- returning fresh data on each call is the whole reason to pick it.
+Use `clear_route_cache()` to force a re-read (see its docstring for the
+caveat about mutating returned Routes).
 """
 
 from __future__ import annotations
@@ -26,22 +37,22 @@ from __future__ import annotations
 import logging
 import os
 from datetime import time
+from functools import lru_cache
 
 import pandas as pd
 
 import ds_utils
-from smart_assignment.data_prep.prep_dlvry_tw_data import (
-    CUST_TIER_CACHE_PATH,
+from smart_assignment.data_prep.prep_delivery_data import (
     DEFAULT_CUST_TIER,
-    create_sql_access,
-    DLVR_WINDOW_CACHE_PATH,
-    ROUTES_CACHE_PATH,
-    attach_cust_tier_to_stop_locations,
     build_route_summary_tables,
+    create_sql_access,
+    cust_tier_cache_path,
+    dlvr_window_cache_path,
     fetch_cust_tier_records,
     fetch_dlvr_window_records,
     fetch_route_stop_records,
     read_cached_dataframe,
+    routes_cache_path,
     summarize_committed_tw1_slots,
 )
 from smart_assignment.shared.models import (
@@ -56,11 +67,16 @@ logger = logging.getLogger(__name__)
 
 _DATA_SOURCE_ENV = "SMART_ASSIGNMENT_DATA_SOURCE"
 _LEGACY_ROUTE_SOURCE_ENV = "SMART_ASSIGNMENT_ROUTE_SOURCE"
+_STRICT_ENV = "SMART_ASSIGNMENT_DATA_SOURCE_STRICT"
 
 SOURCE_MOCK = "mock"
 SOURCE_CACHE = "cache"
 SOURCE_LIVE_SQL = "live_sql"
-_VALID_SOURCES = (SOURCE_MOCK, SOURCE_CACHE, SOURCE_LIVE_SQL)
+# A self-contained, committed snapshot dataset (routes.json read from the pinned
+# SMART_ASSIGNMENT_SNAPSHOT_DIR) -- the file-backed analogue of the mock world, so
+# a curated golden dataset replays fully offline (see integrations/snapshot_data.py).
+SOURCE_SNAPSHOT = "snapshot"
+_VALID_SOURCES = (SOURCE_MOCK, SOURCE_CACHE, SOURCE_LIVE_SQL, SOURCE_SNAPSHOT)
 
 # Synonyms accepted for each source (incl. the legacy ROUTE_SOURCE values).
 _SOURCE_ALIASES = {
@@ -71,6 +87,7 @@ _SOURCE_ALIASES = {
     "live": SOURCE_LIVE_SQL,
     "sql": SOURCE_LIVE_SQL,
     "prepared": SOURCE_LIVE_SQL,  # legacy ROUTE_SOURCE value
+    "snapshot": SOURCE_SNAPSHOT,
 }
 
 
@@ -100,6 +117,18 @@ def _data_source() -> str:
 def _live_first() -> bool:
     """True when the active source should try live SQL before the cache."""
     return _data_source() == SOURCE_LIVE_SQL
+
+
+def _strict_data_source() -> bool:
+    """True when a data source that can't load must FAIL rather than silently
+    fall back to the mock demo routes.
+
+    Off by default (``SMART_ASSIGNMENT_DATA_SOURCE_STRICT`` unset/false), so the
+    existing fall-back-to-mock behavior is unchanged for every normal surface.
+    The eval harness turns it on (see ``eval/dataset.py``) so an eval can never
+    score against silently-substituted data -- a declared dataset that won't
+    load is a loud failure there, not a quiet swap to mock."""
+    return os.environ.get(_STRICT_ENV, "").strip().lower() in ("1", "true", "yes", "on")
 
 
 _DELIVERY_DAY_NAME_TO_ENUM = {
@@ -260,7 +289,7 @@ def _fetch_live_route_stop_records() -> pd.DataFrame:
 
 
 def _load_cached_route_stop_records() -> pd.DataFrame:
-    return read_cached_dataframe(ROUTES_CACHE_PATH)
+    return read_cached_dataframe(routes_cache_path())
 
 
 def _fetch_live_cust_tier_records() -> pd.DataFrame:
@@ -268,7 +297,7 @@ def _fetch_live_cust_tier_records() -> pd.DataFrame:
 
 
 def _load_cached_cust_tier_records() -> pd.DataFrame:
-    return read_cached_dataframe(CUST_TIER_CACHE_PATH)
+    return read_cached_dataframe(cust_tier_cache_path())
 
 
 def _fetch_live_dlvr_window_records() -> pd.DataFrame:
@@ -276,7 +305,7 @@ def _fetch_live_dlvr_window_records() -> pd.DataFrame:
 
 
 def _load_cached_dlvr_window_records() -> pd.DataFrame:
-    return read_cached_dataframe(DLVR_WINDOW_CACHE_PATH)
+    return read_cached_dataframe(dlvr_window_cache_path())
 
 
 def _load_route_capacity_raw_df() -> pd.DataFrame:
@@ -288,7 +317,7 @@ def _load_route_capacity_raw_df() -> pd.DataFrame:
         except Exception as exc:
             logger.warning("Live SQL route pull failed (%s); falling back to cache.", exc)
     route_capacity_raw_df = _load_cached_route_stop_records()
-    logger.info("Loaded route stop records from cache: %s", ROUTES_CACHE_PATH)
+    logger.info("Loaded route stop records from cache: %s", routes_cache_path())
     return route_capacity_raw_df
 
 
@@ -302,7 +331,7 @@ def _load_cust_tier_records() -> pd.DataFrame | None:
             logger.warning("Live SQL cust tier pull failed (%s); falling back to cache.", exc)
     try:
         cust_tier_df = _load_cached_cust_tier_records()
-        logger.info("Loaded cust tier records from cache: %s", CUST_TIER_CACHE_PATH)
+        logger.info("Loaded cust tier records from cache: %s", cust_tier_cache_path())
         return cust_tier_df
     except Exception as cache_exc:
         logger.warning(
@@ -321,7 +350,7 @@ def _load_dlvr_window_records() -> pd.DataFrame:
         except Exception as exc:
             logger.warning("Live SQL delivery-window pull failed (%s); falling back to cache.", exc)
     dlvr_window_df = _load_cached_dlvr_window_records()
-    logger.info("Loaded delivery-window records from cache: %s", DLVR_WINDOW_CACHE_PATH)
+    logger.info("Loaded delivery-window records from cache: %s", dlvr_window_cache_path())
     return dlvr_window_df
 
 
@@ -523,8 +552,79 @@ def fetch_candidate_routes() -> list[Route]:
     (see the module docstring). "cache" (the default) and "live_sql" build from
     the prepared ODI tables; "mock" returns the demo routes. If the prepared
     tables can't be loaded (e.g. no cache snapshot on a fresh checkout), fall
-    back to mock with a loud warning rather than crash."""
+    back to mock with a loud warning rather than crash.
+
+    Every tool call re-resolves the data source (cheap: one env var read) but
+    "mock"/"cache" results are memoized in-process (see `_cached_routes_for`) --
+    both are documented to be deterministic per machine/process, so re-reading
+    and re-parsing the same on-disk snapshot on every tool call is pure waste.
+    "live_sql" is deliberately NEVER cached: it exists specifically for callers
+    that want fresh data on every call. See `clear_route_cache()` to drop the
+    memoized result (e.g. after rebuilding the parquet snapshot under data/dev/
+    while a long-running process, like the web app, is already up)."""
     source = _data_source()
+    if source == SOURCE_LIVE_SQL:
+        return _fetch_candidate_routes_uncached(source)
+    if source == SOURCE_SNAPSHOT:
+        # Keyed by the snapshot directory (not just the source string), so two
+        # different snapshot datasets in one process don't collide in the cache.
+        return list(_cached_snapshot_routes(_require_snapshot_dir()))
+    return list(_cached_routes_for(source))
+
+
+@lru_cache(maxsize=None)
+def _cached_routes_for(source: str) -> tuple[Route, ...]:
+    # Keyed by source so "mock" and "cache" each get their own cached result.
+    # Never called with "live_sql"/"snapshot" -- see fetch_candidate_routes().
+    return tuple(_fetch_candidate_routes_uncached(source))
+
+
+@lru_cache(maxsize=None)
+def _cached_snapshot_routes(snapshot_dir: str) -> tuple[Route, ...]:
+    """Memoized routes for one snapshot directory. Lazy import keeps the snapshot
+    substrate out of the import path for the mock/cache/live_sql sources."""
+    from smart_assignment.integrations.snapshot_data import load_routes
+
+    return tuple(load_routes(snapshot_dir))
+
+
+def _require_snapshot_dir() -> str:
+    """The pinned snapshot directory, or a loud error -- a snapshot source with no
+    directory is a misconfiguration, not something to silently fall back from."""
+    from smart_assignment.integrations.snapshot_data import (
+        SNAPSHOT_DIR_ENV,
+        active_snapshot_dir,
+    )
+
+    snapshot_dir = active_snapshot_dir()
+    if not snapshot_dir:
+        raise RuntimeError(
+            f"Data source is 'snapshot' but {SNAPSHOT_DIR_ENV} is not set. Pin a "
+            "snapshot dataset via eval.dataset.apply_eval_dataset (or set the env)."
+        )
+    return snapshot_dir
+
+
+def clear_route_cache() -> None:
+    """Drop the in-memory "mock"/"cache" route cache so the next
+    fetch_candidate_routes() call re-reads from disk. Call this after rebuilding
+    the parquet cache snapshot (see data_prep/) in a process that's already
+    running, or between tests that swap SMART_ASSIGNMENT_DATA_SOURCE or
+    monkeypatch the on-disk cache files. No-op if nothing is cached yet.
+
+    NOTE: the returned Route/RouteStop objects are regular (mutable)
+    dataclasses. Nothing in this codebase mutates them today, but the cache
+    hands back the SAME instances (in a fresh list) to every caller within a
+    process -- if a future caller starts mutating a fetched Route in place,
+    that mutation would leak into every other caller sharing the cache. Don't
+    mutate a Route returned from fetch_candidate_routes(); copy it first
+    (dataclasses.replace) if you need a modified variant.
+    """
+    _cached_routes_for.cache_clear()
+    _cached_snapshot_routes.cache_clear()
+
+
+def _fetch_candidate_routes_uncached(source: str) -> list[Route]:
     if source == SOURCE_MOCK:
         return _mock_routes()
 
@@ -533,6 +633,16 @@ def fetch_candidate_routes() -> list[Route]:
         route_summary, stop_locations, _committed_tw1_slots_df = _load_prepared_route_tables()
         return routes_from_summary_tables(route_summary, stop_locations)
     except Exception as exc:
+        if _strict_data_source():
+            # Strict mode (eval): refuse to silently substitute mock routes for a
+            # declared dataset that won't load -- an eval must fail loudly rather
+            # than score against different data than it declared.
+            raise RuntimeError(
+                f"Data source {source!r} could not be loaded ({exc}) and strict mode is on "
+                f"({_STRICT_ENV}); refusing to fall back to the mock demo routes. Build the "
+                "cache snapshot (see data_prep/), fix SQL access, or declare a dataset that "
+                "loads (see eval/dataset.py)."
+            ) from exc
         logger.warning(
             "Data source %r requested but its data could not be loaded (%s); using the "
             "mock demo routes instead. Build the cache snapshot (see data_prep/) or check "

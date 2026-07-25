@@ -1,19 +1,217 @@
 {
-  "eval_set_id": "slot_recommendation_basic",
-  "name": "Slot recommendation: basic feasible-option ranking",
-  "description": "[PLACEHOLDER] Golden dataset for the slot_recommendation workflow. Replace eval_cases below with real customer profiles + mocked route data + the known-good expected recommendation, captured via the ADK Web UI's trajectory recording feature once real route data is available. See README.md and https://google.github.io/adk-docs/evaluate/ for the full workflow.",
+  "eval_set_id": "slot_recommendation_golden",
+  "name": "Slot recommendation: agent trajectory over the mock fixtures",
+  "description": "Golden dataset for the conversational slot-recommendation agent, built deterministically from smart_assignment.mock_customers by eval/build_evalset.py. Phase 2a scores TOOL TRAJECTORY only (see eval/data/test_config.json); the expected final responses are captured with a live backend in Phase 2b. Regenerate with:  python3 -m eval.build_evalset",
   "eval_cases": [
     {
-      "eval_case_id": "placeholder_case_1",
-      "comment": "[ASSUMPTION] Not a real eval case yet -- no real route/capacity data was available to build a golden dataset against. This file exists to establish the expected eval/ structure; populate before relying on automated regression detection.",
-      "prompt": {
-        "role": "user",
-        "parts": [
-          {
-            "text": "New customer: Riverside Diner, 150 cases/week, mixed temp zone, prefers Tue/Wed mornings."
+      "eval_id": "bayou_city_bistro_recommend",
+      "conversation": [
+        {
+          "invocation_id": "bayou_city_bistro_recommend",
+          "user_content": {
+            "role": "user",
+            "parts": [
+              {
+                "text": "New prospect Bayou City Bistro at 1200 McKinney St, Houston, TX 77010. About 90 cases a week. They'd like Tuesday mornings, 7 to 10am."
+              }
+            ]
+          },
+          "final_response": {
+            "role": "model",
+            "parts": [
+              {
+                "text": "I have successfully analyzed the delivery requirements for **Bayou City Bistro**.\n\n### Decision Summary\nThe recommended assignment is **RTE-4100 - Central Houston** on **Tuesday** in the **07:14-10:14** window.\n\n### Primary Reasons\n1. **Geographic fit:** This route averages 1.7 miles to existing stops, providing excellent density.\n2. **Capacity headroom:** The truck will be at approximately 58% capacity after adding this order, leaving 440 cases of headroom, which is well within the 75% comfort threshold.\n3. **Preferred-window match:** The assigned window covers 166 of the 180 preferred minutes for Tuesday morning.\n4. **Slot openness:** The tier-weighted contention for this slot is 2.80 with an openness of 0.26.\n\n### Key Trade-off\nThis choice edges out the runner-up, **RTE-4110 - Downtown / Midtown**, on overall route-slot score (0.80 vs 0.59). By choosing the Central Houston route, we are able to accommodate the customer's preferred day (Tuesday) while also leading or matching the runner-up on all scored factors.\n\nThe third candidate, **RTE-4200 - West Houston / Energy Corridor**, was found to be infeasible due to service area constraints."
+              }
+            ]
+          },
+          "intermediate_data": {
+            "tool_uses": [
+              {
+                "name": "intake_customer",
+                "args": {
+                  "address": "1200 McKinney St, Houston, TX 77010",
+                  "order_quantity_cases": 90,
+                  "name": "Bayou City Bistro",
+                  "preferred_day": "TUE",
+                  "preferred_window_start": "07:00",
+                  "preferred_window_end": "10:00"
+                }
+              },
+              {
+                "name": "find_candidate_routes",
+                "args": {}
+              },
+              {
+                "name": "evaluate_and_score_routes",
+                "args": {}
+              },
+              {
+                "name": "recommend_or_escalate",
+                "args": {}
+              }
+            ]
           }
-        ]
-      }
+        }
+      ],
+      "session_input": null,
+      "creation_timestamp": 0.0
+    },
+    {
+      "eval_id": "galleria_grill_escalate_low_score",
+      "conversation": [
+        {
+          "invocation_id": "galleria_grill_escalate_low_score",
+          "user_content": {
+            "role": "user",
+            "parts": [
+              {
+                "text": "Set up Galleria Grill & Catering, 5085 Westheimer Rd, Houston, TX 77056. Large catering account, 400 cases. No particular day or time preference."
+              }
+            ]
+          },
+          "final_response": {
+            "role": "model",
+            "parts": [
+              {
+                "text": "SITUATION\nGalleria Grill & Catering (400 cases) requires a route assignment as no slot reached the auto-assign threshold.\n\nROOT CAUSE\nNo route met the auto-assign score threshold; the highest score was 0.40 on RTE-4200 due to constraints on geographic clustering and slot availability.\n\nOPTIONS (most workable first)\n1) RTE-4200 - West Houston / Energy Corridor \u00b7 WED \u2014 84% utilization with 150 cases of headroom.\n   Action: Assign to the Wednesday 11:30-14:30 window.\n   Trade-off: Higher mileage per stop (8.2 mi) compared to available alternatives.\n2) RTE-4100 - Central Houston \u00b7 TUE \u2014 88% utilization with 130 cases of headroom.\n   Action: Assign to the Tuesday 10:00-13:00 window.\n   Trade-off: Tighter capacity buffer and higher utilization compared to RTE-4200.\n\nRECOMMENDATION\nStart with RTE-4200 - West Houston / Energy Corridor as it provides the largest capacity buffer (150 cases of headroom) and lower post-assignment utilization (84%).\n\nDECISION NEEDED\nDo you approve the assignment of Galleria Grill & Catering to RTE-4200 on Wednesday, or prefer the tighter capacity utilization of RTE-4100 on Tuesday?"
+              }
+            ]
+          },
+          "intermediate_data": {
+            "tool_uses": [
+              {
+                "name": "intake_customer",
+                "args": {
+                  "address": "5085 Westheimer Rd, Houston, TX 77056",
+                  "order_quantity_cases": 400,
+                  "name": "Galleria Grill & Catering"
+                }
+              },
+              {
+                "name": "find_candidate_routes",
+                "args": {}
+              },
+              {
+                "name": "evaluate_and_score_routes",
+                "args": {}
+              },
+              {
+                "name": "recommend_or_escalate",
+                "args": {}
+              }
+            ]
+          }
+        }
+      ],
+      "session_input": null,
+      "creation_timestamp": 0.0
+    },
+    {
+      "eval_id": "katy_prairie_escalate_out_of_range",
+      "conversation": [
+        {
+          "invocation_id": "katy_prairie_escalate_out_of_range",
+          "user_content": {
+            "role": "user",
+            "parts": [
+              {
+                "text": "New customer Katy Prairie Steakhouse, 5000 Katy Mills Cir, Katy, TX 77494. 260 cases. Prefers Tuesday early morning, 6 to 8am."
+              }
+            ]
+          },
+          "final_response": {
+            "role": "model",
+            "parts": [
+              {
+                "text": "SITUATION\nKaty Prairie Steakhouse, 260 cases, escalated due to low auto-assign score (36%).\n\nROOT CAUSE\nNo route reached the automated assignment threshold; the highest score was 0.36 on RTE-4200 due to a window mismatch (Wednesday instead of Tuesday).\n\nOPTIONS (most workable first)\n1) RTE-4200 - West Houston / Energy Corridor \u00b7 Wednesday \u2014 69% utilization and 290 cases of headroom\n   Action: Accept delivery for Wednesday instead of the preferred Tuesday.\n   Trade-off: Customer receives their order one day later than requested.\n\nRECOMMENDATION\nI suggest approving RTE-4200 as it is the only feasible route that maintains safe truck capacity (69% utilization).\n\nDECISION NEEDED\nShould we assign the order to RTE-4200 for Wednesday, or hold the order for further manual review?"
+              }
+            ]
+          },
+          "intermediate_data": {
+            "tool_uses": [
+              {
+                "name": "intake_customer",
+                "args": {
+                  "address": "5000 Katy Mills Cir, Katy, TX 77494",
+                  "order_quantity_cases": 260,
+                  "name": "Katy Prairie Steakhouse",
+                  "preferred_day": "TUE",
+                  "preferred_window_start": "06:00",
+                  "preferred_window_end": "08:00"
+                }
+              },
+              {
+                "name": "find_candidate_routes",
+                "args": {}
+              },
+              {
+                "name": "evaluate_and_score_routes",
+                "args": {}
+              },
+              {
+                "name": "recommend_or_escalate",
+                "args": {}
+              }
+            ]
+          }
+        }
+      ],
+      "session_input": null,
+      "creation_timestamp": 0.0
+    },
+    {
+      "eval_id": "woodlands_fresh_cafe_recommend",
+      "conversation": [
+        {
+          "invocation_id": "woodlands_fresh_cafe_recommend",
+          "user_content": {
+            "role": "user",
+            "parts": [
+              {
+                "text": "Onboard Woodlands Fresh Cafe at 1201 Lake Woodlands Dr, The Woodlands, TX 77380. 150 cases. Thursday late morning, 9am to noon works."
+              }
+            ]
+          },
+          "final_response": {
+            "role": "model",
+            "parts": [
+              {
+                "text": "I have processed the request for Woodlands Fresh Cafe.\n\n**Decision Summary:**\nI recommend assigning the customer to **RTE-4300 - North Houston / The Woodlands** on **Thursday** with a delivery window of **08:30-11:30**.\n\n**Primary Reasons:**\n1. **Geographic fit:** The location is highly efficient, with an average of 1.3 miles to existing stops.\n2. **Capacity headroom:** The truck will be approximately 81% full after this order, leaving 150 cases of headroom.\n3. **Preferred-window match:** The recommended 08:30-11:30 window covers 150 of the 180 minutes requested for Thursday.\n4. **Slot openness:** There is manageable contention for this time slot (tier-weighted contention of 2.70 with 4 existing stops overlapping).\n\n**Key Trade-off:**\nThis assignment edges out the runner-up, **RTE-4310 - Spring / South Woodlands** (Friday), on overall route-slot score (0.69 vs 0.55). While the runner-up offers slightly more capacity headroom (0.83 vs 0.58), the recommended route is a better fit overall and aligns with the customer's preferred delivery day."
+              }
+            ]
+          },
+          "intermediate_data": {
+            "tool_uses": [
+              {
+                "name": "intake_customer",
+                "args": {
+                  "address": "1201 Lake Woodlands Dr, The Woodlands, TX 77380",
+                  "order_quantity_cases": 150,
+                  "name": "Woodlands Fresh Cafe",
+                  "preferred_day": "THU",
+                  "preferred_window_start": "09:00",
+                  "preferred_window_end": "12:00"
+                }
+              },
+              {
+                "name": "find_candidate_routes",
+                "args": {}
+              },
+              {
+                "name": "evaluate_and_score_routes",
+                "args": {}
+              },
+              {
+                "name": "recommend_or_escalate",
+                "args": {}
+              }
+            ]
+          }
+        }
+      ],
+      "session_input": null,
+      "creation_timestamp": 0.0
     }
-  ]
+  ],
+  "creation_timestamp": 0.0
 }

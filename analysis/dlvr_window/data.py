@@ -14,7 +14,7 @@ LoadSource = Literal["auto", "cache", "sql", "sample"]
 
 
 def _prep_sql_access():
-    from smart_assignment.data_prep.prep_dlvry_tw_data import create_sql_access
+    from smart_assignment.data_prep.prep_delivery_data import create_sql_access
 
     return create_sql_access()
 
@@ -55,19 +55,20 @@ def _normalize_committed(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _load_raw_dlvr_window(source: LoadSource) -> pd.DataFrame:
-    from smart_assignment.data_prep.prep_dlvry_tw_data import (
-        DLVR_WINDOW_CACHE_PATH,
+    from smart_assignment.data_prep.prep_delivery_data import (
+        dlvr_window_cache_path,
         fetch_dlvr_window_records,
         read_cached_dataframe,
     )
 
     if source in ("auto", "cache"):
         try:
-            return read_cached_dataframe(DLVR_WINDOW_CACHE_PATH)
+            return read_cached_dataframe(dlvr_window_cache_path())
         except Exception as exc:
             if source == "cache":
                 raise FileNotFoundError(
-                    "Delivery window cache not found. Run prep_dlvry_tw_data.py first or use source='sample'."
+                    "Delivery window cache not found. Run prep_delivery_data.py "
+                    "first or use source='sample'."
                 ) from exc
             logger.warning("Cache load failed (%s); trying SQL.", exc)
 
@@ -76,19 +77,20 @@ def _load_raw_dlvr_window(source: LoadSource) -> pd.DataFrame:
 
 
 def _load_cust_tier_df(source: LoadSource) -> pd.DataFrame:
-    from smart_assignment.data_prep.prep_dlvry_tw_data import (
-        CUST_TIER_CACHE_PATH,
+    from smart_assignment.data_prep.prep_delivery_data import (
+        cust_tier_cache_path,
         fetch_cust_tier_records,
         read_cached_dataframe,
     )
 
     if source in ("auto", "cache"):
         try:
-            return read_cached_dataframe(CUST_TIER_CACHE_PATH)
+            return read_cached_dataframe(cust_tier_cache_path())
         except Exception as exc:
             if source == "cache":
                 raise FileNotFoundError(
-                    "Customer tier cache not found. Run prep_dlvry_tw_data.py first or use source='sample'."
+                    "Customer tier cache not found. Run prep_delivery_data.py "
+                    "first or use source='sample'."
                 ) from exc
             logger.warning("Customer tier cache load failed (%s); trying SQL.", exc)
 
@@ -153,7 +155,7 @@ def load_committed_tw1_slots_df(source: LoadSource = "auto") -> pd.DataFrame:
     if source == "sample":
         return load_sample_committed_tw1_slots_df()
 
-    from smart_assignment.data_prep.prep_dlvry_tw_data import (
+    from smart_assignment.data_prep.prep_delivery_data import (
         summarize_committed_tw1_slots,
     )
 
@@ -212,7 +214,11 @@ def list_routes(df: pd.DataFrame) -> pd.DataFrame:
     return summary
 
 
-def filter_customer(df: pd.DataFrame, co_cust_nbr: str, cust_tiers: list[str] | None = None) -> pd.DataFrame:
+def filter_customer(
+    df: pd.DataFrame,
+    co_cust_nbr: str,
+    cust_tiers: list[str] | None = None,
+) -> pd.DataFrame:
     """Committed TW1 rows for one customer, with optional tier filter."""
     subset = df[df["co_cust_nbr"].astype(str) == str(co_cust_nbr)].copy()
     if cust_tiers:
@@ -221,7 +227,11 @@ def filter_customer(df: pd.DataFrame, co_cust_nbr: str, cust_tiers: list[str] | 
     return subset.sort_values(["route_id", "tw1opentime"]).reset_index(drop=True)
 
 
-def filter_route(df: pd.DataFrame, route_id: str, cust_tiers: list[str] | None = None) -> pd.DataFrame:
+def filter_route(
+    df: pd.DataFrame,
+    route_id: str,
+    cust_tiers: list[str] | None = None,
+) -> pd.DataFrame:
     """Committed TW1 rows for one route, with optional tier filter."""
     subset = df[df["route_id"].astype(str) == str(route_id)].copy()
     if cust_tiers:

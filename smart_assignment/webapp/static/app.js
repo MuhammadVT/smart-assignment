@@ -27,19 +27,149 @@
   var windowsRationale = document.getElementById('windows-rationale');
 
   var MODE = 'deterministic';
-  var SESSION_ID = (window.crypto && window.crypto.randomUUID)
-    ? window.crypto.randomUUID()
-    : 'sess-' + Date.now() + '-' + Math.floor(Math.random() * 1e9);
+  // Whether the server has the human-feedback loop enabled (Config.use_human_feedback).
+  // Only then do we render the thumbs-up/down control on a result.
+  var FEEDBACK_ENABLED = false;
+  // Persist the session id per browser (not per page load) so the read-only
+  // customer view (/frontend) can look up the slots this same session produced.
+  var SESSION_KEY = 'sa_session_id';
+  var SESSION_ID = (function () {
+    try {
+      var existing = localStorage.getItem(SESSION_KEY);
+      if (existing) { return existing; }
+    } catch (e) { /* localStorage unavailable (private mode) -- fall through */ }
+    var id = (window.crypto && window.crypto.randomUUID)
+      ? window.crypto.randomUUID()
+      : 'sess-' + Date.now() + '-' + Math.floor(Math.random() * 1e9);
+    try { localStorage.setItem(SESSION_KEY, id); } catch (e) { /* ignore */ }
+    return id;
+  })();
 
   function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
+  // --- Speaker avatars ------------------------------------------------------
+  // Small circular badge next to each turn so it's clear who's talking: a
+  // friendly bot for the agent, a person for the user. Static, trusted markup.
+  var AGENT_AVATAR_SVG =
+    '<svg viewBox="0 0 44 44" aria-hidden="true">' +
+    '<line x1="22" y1="13" x2="22" y2="9" stroke="#c3d0e4" stroke-width="2" stroke-linecap="round"/>' +
+    '<circle cx="22" cy="7.4" r="2.5" fill="#e2664a"/>' +
+    '<rect x="5" y="20" width="6" height="11" rx="3" fill="#16263c"/>' +
+    '<rect x="33" y="20" width="6" height="11" rx="3" fill="#16263c"/>' +
+    '<ellipse cx="22" cy="25.5" rx="15.5" ry="13.5" fill="#e9f0fb" stroke="#d3e0f2"/>' +
+    '<rect x="11.5" y="19" width="21" height="13" rx="6" fill="#16263c"/>' +
+    '<circle cx="17.6" cy="25.4" r="3" fill="#fff"/>' +
+    '<circle cx="26.4" cy="25.4" r="3" fill="#fff"/>' +
+    '<path d="M20.2 28.7h3.6a1.8 1.7 0 0 1-3.6 0z" fill="#fff"/></svg>';
+  var USER_AVATAR_SVG =
+    '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">' +
+    '<circle cx="12" cy="8" r="4"/>' +
+    '<path d="M4 20c0-4.4 3.6-6.5 8-6.5s8 2.1 8 6.5z"/></svg>';
+
+  function avatarEl(role) {
+    var a = document.createElement('div');
+    a.className = 'avatar ' + role;
+    a.setAttribute('aria-hidden', 'true');
+    a.innerHTML = role === 'user' ? USER_AVATAR_SVG : AGENT_AVATAR_SVG;
+    return a;
+  }
+
+  // Append a chat turn (avatar + bubble) and return the ROW element, so callers
+  // that need to remove a transient bubble (e.g. the "Thinking…" placeholder)
+  // drop the whole row, avatar included.
   function bubble(role, text, extraClass) {
+    var row = document.createElement('div');
+    row.className = 'msg ' + role;
+    row.appendChild(avatarEl(role));
     var el = document.createElement('div');
-    el.className = 'bubble ' + role + (extraClass ? ' ' + extraClass : '');
+    el.className = 'bubble' + (extraClass ? ' ' + extraClass : '');
     el.textContent = text;
-    transcript.appendChild(el);
+    row.appendChild(el);
+    transcript.appendChild(row);
     transcript.scrollTop = transcript.scrollHeight;
-    return el;
+    return row;
+  }
+
+  // --- Live workflow stepper -------------------------------------------------
+  // Replaces the old stream of italic "🔧 Intake…" pills with a single agent
+  // turn that grows a connected checklist: each pipeline tool call marks the
+  // previous step done (✓) and adds the new one as active (spinner). It narrates
+  // WHAT is happening in plain language; the numbers/map/timeline render in the
+  // detailed cards below once the run finishes, so nothing is duplicated here.
+  function makeStepper() {
+    var row = document.createElement('div');
+    row.className = 'msg agent';
+    row.appendChild(avatarEl('agent'));
+
+    var body = document.createElement('div');
+    body.className = 'stepper-body';
+    var cap = document.createElement('div');
+    cap.className = 'stepper-cap';
+    cap.textContent = 'Working on it';
+    var list = document.createElement('div');
+    var bridge = document.createElement('div');
+    bridge.className = 'stepper-bridge';
+    bridge.textContent = '↓ Full breakdown, map & slot timeline appear below when it’s done';
+    body.appendChild(cap);
+    body.appendChild(list);
+    body.appendChild(bridge);
+    row.appendChild(body);
+    transcript.appendChild(row);
+    transcript.scrollTop = transcript.scrollHeight;
+
+    var rows = [];  // one entry per step: { row, dot }
+
+    function markDone(i) {
+      var r = rows[i];
+      if (!r) { return; }
+      r.row.className = 'step-row done';
+      r.dot.className = 'step-dot done';
+      r.dot.textContent = '✓';  // ✓
+    }
+
+    return {
+      // Finalise the current step and start the next one.
+      addStep: function (label, detail) {
+        if (rows.length) { markDone(rows.length - 1); }
+
+        var stepRow = document.createElement('div');
+        stepRow.className = 'step-row active';
+
+        var rail = document.createElement('div');
+        rail.className = 'step-rail';
+        var dot = document.createElement('div');
+        dot.className = 'step-dot active';
+        dot.innerHTML = '<span class="spin"></span>';
+        var lineEl = document.createElement('div');
+        lineEl.className = 'step-line';
+        rail.appendChild(dot);
+        rail.appendChild(lineEl);
+
+        var content = document.createElement('div');
+        content.className = 'step-content';
+        var name = document.createElement('div');
+        name.className = 'step-name';
+        name.textContent = label;
+        content.appendChild(name);
+        if (detail) {
+          var say = document.createElement('div');
+          say.className = 'step-say';
+          say.textContent = detail;
+          content.appendChild(say);
+        }
+
+        stepRow.appendChild(rail);
+        stepRow.appendChild(content);
+        list.appendChild(stepRow);
+        rows.push({ row: stepRow, dot: dot });
+        transcript.scrollTop = transcript.scrollHeight;
+      },
+      // Mark the last step done (the run produced a reply / result / error).
+      finish: function () {
+        if (rows.length) { markDone(rows.length - 1); }
+        cap.textContent = 'Done';
+      }
+    };
   }
 
   // Load the sample prospects as chips; clicking one drops it into the box.
@@ -54,9 +184,9 @@
         b.title = s.message;
         b.addEventListener('click', function () {
           input.value = s.message;
-          input.classList.remove('flash');
-          void input.offsetWidth;  // restart the flash animation
-          input.classList.add('flash');
+          form.classList.remove('flash');
+          void form.offsetWidth;  // restart the flash animation on the composer pill
+          form.classList.add('flash');
           input.focus();
         });
         chipsEl.appendChild(b);
@@ -571,6 +701,26 @@
     routesPanel.innerHTML = d.routesHtml || '';
     renderMap(d.map);        // assigns each route its colour
     paintRouteCards();       // colour-match the cards to the map markers
+    renderFeedback(d.feedback);   // thumbs-up/down, when the server enabled it
+  }
+
+  // --- Human feedback control ----------------------------------------------
+  // Rendered under a completed result only when the server advertised the
+  // capability AND stamped this payload with a decision_id. The shared widget
+  // (feedback.js) owns the prominent panel, the select-then-send interaction,
+  // and the POST. Purely additive: it records a judgment against this exact
+  // decision and changes nothing about the result on screen.
+  function renderFeedback(fb) {
+    if (!FEEDBACK_ENABLED || !window.SAFeedback) { return; }
+    window.SAFeedback.mount(outEl, fb, {
+      tag: 'your feedback',
+      question: 'Was this the right call?',
+      sub: 'Tell the team if the agent got this delivery-slot decision right or wrong.',
+      upLabel: 'Looks right',
+      downLabel: 'Not right',
+      sessionId: SESSION_ID,
+      annotatorId: 'ops_web'
+    });
   }
 
   // --- Phase 1: deterministic one-shot ---
@@ -596,10 +746,30 @@
     }
   }
 
+  // A one-click hand-off to the read-only customer view (/frontend), which shows
+  // the slots this turn just produced for the sales consultant to pick. Appended
+  // once per completed result; opens in a new tab so the chat stays put.
+  function showCustomerViewLink() {
+    var row = document.createElement('div');
+    row.className = 'cust-view-row';
+    var a = document.createElement('a');
+    a.className = 'cust-view-link';
+    a.href = '/frontend';
+    a.target = '_blank';
+    a.rel = 'noopener';
+    a.textContent = 'Open customer view ↗';
+    a.title = 'See these slots in the sales-consultant "Choose a delivery slot" view';
+    row.appendChild(a);
+    transcript.appendChild(row);
+    transcript.scrollTop = transcript.scrollHeight;
+  }
+
   // --- Phase 2: stream the real ADK agent over SSE ---
   async function sendLlm(message) {
     var thinking = bubble('agent', 'Thinking…', 'thinking');
     var pendingViz = null;
+    var stepper = null;
+    function endStepper() { if (stepper) { stepper.finish(); stepper = null; } }
     try {
       var res = await fetch('/api/chat', {
         method: 'POST',
@@ -625,23 +795,29 @@
           if (first) { thinking.remove(); first = false; }
 
           if (frame.type === 'tool') {
-            bubble('agent', '🔧 ' + frame.label + '…', 'thinking');
+            if (!stepper) { stepper = makeStepper(); }
+            stepper.addStep(frame.label, frame.detail);
           } else if (frame.type === 'message') {
+            endStepper();
             bubble('agent', frame.text);
           } else if (frame.type === 'await_input') {
+            endStepper();
             bubble('agent', '🙋 ' + frame.message, 'await');
           } else if (frame.type === 'visualization') {
             pendingViz = frame.payload;  // animate after the stream closes
           } else if (frame.type === 'error') {
+            endStepper();
             bubble('agent', frame.message || 'Something went wrong.', 'error');
           }
           // 'done' needs no UI action.
         }
       }
       if (first) { thinking.remove(); }
-      if (pendingViz) { await animate(pendingViz); }
+      endStepper();  // a tools-only turn (result animates below) still completes
+      if (pendingViz) { await animate(pendingViz); showCustomerViewLink(); }
     } catch (err) {
       thinking.remove();
+      endStepper();
       bubble('agent', 'Something went wrong streaming the agent. Please try again.', 'error');
     }
   }
@@ -673,7 +849,11 @@
   // Resolve the mode, then greet accordingly.
   fetch('/api/mode')
     .then(function (r) { return r.json(); })
-    .then(function (m) { MODE = m.mode || 'deterministic'; return m; })
+    .then(function (m) {
+      MODE = m.mode || 'deterministic';
+      FEEDBACK_ENABLED = !!(m && m.feedback);
+      return m;
+    })
     .catch(function () { return {}; })
     .then(function (m) {
       if (MODE === 'llm') {

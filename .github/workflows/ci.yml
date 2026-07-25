@@ -1,13 +1,23 @@
 name: CI
 
-# Runs the full test suite on every merge (push) to main, and on pull requests
-# targeting main so changes are validated before they land. Can also be run
-# manually from the Actions tab.
+# Runs the full test suite on every merge (push) to main and the dev-eval
+# integration branch, and on pull requests targeting either, so changes are
+# validated before they land. Can also be run manually from the Actions tab.
+# (Only dev-eval is included among the dev branches -- it's where the eval
+# hardening integrates and where these jobs earn their green history before
+# any promotion to required checks.)
+#
+# IMPORTANT – GitHub IP allow list
+# If jobs fail at the "Checkout" step with "IP allow list" errors, an org admin
+# must enable "Allow GitHub-hosted runners" under:
+#   Organization Settings → Code, planning, and automation → GitHub Actions
+#   → IP allow list → "Allow GitHub Actions to access the organization"
+# This lets GitHub-hosted runner IPs reach private org repositories.
 on:
   push:
-    branches: [main]
+    branches: [main, dev-eval]
   pull_request:
-    branches: [main]
+    branches: [main, dev-eval]
   workflow_dispatch:
 
 permissions:
@@ -20,7 +30,14 @@ concurrency:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Runner is configurable so CI works under an org IP allow list. Standard
+    # GitHub-hosted runners use ephemeral IPs; if the org enables an IP allow
+    # list, actions/checkout is rejected with "403 ... IP allow list enabled,
+    # and <ip> is not permitted". Set a repo/org Actions variable CI_RUNNER to
+    # the label of a runner whose egress IP is on the allow list (self-hosted,
+    # or a GitHub-hosted larger runner with a static IP range); it falls back to
+    # ubuntu-latest when unset. Shared by every workflow in this repo.
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -44,3 +61,135 @@ jobs:
 
       - name: Run tests
         run: python3 -m pytest -q
+
+      - name: Score curated snapshot datasets (current model, deterministic)
+        # The self-contained eval gate: replay the current model against every
+        # committed snapshot dataset (each carries its own world -- see
+        # eval/data/snapshots/ + integrations/snapshot_data.py) and check the
+        # recommend/escalate outcome + route-slot against the golden targets.
+        # Fully offline, no credentials; blocks a regression. (Also asserted by
+        # tests/eval/test_outcome_scoring.py above -- this makes it a named,
+        # at-a-glance CI step and exercises the CLI.)
+        run: python3 -m eval.outcome_scoring --path deterministic
+
+  # Agent-level evaluation (ADK AgentEvaluator): replays scripted intake
+  # conversations against the real root_agent and scores tool trajectory. Unlike
+  # the hermetic `test` job it needs a live LLM backend, so it runs separately and
+  # is ADVISORY for now -- it reports regressions but never blocks a PR while the
+  # thresholds are being calibrated (Phase 2a). Flip to a required check (drop
+  # continue-on-error) once trajectory scores prove stable over a few real PRs.
+  #
+  # NOTE: configured for the Sage backend (sage-gemini-2.5-flash). That backend
+  # needs the Sage SDK and enterprise network access, so this job is meant to run
+  # on a runner that has them (e.g. a self-hosted runner); on a stock runner
+  # without SAGE_* secrets it skips cleanly and never fails the PR. To run it
+  # against a public model instead, swap the env below for
+  # SMART_ASSIGNMENT_LLM_BACKEND=standard + a GOOGLE_API_KEY secret.
+  agent-eval:
+    # See the note on the `test` job above; CI_RUNNER is shared repo-wide.
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - name: Install the local ds-utils-lite dependency
+        run: pip install -e smart_assignment/ds_utils_lite
+
+      - name: Install package with dev dependencies
+        # NOTE: needs the `eval` extra too (google-adk[eval]) -- AgentEvaluator
+        # raises ModuleNotFoundError without it. `.[dev]` alone is not enough.
+        run: pip install -e ".[dev,eval]"
+
+      - name: Run agent trajectory eval (skips cleanly without credentials)
+        env:
+          SMART_ASSIGNMENT_LLM_BACKEND: sage
+          SMART_ASSIGNMENT_SAGE_MODEL: sage-gemini-2.5-flash
+          SAGE_CLIENT_ID: ${{ secrets.SAGE_CLIENT_ID }}
+          SAGE_CLIENT_SECRET: ${{ secrets.SAGE_CLIENT_SECRET }}
+          SAGE_ENVIRONMENT: ${{ secrets.SAGE_ENVIRONMENT }}
+        run: |
+          if [ -z "$SAGE_CLIENT_ID" ]; then
+            echo "No SAGE_* credentials configured; skipping agent eval (advisory)."
+            exit 0
+          fi
+          python3 -m pytest eval/test_eval.py -q
+
+      - name: Score curated snapshot datasets (LLM path, advisory)
+        # The same snapshot gate as the `test` job, but with the grounded LLM
+        # decision in the loop (SMART_ASSIGNMENT_EVAL_MODEL_PATH=llm). Advisory:
+        # needs credentials and grounded reasoning is non-deterministic, so it
+        # reports divergences without blocking. Skips cleanly without SAGE_*.
+        env:
+          SMART_ASSIGNMENT_LLM_BACKEND: sage
+          SMART_ASSIGNMENT_SAGE_MODEL: sage-gemini-2.5-flash
+          SAGE_CLIENT_ID: ${{ secrets.SAGE_CLIENT_ID }}
+          SAGE_CLIENT_SECRET: ${{ secrets.SAGE_CLIENT_SECRET }}
+          SAGE_ENVIRONMENT: ${{ secrets.SAGE_ENVIRONMENT }}
+        run: |
+          if [ -z "$SAGE_CLIENT_ID" ]; then
+            echo "No SAGE_* credentials configured; skipping LLM-path scoring (advisory)."
+            exit 0
+          fi
+          python3 -m eval.outcome_scoring --path llm
+
+  # G-Eval quality metrics (DeepEval): brief_quality (escalate-outcome captures)
+  # and response_clarity (recommend-outcome captures), scored directly against
+  # eval/capture.py's captured {final_response, escalated} data -- see
+  # eval/test_quality.py's module docstring. Same advisory/credential-skip
+  # shape as agent-eval above, but does NOT need google-adk[eval] at all
+  # (DeepEval's GEval never goes through AgentEvaluator) -- a narrower install.
+  #
+  # Also runs eval/test_rationale_faithfulness.py (Phase 3b): a different
+  # granularity -- routeslot/'s own grounded-decision rationale, not the
+  # agent's customer-facing prose -- scored reference-free against the real
+  # evidence packet, no capture step needed. Same eval-quality install covers
+  # both; see that file's module docstring.
+  quality-eval:
+    # See the note on the `test` job above; CI_RUNNER is shared repo-wide.
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - name: Install the local ds-utils-lite dependency
+        run: pip install -e smart_assignment/ds_utils_lite
+
+      - name: Install package with dev + quality-eval dependencies
+        run: pip install -e ".[dev,eval-quality]"
+
+      - name: Run quality metrics (skips cleanly without credentials)
+        env:
+          SMART_ASSIGNMENT_LLM_BACKEND: sage
+          SMART_ASSIGNMENT_SAGE_MODEL: sage-gemini-2.5-flash
+          SAGE_CLIENT_ID: ${{ secrets.SAGE_CLIENT_ID }}
+          SAGE_CLIENT_SECRET: ${{ secrets.SAGE_CLIENT_SECRET }}
+          SAGE_ENVIRONMENT: ${{ secrets.SAGE_ENVIRONMENT }}
+          # deepeval registers itself as a pytest plugin (pytest11 entry point),
+          # which pytest auto-imports before any of this repo's own code runs --
+          # so these MUST be real process env vars, not just set in Python (see
+          # eval/test_quality.py's own os.environ.setdefault, which only helps
+          # non-pytest invocations). Suppresses an outbound HTTPS version-check
+          # to pypi.org and usage-analytics events on every `pytest` invocation
+          # in an environment where deepeval happens to be installed.
+          DEEPEVAL_TELEMETRY_OPT_OUT: "YES"
+          DEEPEVAL_UPDATE_WARNING_OPT_OUT: "YES"
+        run: |
+          if [ -z "$SAGE_CLIENT_ID" ]; then
+            echo "No SAGE_* credentials configured; skipping quality eval (advisory)."
+            exit 0
+          fi
+          python3 -m pytest eval/test_quality.py eval/test_rationale_faithfulness.py -q

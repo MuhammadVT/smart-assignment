@@ -32,6 +32,14 @@ ROLE_JUDGMENT = "judgment"  # the grounded-judgment decision call
 ROLE_REASONING = "reasoning"  # the LLM-narrated reasoning trace (LLMReasoner)
 ROLE_SLOTPICK = "slotpick"  # the grounded slot selection over a route's candidate menu
 ROLE_ADDRESS_RESOLVE = "address_resolve"  # grounded pick among geocoder address candidates
+# Not a product decision-layer role like the others above -- this is
+# eval/test_quality.py's DeepEval G-Eval judge (Phase 3a, advisory, outside the
+# product decision path). Included here anyway so it gets the same per-role
+# override capability as everything else (e.g. a stronger judge model than the
+# app's own operational model), via the same Config.for_role/generate_text seam
+# eval/deepeval_llm.py's SmartAssignmentDeepEvalLLM reuses rather than
+# reinventing a separate judge-model resolution path.
+ROLE_QUALITY_JUDGE = "quality_judge"
 
 # role -> env var that overrides that role's model. A role whose env var is
 # unset uses the global `model` / `sage_model`, so behavior is unchanged.
@@ -42,6 +50,7 @@ _ROLE_MODEL_ENV = {
     ROLE_REASONING: "SMART_ASSIGNMENT_MODEL_REASONING",
     ROLE_SLOTPICK: "SMART_ASSIGNMENT_MODEL_SLOTPICK",
     ROLE_ADDRESS_RESOLVE: "SMART_ASSIGNMENT_MODEL_ADDRESS_RESOLVE",
+    ROLE_QUALITY_JUDGE: "SMART_ASSIGNMENT_MODEL_QUALITY_JUDGE",
 }
 
 
@@ -271,7 +280,8 @@ class Config:
 
     # --- LLM backend ---
     # "sage"     → enterprise-governed SageLlmRegistry (requires SAGE_CLIENT_ID,
-    #              SAGE_CLIENT_SECRET, SAGE_ENVIRONMENT to be set).
+    #              SAGE_CLIENT_SECRET, SAGE_ENVIRONMENT to be set) -- unless
+    #              `use_sage_gateway` is on (see below).
     # "standard" → `model` below, used directly by Google ADK / genai
     #              (requires GOOGLE_API_KEY or Vertex credentials) -- unless
     #              it's a litellm-style "<provider>/<model>" string (e.g.
@@ -280,9 +290,20 @@ class Config:
     llm_backend: str = "sage"
     # Model name used when llm_backend == "standard" -- a bare Gemini name,
     # or a "<provider>/<model>" litellm string for any other provider.
-    model: str = "gemini-2.5-flash"
-    # Model name used when llm_backend == "sage" (Sage-prefixed identifier).
+    model: str = "gemini-3.5-flash"
+    # Model name used when llm_backend == "sage" (Sage-prefixed identifier,
+    # unless `use_sage_gateway` is on -- see below).
     sage_model: str = "sage-gemini-2.5-flash"
+    # When True (and llm_backend == "sage"), the sage call is routed through
+    # Sysco's enterprise LLM Gateway (the Sage SDK's `GatewayLlm`, an
+    # OpenAI-compatible litellm proxy with OAuth2 token injection) instead of
+    # SageLlmRegistry/SageLiteLlm's direct call to one registered SAGE agent
+    # -- see shared/llm.py's module docstring. `sage_model` then names a
+    # gateway-exposed model id (e.g. "gpt-4o"), not a sage-* agent name.
+    # Requires LLM_GATEWAY_CLIENT_ID/LLM_GATEWAY_CLIENT_SECRET
+    # (LLM_GATEWAY_ENV optional, defaults to "qa" in the SDK). Off by default
+    # so the existing direct-agent path is unchanged.
+    use_sage_gateway: bool = False
     # Optional per-role model overrides (role -> model name; see the ROLE_*
     # constants and for_role). A role absent here uses the global model above,
     # so the default behavior is unchanged. Lets you assign a cheaper/faster
@@ -299,6 +320,63 @@ class Config:
     # never offered) is logged. Purely diagnostic: it changes no decision, value, or
     # fallback; it only makes an opaque sage failure legible. Off by default.
     debug_sage_raw_response: bool = False
+
+    # --- Observability (opt-in, off by default) ---
+    # When True, LLM calls are wrapped in an OpenTelemetry span and exported to a
+    # configured OTLP backend (e.g. a self-hosted Langfuse instance) -- see
+    # shared/tracing.py. Purely additive: tracing observes, it never changes a
+    # value a decision layer acts on, and every failure path (SDK missing, no
+    # exporter, backend unreachable) degrades to a silent no-op. Off by default,
+    # and flag-off imports no OpenTelemetry SDK and reproduces prior behavior
+    # exactly. The exporter target comes from the environment (standard
+    # OTEL_EXPORTER_OTLP_* vars, or the LANGFUSE_* trio), not from this flag.
+    use_tracing: bool = False
+
+    # --- Human feedback loop (opt-in, off by default) ---
+    # When True, the app captures human quality judgments (a thumbs-up/down, an
+    # optional score, and a freeform note) on a completed recommendation and
+    # records them via the `feedback` package. Purely additive and observational:
+    # feedback is written to a durable local log (the audit source of truth) and,
+    # when tracing is on, emitted as a vendor-neutral OTLP span linked to the
+    # decision's trace -- so ANY OTLP backend (Phoenix, Langfuse, Tempo, ...)
+    # ingests it with only an endpoint change. It NEVER changes a route, score,
+    # slot, or decision; any use of the labels (eval calibration, prompt tuning)
+    # is a separate, offline, human-driven step. Off by default: flag-off hides
+    # the UI, disables the endpoint, and imports nothing new.
+    use_human_feedback: bool = False
+    # When True (the default), a freeform feedback note and the captured decision
+    # context are PII-scrubbed before they are written to the durable log, so an
+    # off-network / shared deployment never persists customer identifiers. Turn
+    # it OFF on a trusted company network, where the real customer PII is *wanted*
+    # as part of the human feedback (who the account was, the actual address).
+    # Categorical labels/scores are never PII and are unaffected either way; span
+    # attributes never carry note text regardless (see feedback/emit.py).
+    feedback_scrub_pii: bool = True
+    # Absolute or relative path to the append-only JSONL feedback log -- the
+    # durable, backend-independent record of every annotation (the curation
+    # source of truth). Relative paths resolve against the process CWD.
+    feedback_log_path: str = "feedback_data/annotations.jsonl"
+    # When True, the decision span (webapp.recommendation) additionally carries the
+    # decision's *input* (the intake) and *output* (the recommendation) as
+    # OpenInference ``input.value`` / ``output.value`` attributes, so a
+    # trace-backend-native dataset (Phoenix / Langfuse) built from those spans is
+    # *replay-ready* -- not just filterable. It uses OPEN semantic conventions, so
+    # it stays vendor-free while being natively understood by both backends.
+    # Because the intake carries PII (name, address), this fires ONLY when
+    # ``feedback_scrub_pii`` is also off (the same "PII allowed on the backend"
+    # gate as the note-on-span behavior) -- so scrub-on always wins and no PII
+    # reaches a trace. Off by default; a pure opt-in on top of tracing.
+    use_trace_dataset_payloads: bool = False
+    # --- Judge calibration (Phase 0; advisory, opt-in, off by default) ---
+    # When True, the judge-calibration harness (``eval/judge_calibration.py``) is
+    # available: it measures how well the automated LLM judges (brief_quality,
+    # response_clarity) agree with the human labels being collected, so the auto
+    # judges can be trusted (or not) before anything is gated on them. Purely
+    # ADVISORY and OFFLINE -- it changes no decision and gates nothing; it only
+    # reports agreement (Cohen's kappa, a dangerous-cell rate, a trust band).
+    # Off by default; flag-off makes the CLI a no-op, so calibration never runs
+    # unless explicitly turned on.
+    use_judge_calibration: bool = False
 
     def tier_harm_weight(self, tier: Optional[str]) -> float:
         """Harm weight for crowding a committed stop of the given Sysco tier --
@@ -384,10 +462,23 @@ class Config:
             use_address_resolution=_bool_env("SMART_ASSIGNMENT_USE_ADDRESS_RESOLUTION", True),
             use_escalation_triage=_bool_env("SMART_ASSIGNMENT_USE_ESCALATION_TRIAGE", True),
             llm_backend=os.environ.get("SMART_ASSIGNMENT_LLM_BACKEND", "sage"),
-            model=os.environ.get("SMART_ASSIGNMENT_MODEL", "gemini-2.5-flash"),
+            model=os.environ.get("SMART_ASSIGNMENT_MODEL", "gemini-3.5-flash"),
             sage_model=os.environ.get("SMART_ASSIGNMENT_SAGE_MODEL", "sage-gemini-2.5-flash"),
+            use_sage_gateway=_bool_env("SMART_ASSIGNMENT_USE_SAGE_GATEWAY", False),
             role_models=_role_models_from_env(),
             debug_sage_raw_response=_bool_env("SMART_ASSIGNMENT_DEBUG_SAGE_RESPONSE", False),
+            use_tracing=_bool_env("SMART_ASSIGNMENT_USE_TRACING", False),
+            use_human_feedback=_bool_env("SMART_ASSIGNMENT_USE_HUMAN_FEEDBACK", False),
+            feedback_scrub_pii=_bool_env("SMART_ASSIGNMENT_FEEDBACK_SCRUB_PII", True),
+            feedback_log_path=(
+                os.environ.get("SMART_ASSIGNMENT_FEEDBACK_LOG_PATH")
+                or "feedback_data/annotations.jsonl"
+            ).strip()
+            or "feedback_data/annotations.jsonl",
+            use_trace_dataset_payloads=_bool_env(
+                "SMART_ASSIGNMENT_USE_TRACE_DATASET_PAYLOADS", False
+            ),
+            use_judge_calibration=_bool_env("SMART_ASSIGNMENT_USE_JUDGE_CALIBRATION", False),
         )
 
 

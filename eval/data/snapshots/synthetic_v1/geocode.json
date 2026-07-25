@@ -1,0 +1,18 @@
+{
+  "syn_clean_recommend address, Anytown (synthetic)": {
+    "lat": 40.045,
+    "lon": -100.008
+  },
+  "syn_east_recommend address, Anytown (synthetic)": {
+    "lat": 40.005,
+    "lon": -99.902
+  },
+  "syn_out_of_range address, Anytown (synthetic)": {
+    "lat": 41.6,
+    "lon": -100.0
+  },
+  "syn_over_capacity address, Anytown (synthetic)": {
+    "lat": 39.955,
+    "lon": -100.002
+  }
+}

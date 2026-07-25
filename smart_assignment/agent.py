@@ -39,6 +39,7 @@ from google.adk.agents import LlmAgent
 from google.adk.tools import FunctionTool, request_input
 
 from smart_assignment.prompts import build_instruction
+from smart_assignment.shared import tracing
 from smart_assignment.shared.config import DEFAULT_CONFIG, ROLE_ROOT_AGENT
 from smart_assignment.shared.llm import get_llm, offload_to_worker_thread
 from smart_assignment.tools import (
@@ -78,6 +79,14 @@ def _build_root_agent() -> LlmAgent:
     """Construct the conversational agent. Resolves the LLM backend (``get_llm``),
     so this needs credentials for the configured backend -- called only on first
     access to ``root_agent``, never at import."""
+    # Install tracing (global provider + OTLP exporter + ADK instrumentor) BEFORE
+    # the agent runs, so its conversational turns and tool calls are captured from
+    # the first turn. A no-op when Config.use_tracing is off, so offline paths that
+    # never build root_agent are entirely unaffected. This is the single entry
+    # point that covers every agent-serving surface (adk web/deploy, the web app),
+    # since they all build root_agent but none share a main() we own.
+    tracing.configure_tracing(DEFAULT_CONFIG)
+
     triage_enabled = DEFAULT_CONFIG.use_escalation_triage
     address_resolution_enabled = DEFAULT_CONFIG.use_address_resolution
 

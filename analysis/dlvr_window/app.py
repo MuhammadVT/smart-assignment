@@ -227,7 +227,7 @@ def main() -> None:
     except Exception as exc:
         st.error(f"Could not load committed TW1 data: {exc}")
         st.info(
-            "Run smart_assignment/data_prep/prep_dlvry_tw_data.py to populate cache, "
+            "Run smart_assignment/data_prep/prep_delivery_data.py to populate cache, "
             "or restart with --sample for demo data."
         )
         return

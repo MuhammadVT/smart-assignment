@@ -477,6 +477,344 @@ No image file is included in this package — generate one (e.g. via the
 ADK Web UI's trace view, or any diagramming tool) and drop it here as
 `smart_assignment.png` once available.
 
+## Sage LLM Gateway sub-path (`shared/llm.py`, opt-in)
+
+The Sage SDK ships two distinct ways to reach a model under `llm_backend =
+"sage"`, and this repo can use either without touching any call site:
+
+- **Direct-to-agent (default).** `SageLlmRegistry`/`SageLiteLlm` call one
+  registered SAGE **agent** (by `sage_model`, a `sage-*` id) over the SAGE
+  agent API, authenticated with `SAGE_CLIENT_ID`/`SAGE_CLIENT_SECRET`/
+  `SAGE_ENVIRONMENT`.
+- **LLM Gateway (`Config.use_sage_gateway = True`).** The SDK's `GatewayLlm`
+  — itself an ADK `LiteLlm` — routes the call through Sysco's enterprise LLM
+  Gateway instead: an OpenAI-compatible litellm proxy, with the SDK injecting
+  an OAuth2 token it refreshes on a timer. Credentials are
+  `LLM_GATEWAY_CLIENT_ID`/`LLM_GATEWAY_CLIENT_SECRET` (read directly by the
+  SDK's `GatewayClient`, not this repo's `Config`); `LLM_GATEWAY_ENV` is
+  optional (defaults to `"qa"`). Under this sub-path `sage_model` names a
+  gateway-exposed model id (e.g. `"gpt-4o"`), not a SAGE agent — `GatewayLlm`
+  wraps it as `"openai/{model}"` itself.
+
+Both classes are lazily imported the same way (`shared/llm.py`'s
+`_load_sage_registry` / `_load_sage_gateway_llm_cls`, sharing the
+`_ensure_sage_sdk_on_syspath` local-workshop fallback), and because
+`GatewayLlm` is a plain ADK `LiteLlm`, it needs no new content-generation
+logic — `get_llm()` and `generate_text()` dispatch to whichever sibling
+`Config.use_sage_gateway` selects (`get_sage_llm()` vs.
+`get_sage_gateway_llm()`), and everything downstream (`_generate_via_sage_async`,
+the loop-binding dance below, the response diagnostic) is unchanged. The flag
+is off by default, so the direct-agent path is reproduced exactly unless a
+caller opts in.
+
+## Tracing & observability (`shared/tracing.py`, opt-in)
+
+The grounded decision layers already produce an auditable *record* of every
+choice (evidence packet in, cited choice out, verifier verdict, fallback
+reason). This layer makes that record *observable at runtime* by emitting an
+OpenTelemetry span per LLM call, exportable to a self-hosted trace backend
+(the chosen stack is a self-hosted Langfuse instance) so a human can inspect
+production decisions in a UI instead of only in logs.
+
+It is deliberately the thinnest possible seam, and holds the repo's standard
+guarantees:
+
+- **Opt-in, default off.** Gated by `Config.use_tracing` (env
+  `SMART_ASSIGNMENT_USE_TRACING`). With it off, no OpenTelemetry SDK is imported
+  and behavior is byte-identical to before.
+- **Never worse than the baseline.** Tracing *observes*; it never changes a value
+  a decision layer acts on. Every failure path — SDK not installed, no exporter
+  configured, backend unreachable, span machinery erroring — degrades to a silent
+  no-op (`llm_span` yields a `_NoopSpan`), so a broken trace backend can never
+  break a decision. A caller exception still propagates unchanged (and is recorded
+  on the span when one is active).
+- **Credential-free import.** The SDK, exporter, and instrumentor are imported
+  lazily inside a once-per-process `_configure`, so importing the package needs
+  neither the `observability` extra nor any credentials (the same discipline as
+  the lazy Sage/backend construction elsewhere).
+
+**Two span sources, one connected trace.** Setup is `configure_tracing(config)`
+(idempotent, once per process), called from `_build_root_agent` (`agent.py`)
+*before* the agent runs — the one entry point every agent-serving surface
+(`adk web`/`adk deploy`, the web app) shares — and lazily by `llm_span` for
+non-agent paths. It installs a **global** `TracerProvider` + OTLP exporter and
+the Google ADK OpenTelemetry instrumentor, so both span sources land in one
+trace tree:
+
+```
+configure_tracing(config)                          [shared/tracing.py]
+  ├─ global TracerProvider + OTLP exporter   (non-clobbering: attaches to an
+  │                                            existing provider if one is set)
+  └─ GoogleADKInstrumentor().instrument()    (agent turns + tool calls)
+
+root_agent turn  ─►  tool call (recommend_or_escalate, …)   [ADK spans]
+                        └─ generate_text(config, prompt, role)     [shared/llm.py]
+                             └─ llm_span(...)  backend/model/role/prompt_chars…
+                                (nests UNDER the ADK tool span)    [our span]
+        · flag off -> nullcontext(_NoopSpan)   (no import, no-op)
+```
+
+**Why a global provider (the Phase 0.5 promotion).** Phase 0 deliberately used a
+*local* `TracerProvider` to avoid claiming the process-global one before the ADK
+instrumentor existed. ADK's built-in tracing emits against the **global**
+provider, so capturing agent/tool spans *and* connecting them to our
+grounded-call spans requires sharing it. `_install_provider` claims the global
+provider when none is set, and otherwise **attaches its exporter to whatever
+provider is already there** rather than replacing it (OpenTelemetry forbids
+re-setting a real provider, and clobbering would drop the other side's spans) —
+robust in a deployment that already configured its own tracing.
+
+**Generic spans only, by design.** It records backend, model, an optional
+`role` label, prompt/response sizes, latency, and error status — but **not**
+prompt or response text, which can carry customer PII (an evidence packet
+contains an address). Richer, per-layer payloads are an intentional per-call-site
+decision for a later phase, not a global default here.
+
+**Exporter is vendor-neutral.** The target comes from the environment, not from
+code: standard `OTEL_EXPORTER_OTLP_ENDPOINT` (+ `OTEL_EXPORTER_OTLP_HEADERS`)
+takes precedence, keeping the backend swappable; as a convenience, the
+`LANGFUSE_HOST`/`LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` trio is turned into an
+OTLP endpoint + Basic-auth header (Langfuse ingests OpenTelemetry directly). So
+pointing dev at `localhost:3000` vs. prod at a Cloud Run instance is pure config.
+Install with the `observability` extra (`pip install -e ".[observability]"`).
+
+## Human feedback loop (`feedback/` package, opt-in)
+
+The tracing layer above makes a decision *observable*; this layer lets a human
+*judge* it and feeds that judgment back into the eval machinery — the production
+feedback flywheel (traces → human labels → dataset curation → calibrate evals →
+tune), built to the repo's standard guarantees.
+
+It is deliberately **vendor-free**. OpenTelemetry has no standard
+annotation/score signal, and every vendor's annotation REST API is
+vendor-specific — so a feedback item is represented the one portable way:
+feedback arrives *after* the decision span has already closed (a human clicks
+👎 seconds later, and an exported span can't be mutated), so each annotation is
+emitted as its **own OTLP span**, `human_feedback`, **linked** to the decision's
+span via a standard OpenTelemetry span link and the original `trace_id`. Any
+OTLP backend — Phoenix now, Langfuse later, Tempo/Jaeger/anything after —
+ingests it and correlates by trace id, with only the exporter *endpoint*
+differing. This reuses the exact exporter/provider seam in `shared/tracing.py`;
+no vendor SDK is imported.
+
+```
+decision runs INSIDE one span (webapp.recommendation)   [pipeline, unchanged]
+        |  webapp/decision.traced_decision wraps the run and captures that span's
+        |  trace/span ids WHILE it is live; webapp/decision.feedback_context pulls
+        |  the recommend/escalate outcome + route/window/order from the result.
+        |  both ride the payload as private `_trace` / `_decision` hints that
+        |  app._attach_feedback consumes and strips (they never reach the browser),
+        |  minting a stable decision_id.
+        v
+pick 👍/👎, add an optional note, click "Send"   [static/feedback.js — one shared
+        |   widget on BOTH the Live-agent result card AND the Customer view
+        |   (/frontend, the end-user surface); shown only when feedback is on.
+        |   Rating + note submit together on the button, so a note is never lost.]
+        v
+POST /api/feedback  (webapp/app.py, flag-gated)
+        v
+record_feedback(config, record)              [feedback/capture.py]
+   1. gate on use_human_feedback (off -> no-op, imports nothing further)
+   2. validate deterministically (feedback/schema.py) -> 400 on a bad record
+   3. scrub PII if feedback_scrub_pii (feedback/scrub.py; default ON)
+   4. PERSIST FIRST to the append-only JSONL log (feedback/store.py) -- the
+      durable audit source of truth, independent of any backend
+   5. best-effort OTLP emit (feedback/emit.py) -- silent no-op if tracing off
+        v
+scripts/curate_feedback.py  ->  feedback/curate.py                 [OFFLINE]
+   read HUMAN labels -> candidate eval cases aligned to eval/golden_cases.py
+   (a human reviews + promotes; nothing auto-mutates the golden set or a prompt)
+```
+
+**How the guarantees hold.** *Opt-in, default off* — everything is gated by
+`Config.use_human_feedback` (env `SMART_ASSIGNMENT_USE_HUMAN_FEEDBACK`); flag-off
+hides the UI (advertised via `/api/mode`), disables the endpoint, and imports
+nothing new. *Never worse than the baseline* — feedback is purely observational;
+it touches no route, score, slot, or decision, and any *use* of the labels
+(eval calibration, prompt tuning) is a separate, **offline, human-driven** step,
+never a live loop that mutates what the system does. *No fabricated actionable
+values* — a record carries a human judgment, never a value a downstream system
+acts on, and a deterministic validator (`schema.validate_feedback`) rejects a
+malformed one before anything persists it. *Auditable & durable* — the JSONL log
+is the source of truth, written before the best-effort emit, so an annotation
+survives a down trace backend. *Credential-free, defensive* — lazy imports, and
+every persistence/emit failure degrades to a logged no-op (only a bad record
+raises, as a 400), the same discipline as `shared/tracing.py`. *A layer changes
+only what it owns* — `feedback/` only writes records.
+
+**PII is a toggle, not a policy — and it's consistent across log and trace.**
+Only the freeform `note` and free-text context values are scrub-eligible;
+labels/route-ids always pass through. `feedback_scrub_pii` defaults **on** (safe
+for an off-network / shared deployment): the note is redacted in the durable log
+*and* the OTLP span carries only a `has_note` boolean, never the text. On a
+trusted company network, where the real customer PII is *wanted* as part of the
+feedback, set `SMART_ASSIGNMENT_FEEDBACK_SCRUB_PII=false`: records are stored
+verbatim **and** the note text rides on the `human_feedback` span (visible in
+Phoenix/Langfuse). So the one toggle governs PII everywhere, rather than the span
+being unconditionally text-free.
+
+**Real trace linkage, on every path.** A feedback item must link to a *real*
+trace, but feedback arrives after the decision span closed. So `traced_decision`
+(`webapp/decision.py`) runs the pipeline inside one explicit
+`webapp.recommendation` span and reads its coordinates *while the span is live*,
+threading them onto the payload — rather than best-effort-reading a span that may
+already be gone at emit time. Both request paths use it (the streaming chat
+services and `/api/recommend`), so the link is populated whenever tracing is on,
+regardless of which brain served the turn. With tracing off the span is a no-op
+and feedback falls back to the always-present `decision_id`. The
+`webapp.recommendation` span also carries the decision's non-PII facts (outcome,
+route, window, order size) as `smart_assignment.decision.*` attributes, so it's
+informative in the trace backend even in offline deterministic mode (where there
+are no child LLM/tool spans). The same helper module's `feedback_context` puts
+the recommend/escalate **outcome** (plus route, window, order size) into the
+curation snapshot on every path — so a 👎 on a streamed chat result carries the
+same structured facts a `/api/recommend` one did. These travel as private
+`_trace`/`_decision` payload hints that `app._attach_feedback` consumes and
+always strips.
+
+**Replay-ready trace datasets, still vendor-free (`use_trace_dataset_payloads`).**
+Filtering thumbs-down spans is enough to *triage*, but to *curate a dataset
+inside* Phoenix/Langfuse you need the case's input and output on the trace. When
+`use_trace_dataset_payloads` is on **and** PII scrub is off, `DecisionSpan.record`
+attaches the intake and the recommendation to the `webapp.recommendation` span as
+OpenInference `input.value` / `output.value` (with `openinference.span.kind`).
+These are *open* semantic-convention keys — Phoenix and Langfuse both read them
+natively to build replay-able dataset examples — so the feature is backend-native
+yet imports no vendor SDK. It's a pure opt-in on top of tracing, and scrub-on
+always suppresses it (the payload carries name/address), so no PII reaches a trace
+unless the operator opted into *both* flags. The vendor-free JSONL curation path
+(`scripts/curate_feedback.py`) is unaffected and remains the portable default;
+this just makes the *backend-native* curation path viable too.
+
+**One neutral pipe for all annotators.** The schema's `annotator_kind ∈ {HUMAN,
+LLM, CODE}` means an LLM-as-judge score or a deterministic code check can flow
+through the *same* record, log, and OTLP span later — so the existing eval
+judges (`eval/deepeval_llm.py`, `eval/sage_judge_llm.py`) can unify with human
+ground truth without a second mechanism. Curation (`feedback/curate.py`) only
+reads HUMAN records — those are the ground truth the auto-judges calibrate
+against — and emits *candidate* cases for a human to review and promote into
+`eval/golden_cases.py`. A `suggested_expected_outcome` is filled in only when the
+verdict cleanly implies one: a 👍 confirms the observed outcome as ground truth.
+A 👎 is left for the human to decide — a thumbs-down says the decision was wrong,
+not *how* (the reviewer may have wanted an escalation, or simply a different
+feasible route/slot), so guessing `escalate` would encode a target they never
+chose. The boundary is the point: human feedback feeds an offline, human-gated
+loop.
+
+**From candidates to a runnable eval — no hand-copying.** Both curation entry
+points emit the *same* candidate-cases JSON: `scripts/curate_feedback.py`
+(vendor-free, over the JSONL log) and `scripts/phoenix_curate.py` (the Phoenix
+path — it joins the `human_feedback` and `webapp.recommendation` spans by trace id
+so you don't do it by hand, and writes that same file, optionally also uploading a
+Phoenix Dataset). `eval/case_source.py` loads either file, reconstructing a
+`CustomerProfile` (including the stated day/window, now carried in
+`feedback_context`) and a `GoldenCase` per candidate; it *skips* any case whose
+address is missing or PII-redacted (a scrub-on capture can't be geocoded) and
+reports why. `python3 -m eval.build_evalset --cases <file>` then turns those into a
+standard ADK evalset JSON — so curated production feedback runs through the exact
+same trajectory eval as the built-in `GOLDEN_CASES`, without editing
+`golden_cases.py`. The committed golden dataset and its sync test are untouched
+(the flag-less `build_evalset` still regenerates exactly that).
+
+### Judge calibration — trusting the auto-judges (Phase 0, advisory)
+
+The automated judges (`brief_quality`, `response_clarity`) are themselves LLMs, so
+their scores are only worth gating on once benchmarked against human ground truth.
+`eval/judge_calibration.py` measures that agreement — Cohen's κ (with a rubber-stamp
+guard so a judge that passes everything on 👍-skewed labels scores ~0, not ~0.9), a
+**dangerous-cell rate** (how often the judge passes what a human rejected), and a
+trust band (`insufficient` / `distrust` / `advisory` / `gate`). It's purely
+**advisory** and gated by `Config.use_judge_calibration` (default off): it changes
+no decision and gates nothing; `scripts/calibrate_judges.py` is a no-op with the
+flag off.
+
+The crux is that human feedback is **holistic** (a thumb on the whole decision)
+while judges are **dimensional**, so the harness never fabricates a per-judge label
+from a thumb. It tiers the signal: an explicit per-dimension annotation (Tier 3)
+wins; else a note-tag (Tier 2 — a transparent keyword map, plus an opt-in LLM
+suggestion that degrades to keyword-only on any failure); else the thumb is routed
+to the outcome-appropriate judge (Tier 1.5 — escalate→`brief_quality`,
+recommend→`response_clarity`, the same split `test_quality.py` uses) and *only* that
+one; and separately a Tier-1 **composite** predicts a thumb from all judge verdicts
+and calibrates that against the holistic thumb. Every aligned pair is tagged with
+its tier, so the sharp (dimensional) agreement reads separately from the coarse
+(holistic) one. Dimension names are exactly the `deployment/phoenix/README.md`
+vocabulary (and the judge names), so human label, Phoenix annotation, and judge
+speak one language.
+
+Human labels come through **one shape (`HumanLabel`) from any source** — vendor-free
+(the JSONL log, where a Tier-3 annotation is a record with a `"<dimension>:<verdict>"`
+label, no schema change), **Phoenix** (annotations on the decision trace, today),
+or **Langfuse** (scores, later) — all normalized by the shared parser, with the live
+client calls lazily imported and defensive. No replay and no data source: calibration
+needs only the `(human_label, judge_verdict)` pairs that already exist.
+
+### Self-contained snapshot datasets — scoring the model, offline, in CI
+
+Trajectory eval is world-independent, but scoring the *decision* (recommend vs.
+escalate, and which route-slot) needs the world the decision saw. So a curated
+golden dataset carries its own world — the file-backed analogue of the
+code-defined `mock` world, and PII-free the same way. A **snapshot bundle** is one
+directory:
+
+```
+eval/data/snapshots/<name>/
+  routes.json    the world: Route/RouteStop with capacity, committed stops, windows, tiers
+  geocode.json   {address -> {lat, lon}} for every case
+  cases.json     the cases: intake + expected_outcome + expected_route_id/window
+  manifest.json  provenance for visibility (source, model, config, counts)
+```
+
+`integrations/snapshot_data.py` owns the encoding; a **`snapshot` data source**
+(`route_capacity_client`) serves `routes.json` and a **`SnapshotGeocoder`**
+(`geocoding_client`) replays `geocode.json`, both pinned by
+`eval/dataset.py` (which **auto-discovers** any bundle under `eval/data/snapshots/`
+— dropping a directory registers a dataset, no code change — and hashes the bundle
+bytes for a provenance `dataset_content_ref`). So replay is fully offline and
+deterministic, exactly like `mock`.
+
+**Two authoring on-ramps, one format, little manual work:**
+
+```
+ human feedback                          synthetic
+ curate_feedback.py / phoenix_curate.py  eval/synthetic.py
+   -> candidate-cases JSON                 designed world + prospects
+          |                                        |
+   eval/freeze_dataset.py                          |   (already PII-free)
+   run each once vs the real world,                |
+   capture its routes + coords, ANONYMIZE          |
+          \________________________  _____________/
+                                   \/
+                    a self-contained snapshot bundle
+                                   |
+                    eval/outcome_scoring.py  ── run the CURRENT model vs the
+                    (offline, deterministic)    frozen world; score outcome +
+                                                route-slot vs the golden target
+```
+
+**Anonymization (the PII line).** Scoring depends on geometry and capacity, not
+identities, so `freeze_dataset.py` keeps the coordinates / capacity / windows /
+tiers / route-codes and drops the identifiers: the prospect's name and street
+address become synthetic labels (the label keys the geocode map to the real
+coordinates, so distance math is unchanged) and committed-stop customer numbers
+become `STOP-*`. The result is PII-free *by construction* — safe to commit and run
+in a shared CI. (Synthetic datasets are PII-free already, so they skip this.) One
+shared world (the dedup union of every case's candidate routes), each prospect
+evaluated against it — the `mock` pattern generalized. Golden targets come from
+the human's corrected target on a promoted thumbs-down, else the decision captured
+at freeze time (a regression baseline).
+
+**Scoring, two paths, one toggle.** `eval/outcome_scoring.py` re-runs the current
+model over a bundle and checks the recommend/escalate outcome and the route-slot
+(route id + window) against the golden target. `path` (or
+`SMART_ASSIGNMENT_EVAL_MODEL_PATH`) selects `deterministic` (weighted-sum, grounded
+off — offline, no credentials, the **blocking self-contained CI gate** in the
+`test` job) or `llm` (grounded judgment in the loop — advisory in the credentialed
+`agent-eval` job). The scorer is side-effect-free (it restores the data-source /
+geocoder env it pins). This closes the flywheel: production feedback (or a
+synthetic design) → an anonymized, self-contained golden dataset → the current
+model scored against it, automatically, in CI.
+
 ## Step 5, two ways: weighted-sum vs. grounded LLM judgment
 
 Step 5 (recommend-or-escalate) has two interchangeable *decision strategies*

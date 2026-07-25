@@ -39,6 +39,21 @@ dev = [
 litellm = [
     "google-adk[extensions]>=2.3.0",
 ]
+# The agent-trajectory eval suite under eval/ (ADK's AgentEvaluator). ADK ships
+# its evaluation module behind its own "eval" extra; without it AgentEvaluator
+# raises ModuleNotFoundError at run time. Kept OUT of `dev` -- eval/ replays
+# conversations against a live LLM backend, so the hermetic tests/ suite must
+# never require these deps. Run with: pytest eval/test_eval.py
+eval = [
+    "google-adk[eval]>=2.3.0",
+]
+# Reading the prepared parquet cache snapshots under data/dev/ that the "cache"
+# data source (the default -- see integrations/route_capacity_client.py) loads:
+# pandas needs a parquet engine. Without it the route/tier/window cache reads
+# fail and fetch_candidate_routes falls back to the mock demo routes. Kept as an
+# opt-in extra (not a core dep) so the hermetic suite, which runs on mock, never
+# requires a heavy native wheel. Matches ds-utils-lite's own [parquet] extra.
+cache = ["pyarrow>=14.0"]
 # The live chat web app (smart_assignment/webapp). Runs the deterministic
 # pipeline offline -- no LLM key needed. Serve with:
 #   uvicorn smart_assignment.webapp.app:app --reload
@@ -50,6 +65,45 @@ web = [
 analysis = [
     "streamlit>=1.32",
     "plotly>=5.18",
+]
+# G-Eval quality metrics (brief_quality, response_clarity -- see
+# eval/test_quality.py), Phase 3a. Kept OUT of `dev`/`eval`: needs a live LLM
+# backend, and does NOT need google-adk[eval] at all -- DeepEval's GEval scores
+# a bare (input, actual_output) pair directly, no AgentEvaluator involved, so
+# this is a narrower, cheaper install than eval/test_eval.py's `eval` extra.
+#
+# Pinned EXACTLY (not a floor): deepeval's newer releases (>=3.4.7, and all of
+# 4.x) require python-dotenv>=1.1.1, which conflicts with this project's own
+# litellm==1.83.7 (hard-pins python-dotenv==1.0.1, for Sage SDK compatibility
+# -- see the base `dependencies` list). 2.6.6 is the newest version whose own
+# deps resolve against that pin. [VERIFIED against the installed 2.6.6 API,
+# NOT deepeval's current GitHub main/PyPI-latest -- their public API drifted
+# meaningfully since 2.6.6 (e.g. LLMTestCaseParams instead of the newer
+# SingleTurnParams alias, no built-in GeminiModel) -- see eval/test_quality.py
+# and eval/deepeval_llm.py.] Revisit this pin (and re-verify the API) if the
+# litellm pin above is ever bumped/loosened.
+#
+# `langchain` is an UNDECLARED transitive runtime import: deepeval 2.6.6's own
+# package __init__ eagerly imports its OpenAI-model integration code (even
+# though we never use it), which needs langchain -- PyPI's declared deps don't
+# list it, but `import deepeval` genuinely fails without it installed. Pinned
+# exactly (0.3.30 is what actually resolves against the litellm constraint
+# above) for reproducibility, same rationale as the deepeval pin.
+eval-quality = [
+    "deepeval==2.6.6",
+    "langchain==0.3.30",
+]
+# Opt-in OpenTelemetry tracing (smart_assignment/shared/tracing.py). Kept OUT of
+# `dev` so the test suite never requires it and imports stay credential-free:
+# with SMART_ASSIGNMENT_USE_TRACING off (the default) none of this is imported.
+# Exports OTLP spans to any OTLP backend -- e.g. a self-hosted Langfuse instance.
+# openinference-instrumentation-google-adk turns the conversational agent's turns
+# and tool calls into spans on the same provider (agent-level tracing); without it
+# only the grounded generate_text calls are traced.
+observability = [
+    "opentelemetry-sdk>=1.24",
+    "opentelemetry-exporter-otlp-proto-http>=1.24",
+    "openinference-instrumentation-google-adk>=0.1",
 ]
 
 [tool.setuptools.packages.find]
@@ -66,11 +120,33 @@ line-length = 100
 
 [tool.isort]
 profile = "black"
-line_length = 100
+
+[tool.uv]
+# OneDrive (and other cloud-synced folders) don't support the hardlinks that uv
+# tries to create by default. Use copy mode to avoid "os error 396: incompatible
+# hardlinks" when installing on cloud-synced storage.
+link-mode = "copy"
+# The project venv intentionally lives OUTSIDE the OneDrive-synced repo tree to
+# avoid cloud-sync / hardlink issues. The canonical location is:
+#   C:\Users\<you>\venvs\EAT_smart_assignment\
+# uv does not have a pyproject.toml key for the venv path; set the environment
+# variable UV_PROJECT_ENVIRONMENT to that path before running `uv sync` / `uv
+# run`. VS Code terminals get this automatically via .vscode/settings.json
+# (terminal.integrated.env.windows). For plain shells, run:
+#   $env:UV_PROJECT_ENVIRONMENT = "C:\Users\<you>\venvs\EAT_smart_assignment"
+# before uv commands, or set it permanently in your shell profile.
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+filterwarnings = [
+    # google-adk internally subclasses BaseAgentConfig (a deprecated Pydantic v2
+    # base) at import time; the warning originates in a transitive library import
+    # and is not actionable from user code.
+    "ignore:BaseAgentConfig is deprecated:DeprecationWarning",
+    # starlette.TestClient warns about httpx vs httpx2; third-party concern only.
+    "ignore::starlette.testclient.StarletteDeprecationWarning",
+]
 
 [tool.uv.sources]
 ds-utils-lite = { path = "smart_assignment/ds_utils_lite", editable = true }

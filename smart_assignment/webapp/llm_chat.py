@@ -30,6 +30,7 @@ from typing import AsyncGenerator, Optional
 from smart_assignment.pipeline import run_slot_recommendation
 from smart_assignment.reasoning import DeterministicReasoner
 from smart_assignment.reporting.page import build_workflow_payload
+from smart_assignment.webapp.decision import traced_decision
 from smart_assignment.shared.config import DEFAULT_CONFIG, Config
 from smart_assignment.shared.geo import Geocoder
 from smart_assignment.shared.llm import offload_to_worker_thread
@@ -39,6 +40,7 @@ from smart_assignment.tools.slot_recommendation import (
     _STATE_PROFILE_KEY,
     _profile_from_state_dict,
 )
+from smart_assignment.webapp.narration import step_detail, step_label
 from smart_assignment.webapp.parse import parse_intake
 
 _APP_NAME = "smart_assignment_webapp"
@@ -46,15 +48,6 @@ _USER_ID = "webapp_user"
 
 # ADK's request_input long-running tool surfaces under this function name.
 _REQUEST_INPUT_NAME = "adk_request_input"
-
-# Map each pipeline tool the agent calls to the visualization step it drives, so
-# the UI can show live progress breadcrumbs before the full cards animate.
-_TOOL_STEPS = {
-    "intake_customer": "Intake",
-    "find_candidate_routes": "Geo-Lookup",
-    "evaluate_and_score_routes": "Score & Rank",
-    "recommend_or_escalate": "Recommend / Decide",
-}
 
 
 # ---------------------------------------------------------------------------
@@ -236,21 +229,34 @@ class LlmChatService:
         # loop here, and for the sage backend that call must run a coroutine on
         # this loop -- impossible if we block it. Offload the blocking re-run to a
         # worker thread so the loop stays free (see offload_to_worker_thread).
-        result = await offload_to_worker_thread(
-            run_slot_recommendation,
-            customer,
-            config=DEFAULT_CONFIG,
-            geocoder=self._geocoder,
-            reasoner=DeterministicReasoner(),
+        with traced_decision(DEFAULT_CONFIG) as decision:
+            result = await offload_to_worker_thread(
+                run_slot_recommendation,
+                customer,
+                config=DEFAULT_CONFIG,
+                geocoder=self._geocoder,
+                reasoner=DeterministicReasoner(),
+            )
+            decision.record(result)
+        payload = build_workflow_payload(
+            result, DEFAULT_CONFIG, reasoning_override=reasoning_override
         )
-        return build_workflow_payload(result, DEFAULT_CONFIG, reasoning_override=reasoning_override)
+        # Transient feedback hints (private ``_``-prefixed keys) consumed and
+        # stripped by app._attach_feedback before the payload is serialized, so
+        # they never reach the browser. They let the feedback stamp carry the
+        # recommend/escalate outcome and a real trace link (see webapp/decision.py).
+        payload["_decision"] = decision.context
+        payload["_trace"] = dict(decision.coords) if decision.coords else None
+        return payload
 
     # -- the turn stream --
 
     async def stream_turn(self, session_id: str, message: str) -> AsyncGenerator[dict, None]:
         """Run one conversational turn, yielding frame dicts:
 
-        ``{"type": "tool", "name", "label"}``      — a pipeline tool was called
+        ``{"type": "tool", "name", "label", "detail"}`` — a pipeline tool was
+                                                   called (``detail`` is a short,
+                                                   plain-language line for the UI)
         ``{"type": "message", "text"}``            — agent natural-language reply
         ``{"type": "await_input", "message"}``     — human-in-the-loop escalation
         ``{"type": "visualization", "payload"}``   — the 5 step cards + result
@@ -313,9 +319,16 @@ class LlmChatService:
             calls = event.get_function_calls()
             if calls:
                 for fc in calls:
-                    label = _TOOL_STEPS.get(fc.name)
+                    label = step_label(fc.name)
                     if label:
-                        yield {"type": "tool", "name": fc.name, "label": label}
+                        frame = {"type": "tool", "name": fc.name, "label": label}
+                        # A plain-language line of what this step is doing (Intake
+                        # echoes the customer's own inputs back); omit when there's
+                        # nothing to add so the frame shape stays minimal.
+                        detail = step_detail(fc.name, fc.args or {})
+                        if detail:
+                            frame["detail"] = detail
+                        yield frame
                         if fc.name == "recommend_or_escalate":
                             saw_recommendation = True
                 continue

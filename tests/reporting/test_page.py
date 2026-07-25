@@ -40,6 +40,20 @@ def test_page_includes_every_sample_customer():
         assert html_escape(customer.name) in html
 
 
+def test_frontend_tab_embeds_feedback_widget_in_demo_mode():
+    # Bullet: the static Frontend tab mirrors the live Customer view by embedding
+    # the SAME feedback widget, in demo mode (GitHub Pages has no backend).
+    config = Config()
+    html = build_page(_results(config), config)
+    assert "window.SAFeedback" in html          # the shared widget is embedded
+    assert 'id="fe-feedback"' in html            # its mount container exists
+    assert "mountFeedback(" in html              # and the frontend JS mounts it
+    assert "copy.demo = true" in html            # mounted in demo mode (no backend)
+    # Wording adapts to whether there are slot options.
+    assert "Did these delivery-slot options work?" in html
+    assert "Was this the right call for this customer?" in html
+
+
 def test_page_reflects_live_decisions_and_reasoning():
     config = Config()
     results = _results(config)
@@ -133,10 +147,13 @@ def test_frontend_tab_renders_sc_facing_slot_view_per_prospect():
         assert f"{c.order_quantity_cases} cases" in fe
 
     joined = " ".join(payload[c.lookup_key]["frontendHtml"] for c in SAMPLE_CUSTOMERS)
-    # Raw scores are shown as quality ranks; the recommended one auto-assigns.
-    assert "High capacity · auto-assign" in joined  # a clean auto-assign
-    assert "· needs review" in joined  # low-score escalation, proposed
+    # Raw scores are shown as plain, sales-consultant-friendly language: the clean
+    # recommendation is ready to book; a low-score one needs a manager OK.
+    assert "Best fit · ready to book" in joined  # a clean auto-assign
+    assert "needs a quick OK" in joined  # low-score escalation, proposed
     assert "No serviceable route" in joined  # no-feasible-slot escalation
+    # Per-tile strength meters replace the raw 0-1 score chips.
+    assert 'class="fe-str' in joined and "fs\">" not in joined
     # Slots are selectable (the rep picks one); the map draws a cluster polygon
     # and a mock Depot (OpCo).
     assert 'class="fe-opt selectable' in joined

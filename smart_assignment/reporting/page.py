@@ -364,9 +364,6 @@ _FE_STYLE = """
   .fe-wrap { max-width: 1320px; margin: 0 auto; padding: 0 24px; }
   .fe-eyebrow { color: var(--violet); font-weight: 800; font-size: 12px; letter-spacing: .12em;
     text-transform: uppercase; }
-  .fe-status { display: inline-flex; gap: 8px; align-items: center; font-size: 12px; color: var(--muted);
-    background: #eef2f8; border: 1px solid var(--line); border-radius: 999px; padding: 6px 13px; margin: 4px 0 22px; }
-  .fe-status b { color: var(--navy); font-weight: 700; }
   /* align-items: stretch so the left profile column matches the (tall) middle
      column's height; the map column opts out via align-self so it stays compact. */
   .fe-grid { display: grid; grid-template-columns: 280px minmax(0,1fr) 360px; gap: 24px; align-items: stretch; }
@@ -435,8 +432,17 @@ _FE_STYLE = """
   .fe-tile .tl { font-size: 10.5px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .03em; }
   .fe-tile .tv { font-size: 15px; font-weight: 700; color: var(--navy); margin-top: 4px; font-variant-numeric: tabular-nums; }
   .fe-tile .ts { font-size: 10.5px; color: var(--muted); margin-top: 3px; }
-  .fe-tile .fs { display: inline-block; font-family: var(--mono); font-size: 10px; font-weight: 700; color: var(--violet);
-    background: var(--violet-soft); border-radius: 5px; padding: 1px 5px; margin-top: 5px; }
+  /* Per-tile strength meter (replaces the raw 0-1 score chip): 4 dots + a word,
+     coloured by band. Reads 'how strong' at a glance, no decimal. */
+  .fe-str { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; }
+  .fe-str .dots { display: inline-flex; gap: 3px; }
+  .fe-str .dots i { width: 6px; height: 6px; border-radius: 50%; background: #d7dce6; display: block; }
+  .fe-str .dots i.on { background: currentColor; }
+  .fe-str .w { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; }
+  .fe-str.strong { color: var(--green); }
+  .fe-str.good { color: var(--blue); }
+  .fe-str.fair { color: var(--amber); }
+  .fe-str.low { color: var(--amber); }
   .fe-tile.miss .tv { color: var(--amber); }
   .fe-unavail { margin-top: 10px; font-size: 13px; color: #7a2b22; background: var(--red-soft);
     border: 1px solid #f2cfc9; border-radius: 9px; padding: 10px 12px; }
@@ -478,6 +484,48 @@ _FE_STYLE = """
     /* Set the property directly (not the --fe-cols var) so it wins over the
        inline var each tile row carries. */
     .fe-tiles { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  }
+"""
+
+# Styles for the Eval & Feedback tab. Kept separate for readability; concatenated
+# into the same <style>. Reuses the Architecture tab's .tp/.tpcard/.arch-legend
+# vocabulary so the tab reads native, plus a couple of tab-specific additions:
+# a "planned" treatment (dashed border + corner badge) for pieces that are
+# designed but not yet built, and a dev-vs-prod flow-diagram layout.
+_EVAL_STYLE = """
+  .h2row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .h2row h2 { margin: 0; }
+  .statuspill { display: inline-flex; align-items: center; gap: 6px; font-weight: 700; font-size: 11.5px;
+    padding: 4px 10px; border-radius: 999px; }
+  .statuspill.done { background: var(--green-soft); color: var(--green); }
+  .statuspill.planned { background: var(--amber-soft); color: var(--amber); }
+  .tptype.judge { background: var(--violet-soft); color: var(--violet); }
+  .tptype.human { background: var(--green-soft); color: var(--green); }
+  .tpmeta .state.advisory { background: var(--amber-soft); color: var(--amber); }
+  .tpmeta .state.planned  { background: var(--amber-soft); color: var(--amber); }
+  .tpmeta .state.manual   { background: #eef1f6; color: var(--muted); }
+  .tpcard.planned { border: 1.5px dashed #cbb96a; }
+  .tpcard .planned-badge { position: absolute; top: 18px; right: 20px; font-size: 10px; font-weight: 800;
+    letter-spacing: .04em; text-transform: uppercase; color: var(--amber); background: var(--amber-soft);
+    border-radius: 999px; padding: 3px 8px; }
+  .envgrid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; }
+  .envcard { position: relative; }
+  .envcard .pill { position: absolute; top: 20px; right: 20px; display: inline-flex; align-items: center;
+    gap: 6px; font-weight: 700; font-size: 11.5px; padding: 5px 10px; border-radius: 999px; }
+  .envcard .pill.dev  { background: var(--green-soft); color: var(--green); }
+  .envcard .pill.prod { background: var(--amber-soft); color: var(--amber); }
+  .envcard h3 { font-size: 17px; margin: 0 0 2px; padding-right: 150px; }
+  .envcard .where { font-family: var(--mono); font-size: 11.5px; color: var(--muted); display: block; margin-bottom: 6px; }
+  .envcard .envnote { font-size: 12px; color: var(--muted); margin-top: 10px; }
+  .envcard svg { width: 100%; height: auto; display: block; margin-top: 8px; }
+  .compare-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-top: 20px; }
+  .compare-row .card { padding: 14px 16px; }
+  .compare-row .k { font-size: 11px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+  .compare-row .v-dev, .compare-row .v-prod { font-size: 13px; margin-top: 6px; }
+  .compare-row .v-dev b { color: var(--green); }
+  .compare-row .v-prod b { color: var(--amber); }
+  @media (max-width: 860px) {
+    .envgrid, .compare-row { grid-template-columns: 1fr; }
   }
 """
 
@@ -567,6 +615,307 @@ _ARCH_SVG = """
 </svg>
 """
 
+# Eval & Feedback pipeline diagram (SVG). No curly braces -> safe inside the f-string.
+# Real, shipped pieces are solid; the one piece that only exists as a
+# design/README description today (curator promotion) is drawn dashed and
+# amber, same visual language the rest of this diagram uses for "not yet
+# built" elsewhere on the site.
+_EVAL_PIPELINE_SVG = """
+<svg viewBox="0 0 1000 470" role="img" aria-label="Eval and feedback loop diagram">
+  <defs>
+    <marker id="e-arw" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#1257a6"/></marker>
+    <marker id="e-arwv" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#5b3fb0"/></marker>
+    <marker id="e-arwg" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#1a7f37"/></marker>
+    <marker id="e-arwa" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#9a6700"/></marker>
+  </defs>
+
+  <text x="20" y="26" font-size="12.5" font-weight="800" fill="#1257a6" letter-spacing=".03em">AUTOMATED EVAL — runs in CI, every PR</text>
+
+  <rect x="20" y="40" width="150" height="66" rx="12" fill="#fff" stroke="#c7d6ea"/>
+  <text x="95" y="66" text-anchor="middle" font-size="12.5" font-weight="700" fill="#0b2e59">Golden test cases</text>
+  <text x="95" y="83" text-anchor="middle" font-size="10" fill="#5b6675">eval/golden_cases.py</text>
+  <text x="95" y="97" text-anchor="middle" font-size="10" fill="#5b6675">from mock_customers</text>
+  <line x1="170" y1="73" x2="184" y2="73" stroke="#1257a6" stroke-width="2" marker-end="url(#e-arw)"/>
+
+  <rect x="186" y="40" width="176" height="66" rx="12" fill="#fff" stroke="#c7d6ea"/>
+  <text x="274" y="63" text-anchor="middle" font-size="12.5" font-weight="700" fill="#0b2e59">Trajectory eval</text>
+  <text x="274" y="79" text-anchor="middle" font-size="10" fill="#5b6675">tool-call order match</text>
+  <text x="274" y="93" text-anchor="middle" font-size="9.5" fill="#5b6675">eval/test_eval.py · ADK AgentEvaluator</text>
+  <line x1="362" y1="73" x2="376" y2="73" stroke="#1257a6" stroke-width="2" marker-end="url(#e-arw)"/>
+
+  <rect x="378" y="40" width="166" height="66" rx="12" fill="#fff" stroke="#c7d6ea"/>
+  <text x="461" y="63" text-anchor="middle" font-size="12.5" font-weight="700" fill="#0b2e59">Capture live run</text>
+  <text x="461" y="79" text-anchor="middle" font-size="10" fill="#5b6675">real agent, real backend</text>
+  <text x="461" y="93" text-anchor="middle" font-size="9.5" fill="#5b6675">eval/capture.py → committed JSON</text>
+  <line x1="544" y1="73" x2="558" y2="73" stroke="#1257a6" stroke-width="2" marker-end="url(#e-arw)"/>
+
+  <rect x="560" y="40" width="196" height="66" rx="12" fill="#f7f3fd" stroke="#cfc2f0"/>
+  <text x="658" y="60" text-anchor="middle" font-size="12" font-weight="700" fill="#0b2e59">Response scoring</text>
+  <text x="620" y="80" text-anchor="middle" font-size="9.5" font-weight="700" fill="#1257a6">ROUGE</text>
+  <text x="695" y="80" text-anchor="middle" font-size="9.5" font-weight="700" fill="#5b3fb0">LLM judge</text>
+  <text x="658" y="96" text-anchor="middle" font-size="9" fill="#5b6675">test_response_match.py</text>
+  <line x1="756" y1="73" x2="770" y2="73" stroke="#1257a6" stroke-width="2" marker-end="url(#e-arw)"/>
+
+  <rect x="772" y="40" width="208" height="66" rx="12" fill="#f7f3fd" stroke="#cfc2f0"/>
+  <text x="876" y="58" text-anchor="middle" font-size="11.5" font-weight="700" fill="#0b2e59">DeepEval quality metrics</text>
+  <text x="876" y="74" text-anchor="middle" font-size="9" fill="#6b5aa0">brief_quality · response_clarity</text>
+  <text x="876" y="88" text-anchor="middle" font-size="9" fill="#6b5aa0">rationale_faithfulness (grounded)</text>
+
+  <line x1="658" y1="106" x2="658" y2="122" stroke="#1257a6" stroke-width="2" marker-end="url(#e-arw)"/>
+  <line x1="876" y1="106" x2="876" y2="122" stroke="#1257a6" stroke-width="2" marker-end="url(#e-arw)"/>
+  <rect x="560" y="124" width="420" height="40" rx="10" fill="#fdf3d8" stroke="#9a6700"/>
+  <text x="770" y="149" text-anchor="middle" font-size="10.5" font-weight="700" fill="#9a6700">CI check · advisory only — agent-eval + quality-eval jobs (continue-on-error: true)</text>
+
+  <line x1="20" y1="185" x2="980" y2="185" stroke="#e3e8ef" stroke-width="1"/>
+  <text x="20" y="216" font-size="12.5" font-weight="800" fill="#5b3fb0" letter-spacing=".03em">HUMAN FEEDBACK LOOP — runtime observability, opt-in</text>
+
+  <rect x="20" y="230" width="150" height="66" rx="12" fill="#fff" stroke="#c7d6ea"/>
+  <text x="95" y="256" text-anchor="middle" font-size="12.5" font-weight="700" fill="#0b2e59">Agent runs</text>
+  <text x="95" y="272" text-anchor="middle" font-size="10" fill="#5b6675">dev &amp; prod traffic</text>
+  <text x="95" y="286" text-anchor="middle" font-size="9.5" fill="#5b6675">real or eval sessions</text>
+  <line x1="170" y1="263" x2="184" y2="263" stroke="#5b3fb0" stroke-width="2" marker-end="url(#e-arwv)"/>
+
+  <rect x="186" y="230" width="210" height="66" rx="12" fill="#fff" stroke="#c7d6ea"/>
+  <text x="291" y="253" text-anchor="middle" font-size="12.5" font-weight="700" fill="#0b2e59">OpenTelemetry spans</text>
+  <text x="291" y="269" text-anchor="middle" font-size="10" fill="#5b6675">backend · model · role · latency</text>
+  <text x="291" y="283" text-anchor="middle" font-size="9.5" fill="#5b6675">shared/tracing.py · Config.use_tracing</text>
+  <line x1="396" y1="263" x2="410" y2="263" stroke="#5b3fb0" stroke-width="2" marker-end="url(#e-arwv)"/>
+
+  <rect x="412" y="230" width="170" height="66" rx="12" fill="#f7f3fd" stroke="#cfc2f0"/>
+  <text x="497" y="256" text-anchor="middle" font-size="12.5" font-weight="700" fill="#5b3fb0">Phoenix / Langfuse</text>
+  <text x="497" y="272" text-anchor="middle" font-size="10" fill="#6b5aa0">dev vs prod backend</text>
+  <text x="497" y="286" text-anchor="middle" font-size="9.5" fill="#6b5aa0">same OTLP seam, either way</text>
+  <line x1="582" y1="263" x2="596" y2="263" stroke="#5b3fb0" stroke-width="2" marker-end="url(#e-arwv)"/>
+
+  <rect x="598" y="230" width="176" height="66" rx="12" fill="#e7f4ea" stroke="#1a7f37"/>
+  <text x="686" y="253" text-anchor="middle" font-size="12.5" font-weight="700" fill="#1a7f37">🙋 Human review</text>
+  <text x="686" y="269" text-anchor="middle" font-size="10" fill="#3b7a4e">Annotate · Annotation Queues</text>
+  <text x="686" y="283" text-anchor="middle" font-size="9.5" fill="#3b7a4e">a reviewer scores real traces</text>
+  <line x1="774" y1="263" x2="788" y2="263" stroke="#9a6700" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#e-arwa)"/>
+
+  <rect x="790" y="230" width="190" height="66" rx="12" fill="#fdf9ef" stroke="#cbb96a" stroke-dasharray="5 4"/>
+  <text x="885" y="253" text-anchor="middle" font-size="12.5" font-weight="700" fill="#9a6700">Curator promotion</text>
+  <text x="885" y="269" text-anchor="middle" font-size="10" fill="#8a6a1f">drafts a candidate case</text>
+  <text x="885" y="283" text-anchor="middle" font-size="9" font-weight="700" fill="#9a6700">planned — not started</text>
+
+  <path d="M885,296 C885,368 200,368 95,296" fill="none" stroke="#9a6700" stroke-width="1.8" stroke-dasharray="6 5" marker-end="url(#e-arwa)"/>
+  <rect x="255" y="352" width="370" height="34" rx="17" fill="#fdf3d8" stroke="#9a6700"/>
+  <text x="440" y="374" text-anchor="middle" font-size="10.5" font-weight="700" fill="#9a6700">proposed: feedback → golden set &amp; thresholds — not yet automated</text>
+
+  <text x="20" y="440" font-size="11.5" fill="#5b6675">→ runs today &#160;&#160;·&#160;&#160; ⇢ human-graded step, runs today &#160;&#160;·&#160;&#160; ┄ designed, not yet built</text>
+</svg>
+"""
+
+# Local-dev eval flow (SVG). Every step here is real, shipped code.
+_EVAL_DEV_FLOW_SVG = """
+<svg viewBox="0 0 460 500" role="img" aria-label="Local dev eval flow">
+  <defs><marker id="d-arw" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#1a7f37"/></marker></defs>
+  <rect x="30" y="10" width="400" height="64" rx="12" fill="#fff" stroke="#c7d6ea"/>
+  <text x="230" y="36" text-anchor="middle" font-size="13" font-weight="700" fill="#0b2e59">Run the agent locally</text>
+  <text x="230" y="54" text-anchor="middle" font-size="10.5" fill="#5b6675">mock or real backend · your terminal</text>
+  <line x1="230" y1="74" x2="230" y2="94" stroke="#1a7f37" stroke-width="2" marker-end="url(#d-arw)"/>
+
+  <rect x="30" y="96" width="400" height="64" rx="12" fill="#e7f4ea" stroke="#1a7f37"/>
+  <text x="230" y="122" text-anchor="middle" font-size="13" font-weight="700" fill="#1a7f37">phoenix serve</text>
+  <text x="230" y="140" text-anchor="middle" font-size="10.5" fill="#3b7a4e">one Python process · no containers, no Podman</text>
+  <line x1="230" y1="160" x2="230" y2="180" stroke="#1a7f37" stroke-width="2" marker-end="url(#d-arw)"/>
+
+  <rect x="30" y="182" width="400" height="64" rx="12" fill="#fff" stroke="#c7d6ea"/>
+  <text x="230" y="208" text-anchor="middle" font-size="13" font-weight="700" fill="#0b2e59">Trace lands on localhost</text>
+  <text x="230" y="226" text-anchor="middle" font-size="10.5" fill="#5b6675">one span tree per turn · no PII in it</text>
+  <line x1="230" y1="246" x2="230" y2="266" stroke="#1a7f37" stroke-width="2" marker-end="url(#d-arw)"/>
+
+  <rect x="30" y="268" width="400" height="64" rx="12" fill="#fff" stroke="#c7d6ea"/>
+  <text x="230" y="294" text-anchor="middle" font-size="13" font-weight="700" fill="#0b2e59">You hit Annotate</text>
+  <text x="230" y="312" text-anchor="middle" font-size="10.5" fill="#5b6675">score your own trace, right there</text>
+  <line x1="230" y1="332" x2="230" y2="352" stroke="#1a7f37" stroke-width="2" marker-end="url(#d-arw)"/>
+
+  <rect x="30" y="354" width="400" height="64" rx="12" fill="#fff" stroke="#c7d6ea"/>
+  <text x="230" y="380" text-anchor="middle" font-size="13" font-weight="700" fill="#0b2e59">Tweak prompt / flag / threshold</text>
+  <text x="230" y="398" text-anchor="middle" font-size="10.5" fill="#5b6675">same terminal, same process — rerun</text>
+
+  <path d="M30,386 C-14,386 -14,42 26,42" fill="none" stroke="#1a7f37" stroke-width="1.8" stroke-dasharray="6 5" marker-end="url(#d-arw)"/>
+  <text x="10" y="220" font-size="10.5" font-weight="700" fill="#1a7f37" transform="rotate(-90 10 220)" text-anchor="middle">seconds, not a queue</text>
+</svg>
+"""
+
+# Production eval flow (SVG). The first three steps are real (OTLP exporter,
+# Langfuse scaffolding); the last two -- Annotation Queues in active use, and
+# curator promotion -- are the target design, drawn dashed/amber to match.
+_EVAL_PROD_FLOW_SVG = """
+<svg viewBox="0 0 460 500" role="img" aria-label="Production eval flow">
+  <defs>
+    <marker id="p-arw" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#1257a6"/></marker>
+    <marker id="p-arwa" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#9a6700"/></marker>
+  </defs>
+  <rect x="30" y="10" width="400" height="64" rx="12" fill="#fff" stroke="#c7d6ea"/>
+  <text x="230" y="36" text-anchor="middle" font-size="13" font-weight="700" fill="#0b2e59">Real customer traffic</text>
+  <text x="230" y="54" text-anchor="middle" font-size="10.5" fill="#5b6675">deployed agent, live requests</text>
+  <line x1="230" y1="74" x2="230" y2="90" stroke="#1257a6" stroke-width="2" marker-end="url(#p-arw)"/>
+
+  <rect x="30" y="92" width="400" height="52" rx="12" fill="#fff" stroke="#c7d6ea"/>
+  <text x="230" y="115" text-anchor="middle" font-size="12.5" font-weight="700" fill="#0b2e59">OTLP exporter</text>
+  <text x="230" y="131" text-anchor="middle" font-size="10" fill="#5b6675">async, non-blocking — same seam as dev</text>
+  <line x1="230" y1="144" x2="230" y2="160" stroke="#1257a6" stroke-width="2" marker-end="url(#p-arw)"/>
+
+  <rect x="30" y="162" width="400" height="64" rx="12" fill="#eef5fd" stroke="#1257a6"/>
+  <text x="230" y="186" text-anchor="middle" font-size="13" font-weight="700" fill="#1257a6">Langfuse</text>
+  <text x="230" y="204" text-anchor="middle" font-size="10" fill="#2c5c94">Podman · Postgres · ClickHouse · Redis · MinIO · web · worker</text>
+  <text x="230" y="219" text-anchor="middle" font-size="9.5" fill="#5b6675">scaffolded — 6 containers vs. Phoenix's 1 process</text>
+  <line x1="230" y1="226" x2="230" y2="246" stroke="#9a6700" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#p-arwa)"/>
+
+  <rect x="30" y="248" width="400" height="64" rx="12" fill="#fdf9ef" stroke="#cbb96a" stroke-dasharray="5 4"/>
+  <text x="230" y="272" text-anchor="middle" font-size="13" font-weight="700" fill="#9a6700">Annotation Queues</text>
+  <text x="230" y="290" text-anchor="middle" font-size="10.5" fill="#8a6a1f">score configs · batches assigned across reviewers</text>
+  <line x1="230" y1="312" x2="230" y2="328" stroke="#9a6700" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#p-arwa)"/>
+
+  <rect x="30" y="330" width="400" height="64" rx="12" fill="#fdf9ef" stroke="#cbb96a" stroke-dasharray="5 4"/>
+  <text x="230" y="354" text-anchor="middle" font-size="13" font-weight="700" fill="#9a6700">Curator promotion → PR</text>
+  <text x="230" y="372" text-anchor="middle" font-size="10.5" fill="#8a6a1f">candidate case cites the real trace</text>
+  <line x1="230" y1="394" x2="230" y2="410" stroke="#9a6700" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#p-arwa)"/>
+
+  <rect x="30" y="412" width="400" height="60" rx="12" fill="#fff" stroke="#c7d6ea"/>
+  <text x="230" y="436" text-anchor="middle" font-size="13" font-weight="700" fill="#0b2e59">Merged → next CI run</text>
+  <text x="230" y="454" text-anchor="middle" font-size="10.5" fill="#5b6675">eval/golden_cases.py grows, thresholds re-checked</text>
+
+  <text x="10" y="250" font-size="10.5" font-weight="700" fill="#9a6700" transform="rotate(-90 10 250)" text-anchor="middle">target design — not yet automated</text>
+</svg>
+"""
+
+# Eval & Feedback tab body (the tab's <section>s). References the three SVG
+# constants above; no other braces appear in the copy, so this stays an
+# f-string safely.
+_EVAL_TAB_BODY = f"""
+  <section>
+    <div class="wrap">
+      <span class="eyebrow">Eval &amp; Feedback</span>
+      <div class="h2row">
+        <h2>How the agent gets graded — and how humans close the loop</h2>
+        <span class="statuspill done">✓ tracing, eval, DeepEval quality metrics &amp; Phoenix: shipped</span>
+        <span class="statuspill planned">◐ curator promotion: planned</span>
+      </div>
+      <p class="sub">Two tracks run side by side. An <b>automated eval suite</b> checks every PR: did the
+        agent call the right tools in the right order, and — scored against a captured baseline, or against
+        the real evidence a grounded decision was made from — how good is its final answer, by four metrics
+        today (ROUGE, an LLM-as-judge, and two DeepEval G-Eval metrics). Separately, every <b>live run</b> can
+        emit OpenTelemetry spans to a trace backend where a human reviews real traces. The one piece still on
+        paper is <b>curator promotion</b> — turning that human review into an automatic golden-set update.</p>
+      <div class="arch">
+        {_EVAL_PIPELINE_SVG}
+        <div class="arch-legend">
+          <div class="card"><div class="icon">🧪</div><h4>Trajectory first</h4><p>Every PR checks the agent called the right tools in the right order — deterministic, cheap, catches structural regressions fast.</p></div>
+          <div class="card"><div class="icon">⚖️</div><h4>Four ways to grade an answer</h4><p>ROUGE, an LLM-as-judge, and two DeepEval G-Eval metrics — reference-free quality scoring plus a grounded rationale-faithfulness check — all score real output today. No single score is the whole story.</p></div>
+          <div class="card"><div class="icon">🔭</div><h4>Tracing is a seam, not a vendor</h4><p>One OTLP path feeds either Phoenix (local dev, ready) or Langfuse (prod track, scaffolded) — swapping backends is a config change, not a rewrite.</p></div>
+          <div class="card"><div class="icon">🔜</div><h4>Closing the loop is designed, not wired</h4><p>Curator promotion would turn a human's annotation into a reviewable PR against golden_cases.py. Today that loop is a described process in the READMEs, not code.</p></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section style="background:#fff; border-top:1px solid var(--line);">
+    <div class="wrap">
+      <span class="eyebrow">Judges in the loop</span>
+      <h2>Every place a score gets attached — and how much to trust it</h2>
+      <p class="sub">Same discipline as the decision layers: know exactly what each score can and can't tell
+        you. Cards with a dashed border and a <b>PLANNED</b> tag don't exist as code yet — they're included
+        so the shape of the finished loop is visible, not to overstate what's running today.</p>
+      <div class="tp">
+        <div class="card tpcard">
+          <span class="tptype call">Deterministic</span>
+          <h4>Trajectory scorer</h4>
+          <div class="where">eval/test_eval.py · ADK AgentEvaluator · tool_trajectory_avg_score</div>
+          <p>Replays each golden case and checks the agent called <span class="where">intake_customer → find_candidate_routes → evaluate_and_score_routes → recommend_or_escalate</span> in order — a structural check, not a quality one.</p>
+          <div class="guard"><b>What it can't tell you:</b> a perfect trajectory can still end in a bad or poorly-worded final answer. It only proves the agent followed the right steps.</div>
+          <div class="tpmeta"><span class="flag">agent-eval CI job</span><span class="state advisory">continue-on-error: true</span></div>
+        </div>
+        <div class="card tpcard">
+          <span class="tptype call">Deterministic</span>
+          <h4>Response match v1 — ROUGE</h4>
+          <div class="where">eval/test_response_match.py · response_match_score</div>
+          <p>Literal n-gram overlap between the agent's live final answer and a captured baseline response. Cheap, reproducible, blind to paraphrasing.</p>
+          <div class="guard"><b>What it can't tell you:</b> a correct answer phrased differently scores low; a wrong answer that echoes the baseline's wording can score high.</div>
+          <div class="tpmeta"><span class="flag">eval/data/captured_responses.json</span><span class="state advisory">non-escalated cases only</span></div>
+        </div>
+        <div class="card tpcard">
+          <span class="tptype judge">LLM judge</span>
+          <h4>Response match v2 — LLM-as-judge</h4>
+          <div class="where">final_response_match_v2 · ADK's judge, routed via sage_judge_llm.py</div>
+          <p>An LLM judge reads intent, not just wording — scored side by side with ROUGE, not as a replacement — and routed through the org's approved model gateway (<span class="where">sage_judge_llm.py → LLMRegistry</span>) rather than a public API.</p>
+          <div class="guard"><b>Still an open gap:</b> unlike judgment/, triage/, and slotpick/, this judge doesn't cite an evidence packet or get verified in code — it scores free text directly. The grounded pattern is used elsewhere (see rationale_faithfulness, right) for a real decision; it hasn't been applied here yet.</div>
+          <div class="tpmeta"><span class="flag">sage_judge_llm.py</span><span class="state advisory">measurement only, not required</span></div>
+        </div>
+        <div class="card tpcard">
+          <span class="tptype judge">LLM judge · G-Eval</span>
+          <h4>Quality metrics — brief_quality, response_clarity</h4>
+          <div class="where">eval/test_quality.py · DeepEval GEval · scored on captured responses</div>
+          <p>Two rubric-graded G-Eval metrics scored on <span class="where">eval/capture.py</span>'s committed responses: <span class="where">brief_quality</span> checks an escalation brief states the situation, root cause, remediation options, and a clear question; <span class="where">response_clarity</span> checks a recommend-path message is unambiguous and free of internal scoring jargon.</p>
+          <div class="guard"><b>Reference-free:</b> like the LLM-as-judge above, these score free text (input, actual output) with no evidence packet or citation — a rubric score, not a verified decision. Threshold 0.5, a starting point per the code's own comment, not yet calibrated.</div>
+          <div class="tpmeta"><span class="flag">quality-eval CI job</span><span class="state advisory">continue-on-error: true</span></div>
+        </div>
+        <div class="card tpcard">
+          <span class="tptype judge">LLM judge · G-Eval, grounded</span>
+          <h4>Rationale faithfulness</h4>
+          <div class="where">eval/test_rationale_faithfulness.py · DeepEval GEval · judged against the real evidence packet</div>
+          <p>Runs the real <span class="where">routeslot</span> pipeline per golden case and judges its grounded rationale against its own evidence packet — no misattributed numbers, days, or times; no contradicted comparisons; a conclusion the cited evidence actually supports.</p>
+          <div class="guard"><b>The one metric that's grounded:</b> unlike the two G-Eval metrics above, this judges real output against the real evidence it was given — the closest thing here to this repo's own evidence-packet pattern, though it's still a rubric score, not a citation check verified line-by-line like judgment/'s verifier.py.</div>
+          <div class="tpmeta"><span class="flag">quality-eval CI job</span><span class="state advisory">continue-on-error: true</span></div>
+        </div>
+        <div class="card tpcard">
+          <span class="tptype human">Human</span>
+          <h4>Trace reviewer</h4>
+          <div class="where">deployment/phoenix (Annotate) · deployment/langfuse (Annotation Queues)</div>
+          <p>A person reads a real trace — spans, latency, model/role, error status — and attaches a score or note. No prompt/response text is captured, by design, to keep customer addresses out of the trace store.</p>
+          <div class="guard"><b>The top of the trust chain today:</b> nothing overrides a human's read — but nothing wires that read back into eval/golden_cases.py automatically yet either. That's curator promotion, below.</div>
+          <div class="tpmeta"><span class="flag">Config.use_tracing</span><span class="state manual">opt-in · silent no-op on failure</span></div>
+        </div>
+        <div class="card tpcard planned">
+          <span class="planned-badge">Planned</span>
+          <span class="tptype call">Deterministic + cited</span>
+          <h4>Curator promotion</h4>
+          <div class="where">eval/curator.py (sketched) · not started — Phase 5, documented only</div>
+          <p>The design on paper: when a reviewer's annotation clears a promotion bar, a candidate golden case is drafted from that trace's real inputs and outputs — never hand-typed — and opened as a PR against <span class="where">eval/golden_cases.py</span>.</p>
+          <div class="guard"><b>Not built yet:</b> the READMEs describe this loop in prose; there's no code today. If built, it should follow the same recipe as judgment/, triage/, and slotpick/ — cite the real trace, verify the citation in code, and never write to main without a human merging the PR.</div>
+          <div class="tpmeta"><span class="flag">eval/golden_cases.py</span><span class="state planned">Documented, not automated</span></div>
+        </div>
+      </div>
+      <div class="guarantee">🛡️ <b>What's real vs. planned, stated plainly.</b> Trajectory eval, the ROUGE + LLM-judge response scoring, the DeepEval quality metrics (brief_quality, response_clarity, rationale_faithfulness), response capture, and OpenTelemetry tracing into Phoenix or Langfuse are all real, running code today — though every CI check here (agent-eval, quality-eval) is advisory, not a required gate. Curator promotion is the one piece still on paper. If it's built, this repo's own recipe already says how: enumerate candidates deterministically, cite the evidence, verify in code, fall back safely, and gate behind a flag — the same discipline as judgment/, triage/, and slotpick/, and the discipline rationale_faithfulness above already partially follows.</div>
+    </div>
+  </section>
+
+  <section style="border-top:1px solid var(--line);">
+    <div class="wrap">
+      <span class="eyebrow">Dev vs. production</span>
+      <h2>Same OTLP seam, two very different loops</h2>
+      <p class="sub">The tracing code can't tell which environment it's in — it just emits spans. What changes
+        is what's listening on the other end. The local-dev loop below is real and usable today; the
+        production loop's last two steps (queued team review, curator promotion) are the target design —
+        <span class="where">deployment/langfuse/</span> is scaffolded but not yet serving real traffic.</p>
+      <div class="envgrid">
+        <div class="card envcard">
+          <span class="pill dev">🖥️ local dev · ready</span>
+          <h3>Inner loop — seconds, solo</h3>
+          <span class="where">deployment/phoenix/</span>
+          {_EVAL_DEV_FLOW_SVG}
+        </div>
+
+        <div class="card envcard">
+          <span class="pill prod">☁️ prod-track · scaffolded</span>
+          <h3>Governed loop — target design</h3>
+          <span class="where">deployment/langfuse/</span>
+          {_EVAL_PROD_FLOW_SVG}
+        </div>
+      </div>
+
+      <div class="compare-row">
+        <div class="card"><div class="k">Runtime footprint</div><div class="v-dev"><b>Dev</b> — 1 process, no containers</div><div class="v-prod"><b>Prod</b> — 6 containers under Podman, once deployed</div></div>
+        <div class="card"><div class="k">Who reviews</div><div class="v-dev"><b>Dev</b> — you, on your own trace</div><div class="v-prod"><b>Prod (target)</b> — a team, via assigned queues</div></div>
+        <div class="card"><div class="k">Feedback latency</div><div class="v-dev"><b>Dev</b> — seconds, same terminal</div><div class="v-prod"><b>Prod (target)</b> — next promotion + CI cycle, not automated yet</div></div>
+        <div class="card"><div class="k">Data captured</div><div class="v-dev"><b>Dev</b> — same OTLP schema, no PII</div><div class="v-prod"><b>Prod</b> — same OTLP schema, no PII</div></div>
+      </div>
+    </div>
+  </section>
+"""
+
 # Interactive simulator logic. Plain string (NOT an f-string) so its braces are safe.
 _SIM_JS = """
 (function () {
@@ -648,7 +997,7 @@ _TABS_JS = """
 (function () {
   var btns = document.querySelectorAll('.tabbtn');
   var panels = document.querySelectorAll('.tabpanel');
-  var valid = { overview: 1, architecture: 1, simulator: 1, frontend: 1 };
+  var valid = { overview: 1, architecture: 1, simulator: 1, eval: 1, frontend: 1 };
   function activate(name, scroll) {
     btns.forEach(function (b) {
       var on = b.getAttribute('data-tab') === name;
@@ -723,11 +1072,36 @@ _FRONTEND_JS = """
     if (card) { ev.preventDefault(); selectCard(card); }
   });
 
+  // Mount the SAME feedback widget the live Customer view uses, in DEMO mode
+  // (GitHub Pages has no backend, so it acknowledges locally instead of posting).
+  // Wording adapts to whether there are slot options or the prospect escalated.
+  function mountFeedback(key) {
+    var fh = document.getElementById('fe-feedback');
+    if (!fh || !window.SAFeedback) { return; }
+    fh.innerHTML = '';
+    var hasSlots = host.querySelectorAll('.fe-opt').length > 0;
+    var copy = hasSlots ? {
+      tag: 'preview', question: 'Did these delivery-slot options work?',
+      sub: 'Let us know if these were the right options for this customer.',
+      upLabel: 'These work', downLabel: 'Not quite'
+    } : {
+      tag: 'preview', question: 'Was this the right call for this customer?',
+      sub: 'No slot could be offered here — this prospect was sent to a specialist to '
+        + 'review. Tell us if that was the right move.',
+      upLabel: 'Right call', downLabel: 'Not right'
+    };
+    copy.demo = true;
+    window.SAFeedback.mount(
+      fh, { enabled: true, decision_id: 'demo-' + key, decision_kind: 'final_response' }, copy
+    );
+  }
+
   function show(key, btn) {
     host.innerHTML = DATA[key].frontendHtml || '';
     var chips = chipsEl.querySelectorAll('.chip-btn');
     for (var i = 0; i < chips.length; i++) { chips[i].classList.remove('selected'); }
     if (btn) { btn.classList.add('selected'); }
+    mountFeedback(key);
   }
 
   // Default to Woodlands Fresh Cafe (two feasible slots -> best shows off the
@@ -2039,11 +2413,14 @@ def build_map_data(result: RecommendationResult, config: Optional[Config] = None
 # entry -- which is the frontend face of the "select from a valid set" guarantee.
 # ---------------------------------------------------------------------------
 
+# Sales-consultant-facing tile labels: plain business language, not the scoring
+# vocabulary. Neutral wording ("existing stops", not "your route") since a route's
+# customers can belong to several SCs.
 _FE_FACTOR_TILE = {
-    FACTOR_GEO_CLUSTERING: "Geo clustering",
-    FACTOR_CAPACITY_BUFFER: "Capacity after add",
-    FACTOR_WINDOW_MATCH: "Slot match",
-    FACTOR_SLOT_AVAILABILITY: "Slot openness",
+    FACTOR_GEO_CLUSTERING: "Near existing stops",
+    FACTOR_CAPACITY_BUFFER: "Room on the truck",
+    FACTOR_WINDOW_MATCH: "Fits their time",
+    FACTOR_SLOT_AVAILABILITY: "How busy that day",
 }
 _DAY_FULL = {
     "MON": "Monday", "TUE": "Tuesday", "WED": "Wednesday", "THU": "Thursday",
@@ -2086,12 +2463,51 @@ def _fe_options(result: RecommendationResult):
     return options, infeasible
 
 
+def _fe_strength(score: float) -> tuple:
+    """A 0-1 factor score as a rep-facing strength (css class, word, filled dots
+    out of 4). Replaces the raw number so the consultant reads 'how strong' at a
+    glance, not a decimal. Banded absolutely (like the overall quality badge)."""
+    if score >= 0.80:
+        return "strong", "Great", 4
+    if score >= 0.60:
+        return "good", "Good", 3
+    if score >= 0.40:
+        return "fair", "Fair", 2
+    return "low", "Low", 1
+
+
+def _fe_meter(score: float) -> str:
+    scls, word, filled = _fe_strength(score)
+    dots = "".join('<i class="on"></i>' if k < filled else "<i></i>" for k in range(4))
+    return f'<span class="fe-str {scls}"><span class="dots">{dots}</span><span class="w">{word}</span></span>'
+
+
+def _hm(mins) -> str:
+    """Minutes as a friendly duration: 180 -> '3h', 150 -> '2h 30m', 45 -> '45m'."""
+    h, m = divmod(int(mins), 60)
+    if h and m:
+        return f"{h}h {m}m"
+    return f"{h}h" if h else f"{m}m"
+
+
+def _fe_busy_word(openness: float) -> str:
+    """The slot-availability score as a plain 'how busy the truck is that day' read
+    (higher openness = more room). Replaces the raw 0-1 openness number."""
+    if openness >= 0.66:
+        return "Wide open"
+    if openness >= 0.40:
+        return "Fairly open"
+    if openness >= 0.20:
+        return "Fairly busy"
+    return "Very busy"
+
+
 def _fe_tile(label: str, big: str, sub: str, score: float, miss: bool = False) -> str:
     cls = "fe-tile miss" if miss else "fe-tile"
     return (
         f'<div class="{cls}"><div class="tl">{_esc(label)}</div>'
         f'<div class="tv">{_esc(big)}</div><div class="ts">{_esc(sub)}</div>'
-        f'<span class="fs">{score:.2f}</span></div>'
+        f'{_fe_meter(score)}</div>'
     )
 
 
@@ -2110,61 +2526,118 @@ def _fe_tiles(factors, cand: CandidateEvaluation) -> str:
         d = f.detail or ""
         if name == FACTOR_GEO_CLUSTERING:
             m = re.search(r"avg\s+([\d.]+)\s*mi", d)
-            big = f"{m.group(1)} mi" if m else f"{f.value:.2f}"
-            tiles.append(_fe_tile(label, big, "avg to existing stops", f.value))
+            big = f"{m.group(1)} mi away" if m else "Nearby"
+            tiles.append(_fe_tile(label, big, "from others already on the route", f.value))
         elif name == FACTOR_CAPACITY_BUFFER:
             tiles.append(
-                _fe_tile(label, f"{cand.utilization_after:.0%}",
-                         f"{cand.remaining_capacity_after} cases headroom", f.value)
+                _fe_tile(label, f"Fits, ~{cand.utilization_after:.0%} full",
+                         f"room for {cand.remaining_capacity_after} more cases", f.value)
             )
         elif name == FACTOR_WINDOW_MATCH:
             if f.value <= 0.001:
-                tiles.append(_fe_tile(label, "misses pref.", "wrong hours", f.value, miss=True))
+                tiles.append(
+                    _fe_tile(label, "Different time", "outside their preferred hours",
+                             f.value, miss=True)
+                )
             else:
                 m = re.search(r"covers\s+(\d+)\s+of\s+the\s+(\d+)", d)
-                big = f"{m.group(1)}/{m.group(2)} min" if m else f"{f.value:.2f}"
-                tiles.append(_fe_tile(label, big, "of preferred window", f.value))
-        else:  # slot availability (openness)
+                sub = (
+                    f"covers {_hm(m.group(1))} of their {_hm(m.group(2))} window"
+                    if m else "covers most of their window"
+                )
+                tiles.append(_fe_tile(label, "Preferred time ✓", sub, f.value))
+        else:  # slot availability -> "how busy that day"
+            big = _fe_busy_word(f.value)
             m = re.search(r"\((\d+)\s+overlap", d)
             if m:
                 n = int(m.group(1))
-                sub = f"{n} committed stop overlaps" if n != 1 else "1 committed stop overlaps"
+                sub = f"{n} stops already booked that window" if n != 1 else "1 stop already booked that window"
             else:
-                sub = "tier-weighted openness"
-            tiles.append(_fe_tile(label, f"{f.value:.2f}", sub, f.value))
+                sub = "based on the day's load"
+            tiles.append(_fe_tile(label, big, sub, f.value))
     cols = max(1, len(tiles))
     return f'<div class="fe-tiles" style="--fe-cols:{cols}">{"".join(tiles)}</div>'
 
 
 def _fe_why(o: dict, bar: float, recommended: bool) -> str:
-    """A short, grounded 'why' line for one option, composed from the factors'
-    own detail strings (never free text)."""
+    """A short, plain-language 'why' for one option, composed only from grounded
+    facts (distance, the customer's preferred day, window coverage) — no raw
+    scores and no internal 'auto-assign bar' jargon. Neutral wording ('existing
+    stops on the route', never 'your route')."""
+    route = o["cand"].route
     by = {f.name: f for f in o["factors"]}
     parts = []
-    g = by.get(FACTOR_GEO_CLUSTERING)
-    if g and g.detail:
-        parts.append(g.detail.rstrip("."))
+    miles = _fe_geo_miles(o["factors"])
+    if miles:
+        parts.append(f"about {miles} mi from other stops already on the route")
     w = by.get(FACTOR_WINDOW_MATCH)
-    if w is not None and w.value > 0.001 and w.detail:
-        parts.append(w.detail.rstrip("."))
-    elif w is not None and w.value <= 0.001:
-        parts.append("but it misses the preferred hours")
-    clears = "clears" if o["score"] >= bar else "is below"
-    lead = "Strongest route-slot overall — " if recommended else ""
-    body = "; ".join(parts)
-    tail = f'Route-slot score <b>{o["score"]:.2f}</b> {clears} the {bar:.0%} auto-assign bar.'
+    if w is not None and w.value > 0.001:
+        parts.append(
+            f"on the customer's preferred {_fe_day(route.day.value)}, "
+            "covering most of the window they asked for"
+        )
+    elif w is not None:
+        parts.append(f"on {_fe_day(route.day.value)}, though at different hours than they asked for")
+    lead = "The strongest option — " if recommended else ""
+    body = "; ".join(parts) if parts else "a serviceable delivery slot"
+    if o["score"] >= bar:
+        tail = "You can book it now — no extra approval needed."
+    else:
+        tail = "It's workable, but it would need a quick manager OK before booking."
     return f'<p class="fe-why">{lead}{_esc(body)}. {tail}</p>'
 
 
 def _fe_rank(score: float, bar: float) -> tuple:
-    """Map a route-slot score to a rep-facing quality rank (chip class, label),
-    banded relative to the auto-assign bar. Replaces the raw numeric score as the
-    headline: >= bar+0.20 is High capacity, >= bar Moderate, else Low."""
+    """Map a route-slot score to a rep-facing quality label (chip class, label),
+    banded relative to the auto-assign bar. Plain business language, no number:
+    >= bar+0.20 is a Great fit, >= bar a Good fit, else Workable."""
     if score >= bar + 0.20:
-        return "hi", "High capacity"
+        return "hi", "Great fit"
     if score >= bar:
-        return "med", "Moderate"
-    return "lo", "Low"
+        return "med", "Good fit"
+    return "lo", "Workable"
+
+
+# The one thing a runner-up option might do better, in plain business terms.
+_FE_RUNNER_ADV = {
+    FACTOR_GEO_CLUSTERING: "sits a little closer to existing stops",
+    FACTOR_CAPACITY_BUFFER: "leaves a bit more room on the truck",
+    FACTOR_WINDOW_MATCH: "fits the requested hours a little better",
+    FACTOR_SLOT_AVAILABILITY: "lands on a slightly quieter day",
+}
+
+
+def _fe_tradeoff(o: dict, result: RecommendationResult) -> str:
+    """A plain-language 'why this over the next option' line for the recommended
+    slot — names, in business terms, the one thing the runner-up does better (if
+    any) and frames the overall win. Grounded in the ranked options' factor
+    values; no raw scores."""
+    options, _ = _fe_options(result)
+
+    def _same(a: dict, b: dict) -> bool:
+        return (
+            a["cand"].route.route_id == b["cand"].route.route_id
+            and fmt_window(a["window"]) == fmt_window(b["window"])
+        )
+
+    runner = next((x for x in options if not _same(x, o)), None)
+    if runner is None:
+        return ""  # only one option -> no comparison to make
+    top_by = {f.name: f.value for f in o["factors"]}
+    adv, best_gap = None, 0.02  # ignore ties / scoring noise
+    for f in runner["factors"]:
+        gap = f.value - top_by.get(f.name, 0.0)
+        if gap > best_gap and f.name in _FE_RUNNER_ADV:
+            adv, best_gap = f.name, gap
+    runner_day = _esc(_fe_day(runner["cand"].route.day.value))
+    if adv is None:
+        body = "a stronger overall fit — it leads on every measure."
+    else:
+        body = (
+            f"a slightly better overall fit — the {runner_day} option {_FE_RUNNER_ADV[adv]}, "
+            "but this is the stronger choice for the customer overall."
+        )
+    return f'<div class="fe-tradeoff"><b>Why this over the {runner_day} option:</b> {body}</div>'
 
 
 def _fe_option_card(o: dict, result: RecommendationResult, config: Config, bar: float) -> str:
@@ -2174,18 +2647,13 @@ def _fe_option_card(o: dict, result: RecommendationResult, config: Config, bar: 
     recommended = o["recommended"]
     rank_cls, rank_label = _fe_rank(o["score"], bar)
     if recommended and rec.decision == Decision.RECOMMENDED:
-        rank_label += " · auto-assign"
+        rank_cls, rank_label = "hi", "Best fit · ready to book"
     elif recommended:  # escalated low score -> the strongest, proposed for review
-        rank_label += " · needs review"
+        rank_cls, rank_label = "lo", "Best available · needs a quick OK"
     selected = " selected" if recommended else ""
     badge = f'<span class="fe-rank {rank_cls}"><span class="d"></span>{rank_label}</span>'
     when = f"{_esc(_fe_day(route.day.value))} · {win}"
-    tradeoff = ""
-    if recommended and rec.key_tradeoff:
-        tradeoff = (
-            f'<div class="fe-tradeoff"><b>Why this over the alternative:</b> '
-            f'{_esc(rec.key_tradeoff)}</div>'
-        )
+    tradeoff = _fe_tradeoff(o, result) if recommended else ""
     # Every feasible option is a real, selectable choice (the rep confirms one).
     # data-route lets the map switch to this option's route when it's selected.
     selrow = '<div class="fe-selrow"><span class="fe-selmark"></span></div>'
@@ -2349,22 +2817,22 @@ def _frontend_panel_html(result: RecommendationResult, config: Config) -> str:
         '<div class="fe-field"><div class="l">Preferred slot <span style="font-weight:400">· soft '
         f'preference</span></div><div class="v">{_esc(pref)}</div></div>'
         '<div class="fe-note"><div class="h">🛡️ How these options are built</div>'
-        'Hard rules (serviceability, capacity) and the factor scoring run in deterministic code. The LLM '
-        'ranks only the feasible options and cites the facts; on any failure it falls back to the '
-        'deterministic pick. Escalation routes to a routing specialist — not a hard block.</div></aside>'
+        'Every option here is a real, bookable slot — it fits the truck, the route, and delivery rules. '
+        "We rank them by how well they fit the customer and flag the best one. If none work, you can send "
+        "it to a routing specialist — a queue, not a dead end.</div></aside>"
     )
 
     # --- center: banner + option cards + escalation + confirm ---
     banner = ""
     if rec.decision == Decision.ESCALATED_LOW_SCORE:
         banner = (
-            f'<div class="fe-banner warn">⚠ The agent escalated this — no option cleared the {bar:.0%} '
-            'auto-assign bar. The strongest is proposed below for a specialist to confirm.</div>'
+            '<div class="fe-banner warn">⚠ None of these are a strong enough fit to book on their own — '
+            'the best one is proposed below for a quick manager OK.</div>'
         )
     elif rec.decision == Decision.ESCALATED_NO_FEASIBLE_SLOT:
         banner = (
-            '<div class="fe-banner stop">✖ No serviceable route — every candidate failed a hard rule, so '
-            'there is nothing to auto-assign. Routed to a routing specialist.</div>'
+            '<div class="fe-banner stop">✖ No serviceable route for this address — nothing can be booked '
+            'here. Routed to a routing specialist.</div>'
         )
 
     # Only the feasible options are shown as slot cards (no "Unavailable" cards).
@@ -2386,21 +2854,21 @@ def _frontend_panel_html(result: RecommendationResult, config: Config) -> str:
 
     if rec.decision == Decision.RECOMMENDED:
         confirm = (
-            '<div class="fe-confirm"><div class="log">Selected: <b id="fe-sel">' + sel_when + '</b> · logged '
-            'with the rep and the facts the agent cited — fully auditable.</div><div class="btns">'
+            '<div class="fe-confirm"><div class="log">Selected: <b id="fe-sel">' + sel_when + '</b> · we’ll '
+            'save this choice on the account, with the reasons behind it.</div><div class="btns">'
             '<button type="button" class="fe-btn-ghost">Cancel</button>'
             '<button type="button" class="fe-btn-primary">Confirm slot</button></div></div>'
         )
     elif rec.decision == Decision.ESCALATED_LOW_SCORE:
         confirm = (
-            '<div class="fe-confirm"><div class="log">Selected: <b id="fe-sel">' + sel_when + '</b> — below '
-            'the auto-assign bar; confirming logs the rep’s override, or send it to a specialist.</div>'
+            '<div class="fe-confirm"><div class="log">Selected: <b id="fe-sel">' + sel_when + '</b> — this '
+            'one needs a quick manager OK; confirm to book it, or send it to a specialist.</div>'
             '<div class="btns"><button type="button" class="fe-btn-ghost">Confirm proposed slot</button>'
             '<button type="button" class="fe-btn-primary">Send to specialist</button></div></div>'
         )
     else:  # no feasible slot
         confirm = (
-            '<div class="fe-confirm"><div class="log">No assignable slot — this must go to a routing '
+            '<div class="fe-confirm"><div class="log">No slot we can book here — this goes to a routing '
             'specialist.</div><div class="btns">'
             '<button type="button" class="fe-btn-primary" disabled>Confirm slot</button></div></div>'
         )
@@ -2502,10 +2970,21 @@ def _payload_notices(result: RecommendationResult) -> list[dict]:
     return notices
 
 
+def _feedback_widget_js() -> str:
+    """The shared feedback widget's JS, read from the webapp static dir so the
+    published Frontend tab reuses the *exact same* control as the live Customer
+    view (in demo mode -- GitHub Pages has no backend). Returns ``""`` if the file
+    is unavailable, so page generation never breaks over a missing asset."""
+    try:
+        path = Path(__file__).resolve().parent.parent / "webapp" / "static" / "feedback.js"
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
 def build_page(results: list[RecommendationResult], config: Config) -> str:
     """Render the full three-tab overview HTML from live workflow results."""
     threshold = f"{config.total_score_threshold:.0%}"
-    fe_bar = f"{(config.route_slot_score_threshold if config.use_route_slot_scoring else config.total_score_threshold):.0%}"
     top_n = config.top_n_candidate_routes
     cards = "".join(_example_card(r) for r in results)
     payload = {r.customer.lookup_key: build_workflow_payload(r, config) for r in results}
@@ -2514,7 +2993,9 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
         + json.dumps(payload, ensure_ascii=False)
         + "</script>"
     )
-    js_block = "<script>" + _SIM_JS + _TABS_JS + _FRONTEND_JS + "</script>"
+    js_block = (
+        "<script>" + _feedback_widget_js() + _SIM_JS + _TABS_JS + _FRONTEND_JS + "</script>"
+    )
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -2524,7 +3005,7 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
 <title>Smart Assignment — AI Agent for Delivery Slot Recommendation</title>
 <meta name="description" content="An AI agent that autonomously assigns delivery slots for new Sysco customers. Explore the agentic workflow, architecture, and run it live on mock data." />
 <!-- GENERATED by scripts/generate_page.py from live workflow output. Do not edit by hand. -->
-<style>{_STYLE}{_FE_STYLE}</style>
+<style>{_STYLE}{_FE_STYLE}{_EVAL_STYLE}</style>
 </head>
 <body>
 
@@ -2552,6 +3033,7 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
     <button class="tabbtn active" data-tab="overview" role="tab" aria-selected="true">Overview</button>
     <button class="tabbtn" data-tab="architecture" role="tab" aria-selected="false">Architecture</button>
     <button class="tabbtn" data-tab="simulator" role="tab" aria-selected="false">Simulator</button>
+    <button class="tabbtn" data-tab="eval" role="tab" aria-selected="false">Eval &amp; Feedback</button>
     <button class="tabbtn" data-tab="frontend" role="tab" aria-selected="false">Frontend</button>
   </div>
 </nav>
@@ -2732,6 +3214,10 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
   </section>
 </div>
 
+<div class="tabpanel" id="tab-eval" role="tabpanel">
+{_EVAL_TAB_BODY}
+</div>
+
 <div class="tabpanel" id="tab-frontend" role="tabpanel">
   <section>
     <div class="fe-wrap">
@@ -2740,14 +3226,15 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
       <p class="sub">The Salesforce-embedded view a sales consultant sees. Agent-ranked delivery slots for a new
         prospect, grounded in route capacity, geographic clustering, slot match, and openness. The rep
         <b>selects one of the agent's options</b> — no free-text entry, so no slot is ever invented.</p>
-      <div class="fe-status">🛰️ <span><b>Grounded</b> on Houston route data · hard rules &amp; scoring are
-        <b>deterministic</b> · options ranked by the <b>LLM</b> and verified in code · auto-assign bar
-        <b>{fe_bar}</b></span></div>
       <div class="fe-picker">
         <span class="picker-label">Sample prospects — click one to load their delivery-slot view:</span>
         <div class="chips" id="fe-chips"></div>
       </div>
       <div id="fe-view"></div>
+      <!-- Feedback panel, kept outside #fe-view so the prospect-swap innerHTML
+           doesn't wipe it. Populated by _FRONTEND_JS in demo mode (no backend on
+           GitHub Pages) so this view stays in sync with the live Customer view. -->
+      <div id="fe-feedback"></div>
     </div>
   </section>
 </div>

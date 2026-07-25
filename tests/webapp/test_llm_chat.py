@@ -187,6 +187,33 @@ async def test_stream_turn_maps_tools_and_renders_visualization():
     assert frames[-1] == {"type": "done"}
 
 
+async def test_stream_turn_tool_frames_carry_plain_language_detail():
+    """Each tool frame carries a ``detail`` breadcrumb for the UI stepper, and
+    Intake echoes the customer's own inputs back (grounded, not invented)."""
+    events = [
+        _FakeEvent(calls=[_FakeCall("intake_customer", args={
+            "order_quantity_cases": 90, "preferred_day": "TUE",
+        })]),
+        _FakeEvent(calls=[_FakeCall("find_candidate_routes")]),
+        _FakeEvent(calls=[_FakeCall("evaluate_and_score_routes")]),
+        _FakeEvent(calls=[_FakeCall("recommend_or_escalate")]),
+        _FakeEvent(text="Here is my recommendation."),
+    ]
+    service = LlmChatService(
+        runner=_FakeRunner([events]),
+        session_service=_FakeSessionService(_SAMPLE_STATE),
+        geocoder=MockGeocoder(),
+    )
+    frames = await _collect(service.stream_turn("s1", "New prospect at 1200 McKinney St, 90 cases"))
+
+    tools = {f["name"]: f for f in frames if f["type"] == "tool"}
+    # Every step has a detail line...
+    assert all("detail" in f for f in tools.values())
+    # ...and Intake reads back the stated order size + day.
+    assert "90 cases" in tools["intake_customer"]["detail"]
+    assert "TUE" in tools["intake_customer"]["detail"]
+
+
 async def test_stream_turn_requests_non_streaming_mode():
     """The service must run the model in NON-streaming mode (StreamingMode.NONE),
     exactly like ``adk web``'s default. Forcing token streaming (SSE) tripped a

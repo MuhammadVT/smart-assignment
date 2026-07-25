@@ -26,7 +26,16 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
+    # Runner is configurable so this workflow works under an org IP allow list.
+    # Standard GitHub-hosted runners use ephemeral IPs from a large, changing
+    # pool; if the org enables an IP allow list, actions/checkout is rejected
+    # with "403 ... IP allow list enabled, and <ip> is not permitted". To fix,
+    # set a repo/org Actions variable CI_RUNNER to the label of a runner whose
+    # egress IP is on the allow list (a self-hosted runner, or a GitHub-hosted
+    # larger runner with a static IP range). The same variable is used by every
+    # workflow in this repo. With CI_RUNNER unset it falls back to ubuntu-latest,
+    # which is correct for repos without an IP allow list.
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4

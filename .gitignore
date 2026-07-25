@@ -11,6 +11,7 @@ __pycache__/
 build/
 dist/
 .venv/
+.venvs/
 venv/
 env/
 # uv resolves this on the fly for local `uv run`; the project pins deps in
@@ -27,6 +28,10 @@ htmlcov/
 .adk/
 *.session.json
 
+# Local Phoenix observability instance (traces, pid/log files)
+deployment/phoenix/.data/
+deployment/phoenix/.run/
+
 # IDE
 .vscode/
 .idea/
@@ -36,3 +41,14 @@ htmlcov/
 .DS_Store
 Thumbs.db
 /creds.json
+# Prepared SQL cache snapshots, one directory per DS_UTILS_RUN_MODE
+data/local/
+data/dev/
+data/qa/
+data/perf/
+data/preprod/
+data/prod/
+
+# Runtime human-feedback log (durable annotation store; not source)
+feedback_data/
+.venv-test/
