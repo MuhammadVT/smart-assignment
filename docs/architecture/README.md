@@ -22,6 +22,60 @@ a score itself -- every number comes back from the tool call. See
 `smart_assignment/tools/slot_recommendation.py` for the tool implementations
 and `smart_assignment/prompts.py` for the instruction that enforces this.
 
+## Two ways to run the same workflow
+
+The conversational agent above is one *entry point*, not the workflow itself. The
+workflow is `pipeline.run_slot_recommendation`, and there are two ways in:
+
+```
+INTERACTIVE (agent.py + tools/)          HEADLESS (service.py)
+a person, over several turns             a complete prospect record, one call
+  root_agent picks the next tool           plain Python calls the steps in order
+  ~5 model round-trips to sequence         0 model round-trips to sequence
+  address confirmation, triage handoff     no conversation to have
+        \                                       /
+         \_____ pipeline.run_slot_recommendation
+                  steps 1-4 deterministic
+                  step 5 -> routeslot.decide_route_slot   <- IDENTICAL both ways
+```
+
+**Step 5 is the same call under the same `Config` on both paths**, so the
+recommend-vs-escalate decision, the grounded reasoning, the verifier, the
+resampling, and the deterministic fallback behave identically. The headless path
+is cheaper because the LLM stops *sequencing deterministic steps*, not because it
+stops reasoning: `decide_route_slot` has no ADK dependency and is driven entirely
+by config, so the whole step-5 matrix comes across unchanged.
+
+`service.assign(customer, config=...)` decides one prospect;
+`service.assign_many(...)` decides a batch, fetching the route world once and
+returning one outcome per prospect **in input order, with a failed prospect
+reported rather than aborting the run** — a queue has to survive a bad row.
+`service.from_salesforce_record(record)` maps a flat CRM record to a
+`CustomerProfile`, kept as its own named function because upstream field names are
+the part most likely to change. `scripts/run_assign.py` drives all of it from the
+command line (`--samples`, `--file prospects.jsonl`, `--json`, `--html DIR`).
+
+What the headless path deliberately does **not** do: correct an address (a
+production record is trusted, and there is no user to confirm a suggestion with,
+so a geocoding failure is reported via `AssignmentOutcome.error_kind`), and
+compose the escalation brief (that is a separate on-demand step, so nothing
+open-ended sits on a decision's critical path).
+
+### One event loop per process (`service._llm_host_loop`)
+
+`shared.llm.generate_text` is synchronous over an async backend. Reached from
+ordinary synchronous code it takes `_run_coro_blocking`'s "no loop here" branch,
+which calls `asyncio.run` — a fresh event loop per call, **closed** afterwards.
+That is harmless once, but the sage backend caches an aiohttp session
+process-wide bound to the first loop that touched it, so the second call raises
+`RuntimeError: Event loop is closed`. A batch is exactly that pattern N times.
+
+So the service keeps one long-lived loop for the process and records it as the
+host loop, which makes every grounded call submit back to that single loop. It
+**defers to a host loop a caller already established** — the web app records
+uvicorn's loop via `offload_to_worker_thread`, and the session is bound *there* —
+so running inside an async server is unaffected.
+
 ## Delivery-slot selection (`shared/slot_selection.py`)
 
 The prospect should be delivered *when the truck is already in their
