@@ -107,6 +107,11 @@ def _print_outcome(outcome: service.AssignmentOutcome) -> None:
     if decision.get("runner_up"):
         print(f"  RUNNER-UP {decision['runner_up']}")
 
+    if outcome.brief:
+        print("  SPECIALIST BRIEF")
+        for line in outcome.brief.splitlines():
+            print(f"    {line}" if line.strip() else "")
+
     print("  CANDIDATES")
     for cand in outcome.candidates:
         status = "FEASIBLE  " if cand["feasible"] else "infeasible"
@@ -197,6 +202,12 @@ def main() -> None:
     optional.add_argument("--to", help='preferred window end, "HH:MM"')
 
     output = parser.add_argument_group("output")
+    output.add_argument(
+        "--brief",
+        action="store_true",
+        help="compose the specialist brief inline on an escalation (needs an LLM "
+        "backend; production should normally request it on demand instead)",
+    )
     output.add_argument("--json", action="store_true", help="emit JSON instead of a summary")
     output.add_argument("--out", help="write JSONL results to this file")
     output.add_argument("--html", help="write each SC-facing panel into this directory")
@@ -213,7 +224,7 @@ def main() -> None:
     if not prospects:
         raise SystemExit("No usable prospect records found.")
 
-    outcomes = service.assign_many(prospects)
+    outcomes = service.assign_many(prospects, include_brief=args.brief)
 
     if args.json:
         print(json.dumps([o.to_dict() for o in outcomes], indent=2))

@@ -286,7 +286,86 @@ def test_requires_human_review_mirrors_the_decision():
     assert escalated.requires_human_review is True
 
 
-# --- 6. event-loop ownership -------------------------------------------------
+# --- 6. the optional inline brief --------------------------------------------
+#
+# Deferred by default: composing the brief is the one open-ended, model-driven
+# step in the system, and it belongs behind a specialist opening the escalation
+# rather than on the critical path of a decision nobody may read.
+
+
+@pytest.fixture
+def brief_calls(monkeypatch):
+    """Record calls to the headless brief composer without running an agent."""
+    import smart_assignment.triage.headless as headless
+
+    calls = []
+
+    def _fake(customer, recommendation, config, **kwargs):
+        calls.append((customer, recommendation))
+        return "SITUATION\nstub brief."
+
+    monkeypatch.setattr(headless, "compose_brief", _fake)
+    return calls
+
+
+def test_no_brief_is_composed_by_default(brief_calls):
+    outcome = service.assign(_prospect(order_quantity_cases=400))
+    assert outcome.requires_human_review is True
+    assert outcome.brief is None
+    assert brief_calls == [], "the brief must be deferred unless asked for"
+    assert "brief" not in outcome.to_dict()
+
+
+def test_include_brief_attaches_one_on_an_escalation(brief_calls):
+    outcome = service.assign(_prospect(order_quantity_cases=400), include_brief=True)
+    assert outcome.requires_human_review is True
+    assert outcome.brief is not None and "SITUATION" in outcome.brief
+    assert outcome.to_dict()["brief"] == outcome.brief
+    assert len(brief_calls) == 1
+
+
+def test_no_brief_when_the_prospect_was_auto_assigned(brief_calls):
+    outcome = service.assign(_prospect(), include_brief=True)
+    assert outcome.requires_human_review is False
+    assert outcome.brief is None
+    assert brief_calls == [], "there is nothing to triage on a recommendation"
+
+
+def test_include_brief_respects_the_escalation_triage_flag(brief_calls):
+    config = Config(use_escalation_triage=False)
+    outcome = service.assign(
+        _prospect(order_quantity_cases=400), config=config, include_brief=True
+    )
+    assert outcome.brief is None
+    assert brief_calls == []
+
+
+def test_a_brief_that_cannot_be_composed_leaves_the_decision_intact(monkeypatch):
+    """The brief is advisory. Losing it must cost the escalation nothing -- the
+    structured facts a specialist needs are already on the outcome."""
+    import smart_assignment.triage.headless as headless
+
+    monkeypatch.setattr(headless, "compose_brief", lambda *a, **k: None)
+
+    plain = service.assign(_prospect(order_quantity_cases=400))
+    with_brief = service.assign(_prospect(order_quantity_cases=400), include_brief=True)
+
+    assert with_brief.brief is None
+    assert with_brief.decision == plain.decision
+    assert with_brief.decision["review_reason"]
+    assert with_brief.decision["rejected_alternatives"]
+
+
+def test_batch_passes_the_brief_choice_through(brief_calls):
+    outcomes = service.assign_many(
+        [_prospect(), _prospect(order_quantity_cases=400)], include_brief=True
+    )
+    assert outcomes[0].brief is None  # recommended: nothing to triage
+    assert outcomes[1].brief is not None  # escalated: brief attached
+    assert len(brief_calls) == 1
+
+
+# --- 7. event-loop ownership -------------------------------------------------
 
 
 def test_one_loop_is_shared_across_calls_and_stays_open():

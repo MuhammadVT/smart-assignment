@@ -320,6 +320,50 @@ Built lazily inside `root_agent`'s construction (`agent.py`), so importing the
 package stays credential-free; the sub-agent resolves the LLM backend only when
 `root_agent` itself is built.
 
+### The same brief without a conversation (`triage/headless.py`)
+
+The headless service (see *Two ways to run the same workflow*) has no ADK session
+and no `root_agent`, but it needs the *same* brief. Rather than reimplement it —
+two prompts and two context builders that would drift the first time the layout
+changed — `compose_brief` runs the **existing, unmodified** agent in a throwaway
+session seeded with the two keys `get_escalation_context` reads:
+
+```
+compose_brief(customer, recommendation, config)      [triage/headless.py]
+  ├─ seed a throwaway InMemorySessionService session with
+  │    sa_profile              <- _profile_to_state_dict(customer)
+  │    sa_last_recommendation  <- recommendation.to_state_dict()
+  │                               + requires_human_review
+  ├─ Runner(agent=build_triage_agent(config))  -- the SAME agent root_agent uses
+  │    capped by RunConfig.max_llm_calls and an asyncio timeout
+  └─ normalize_brief(final text)   ->  the brief, or None
+```
+
+`sa_last_recommendation` is built from `to_state_dict()` rather than by
+hand-picking the handful of keys the context builder reads today: that snapshot is
+pinned by a test asserting it covers every declared field, so a field added to
+`SlotRecommendation` reaches triage automatically instead of silently going
+missing. Nothing in the rest of `triage/` changes — the agent object is shared,
+not copied — and the agent is cached per resolved model, since only the model
+varies with config.
+
+**Why it is bounded, and why it is deferred.** Writing a brief is the one
+open-ended, model-driven step in the system: an agent can loop drafting,
+self-checking, and revising. In a conversation a human is watching; in a
+production request that is a hang. So the run is capped by `max_llm_calls` and a
+timeout — and, more importantly, it is **called on demand** rather than inline
+with the decision, so it sits behind a specialist actually opening the escalation
+instead of on the critical path of a decision nobody may read.
+`service.assign(..., include_brief=True)` composes it inline for a batch that must
+emit complete records, but that is the exception.
+
+**Every failure returns `None`**, never a partial brief and never an exception:
+nothing to triage, no credentials, the call cap, the timeout, or any other error.
+The caller then shows the structured escalation facts it already has (review
+reason, rejected alternatives, the trade-off), which is the honest fallback — a
+truncated or ungrounded brief presented as complete is worse for a specialist
+than no brief at all. The decision itself is never affected either way.
+
 ## Grounded address resolution (`address_resolve/` package)
 
 When the geocoder can't resolve a prospect's address (a typo, or an ambiguous

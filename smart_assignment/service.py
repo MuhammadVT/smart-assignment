@@ -151,6 +151,10 @@ class AssignmentOutcome:
     customer: dict
     decision: Optional[dict] = None
     candidates: list[dict] = field(default_factory=list)
+    # The specialist brief, when one was asked for and could be composed. Absent
+    # by default: composing it is deferred so nothing model-driven sits on a
+    # decision's critical path (see `assign`'s `include_brief`).
+    brief: Optional[str] = None
     error: Optional[str] = None
     error_kind: Optional[str] = None
     # Not serialized: the full RecommendationResult, for in-process rendering.
@@ -175,6 +179,8 @@ class AssignmentOutcome:
         if self.ok:
             payload["decision"] = self.decision
             payload["candidates"] = self.candidates
+            if self.brief is not None:
+                payload["brief"] = self.brief
         else:
             payload["error"] = self.error
             payload["error_kind"] = self.error_kind
@@ -347,6 +353,7 @@ def assign(
     config: Optional[Config] = None,
     geocoder: Optional[Geocoder] = None,
     routes: Optional[list[Route]] = None,
+    include_brief: bool = False,
 ) -> AssignmentOutcome:
     """Decide one prospect's route and slot, or escalate.
 
@@ -362,6 +369,16 @@ def assign(
     configuration in the same process (a deterministic batch alongside a grounded
     interactive surface, say). `routes` lets a batch fetch the route world once
     and share it; `geocoder` is injectable for offline runs and tests.
+
+    `include_brief` composes the specialist brief inline on an escalation. It is
+    **off by default on purpose**: the brief is only read when a specialist opens
+    the escalation, and composing it inline puts the one open-ended, model-driven
+    step in the system on the decision's critical path — where a slow or looping
+    agent would delay, and a failing one could fail, a decision nobody may even
+    look at. Prefer calling `triage.headless.compose_brief` on demand instead, and
+    reserve this for a batch that must emit complete records with no follow-up
+    call. Either way the decision is unaffected: a brief that cannot be composed
+    is simply absent, and the structured escalation facts are already present.
     """
     config = config or DEFAULT_CONFIG
     try:
@@ -384,11 +401,21 @@ def assign(
         logger.exception("Assignment failed for %s", customer.address)
         return _failure(customer, ERROR_INTERNAL, f"{type(exc).__name__}: {exc}")
 
+    brief = None
+    if include_brief and config.use_escalation_triage:
+        if result.recommendation.requires_human_review:
+            # Returns None on any failure, so a brief never gates the decision.
+            from smart_assignment.triage.headless import compose_brief
+
+            with _llm_host_loop():
+                brief = compose_brief(result.customer, result.recommendation, config)
+
     return AssignmentOutcome(
         ok=True,
         customer=_customer_dict(result.customer),
         decision=result.recommendation.to_state_dict(),
         candidates=[_evaluation_dict(e) for e in result.candidates_considered],
+        brief=brief,
         result=result,
     )
 
@@ -399,6 +426,7 @@ def assign_many(
     config: Optional[Config] = None,
     geocoder: Optional[Geocoder] = None,
     routes: Optional[list[Route]] = None,
+    include_brief: bool = False,
 ) -> list[AssignmentOutcome]:
     """Decide a batch, one outcome per prospect, in input order.
 
@@ -421,6 +449,12 @@ def assign_many(
 
     with _llm_host_loop():
         return [
-            assign(customer, config=config, geocoder=geocoder, routes=routes)
+            assign(
+                customer,
+                config=config,
+                geocoder=geocoder,
+                routes=routes,
+                include_brief=include_brief,
+            )
             for customer in customers
         ]
