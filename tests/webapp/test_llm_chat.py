@@ -356,3 +356,33 @@ async def test_visualization_none_when_profile_incomplete():
         geocoder=MockGeocoder(),
     )
     assert await service._visualization_from_state("s1") is None
+
+
+async def test_consolidated_tool_call_expands_into_the_four_step_frames():
+    """In consolidated mode one tool call performs all four steps, so the stream
+    must still emit the four breadcrumb rows -- the user's view of the workflow
+    doesn't change just because the orchestration did."""
+    events = [
+        _FakeEvent(calls=[_FakeCall("assign_delivery_slot", args={
+            "order_quantity_cases": 90, "preferred_day": "TUE",
+        })]),
+        _FakeEvent(text="Here is my recommendation."),
+    ]
+    service = LlmChatService(
+        runner=_FakeRunner([events]),
+        session_service=_FakeSessionService(_SAMPLE_STATE),
+        geocoder=MockGeocoder(),
+    )
+    frames = await _collect(service.stream_turn("s1", "New prospect at 1200 McKinney St, 90 cases"))
+
+    tool_labels = [f["label"] for f in frames if f["type"] == "tool"]
+    assert tool_labels == ["Intake", "Geo-Lookup", "Score & Rank", "Recommend / Decide"]
+    # Intake still reads the customer's own stated inputs back to them.
+    intake = next(f for f in frames if f.get("name") == "intake_customer")
+    assert "90 cases" in intake["detail"]
+    assert "TUE" in intake["detail"]
+    # A single consolidated call still concludes the prospect, so the
+    # visualization renders exactly as it does in stepwise mode.
+    viz = [f for f in frames if f["type"] == "visualization"]
+    assert len(viz) == 1
+    assert len(viz[0]["payload"]["steps"]) == 5

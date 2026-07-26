@@ -8,6 +8,7 @@ without an LLM.
 """
 
 from smart_assignment.tools.slot_recommendation import (
+    assign_delivery_slot,
     evaluate_and_score_routes,
     find_candidate_routes,
     intake_customer,
@@ -21,4 +22,9 @@ __all__ = [
     "resolve_address",
     "evaluate_and_score_routes",
     "recommend_or_escalate",
+    # The consolidated alternative to the four step tools above: one call runs the
+    # whole deterministic chain (see Config.use_consolidated_pipeline_tool). Both
+    # shapes are always exported and tested; agent.py registers one set or the
+    # other.
+    "assign_delivery_slot",
 ]

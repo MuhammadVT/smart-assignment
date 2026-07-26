@@ -182,6 +182,39 @@ narratives, `cp .env.example .env`, set `GOOGLE_API_KEY`, and re-run. To force
 the deterministic reasoner in code, pass
 `run_slot_recommendation(customer, reasoner=DeterministicReasoner())`.
 
+## Running it without the agent (fast path)
+
+When you already *have* the prospect's details, there's nothing for a
+conversation to collect — so skip the agent entirely and call the pipeline
+directly through `smart_assignment/runtime.py`:
+
+```python
+from smart_assignment import runtime
+
+runtime.assign(
+    "1200 McKinney St, Houston, TX 77010", 90,
+    preferred_day="TUE", preferred_window_start="07:00", preferred_window_end="10:00",
+)          # -> {"ok": True, "decision": ..., "candidates_considered": [...]}
+
+runtime.assign_batch(prospects, profile="balanced")   # fetches the route world once
+```
+
+Also exposed as `POST /api/assign` (structured fields, unlike `/api/recommend`'s
+free-text parse) and a CLI:
+
+```bash
+python3 scripts/run_assign.py --address "1200 McKinney St, Houston, TX 77010" \
+    --cases 90 --day TUE --window 07:00-10:00
+python3 scripts/run_assign.py --batch prospects.jsonl --profile balanced
+```
+
+A **cost profile** picks how much LLM reasoning runs, per call — `economy`
+(default, **0** LLM calls, the deterministic floor), `balanced` (~1 grounded
+route-slot decision), or `full` (whatever your `.env` configures). An explicit
+`config=` always wins. Because it's a per-call argument, one process can serve
+the conversational agent on the full configuration and a batch API on `economy`
+at the same time. See `docs/architecture/README.md` → *Three ways to run it*.
+
 ## Talking to it conversationally with `adk run` / `adk web`
 
 `smart_assignment/agent.py`'s `root_agent` is a conversational ADK `LlmAgent`.

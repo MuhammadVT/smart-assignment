@@ -453,6 +453,21 @@ def recommend_or_escalate(tool_context: ToolContext) -> dict:
     except GeocodingError as exc:
         return _geocoding_error_result(exc)
     evaluations = evaluate_candidates(customer, candidates, DEFAULT_CONFIG)
+    return _decide_and_serialize(tool_context, customer, evaluations)
+
+
+def _decide_and_serialize(
+    tool_context: ToolContext,
+    customer: CustomerProfile,
+    evaluations: list[CandidateEvaluation],
+) -> dict:
+    """Step 5 proper: pick the strategy, decide, serialize, and stash the result in
+    session state.
+
+    Split out of ``recommend_or_escalate`` so the consolidated tool
+    (``assign_delivery_slot``) can reuse the identical decision + payload from
+    evaluations it already computed, instead of re-deriving them. There is exactly
+    one copy of this logic, so the two orchestration shapes can never disagree."""
     # Step-5 strategy comes from config: with SMART_ASSIGNMENT_USE_GROUNDED_JUDGMENT
     # off (the default) this is the existing weighted-sum pick narrated by the
     # LLM-backed reasoner; with it on, an LLM makes the recommend/escalate call
@@ -504,4 +519,129 @@ def recommend_or_escalate(tool_context: ToolContext) -> dict:
         "alternative_takes": rec.alternative_takes,
     }
     tool_context.state[_STATE_LAST_RECOMMENDATION_KEY] = result
+    return result
+
+
+# --- Consolidated: the whole deterministic chain in ONE tool call -----------
+
+
+def _workflow_steps(
+    customer: CustomerProfile, evaluations: list[CandidateEvaluation]
+) -> dict:
+    """A compact summary of the middle steps (geo-lookup, constraints) for the
+    agent to narrate in consolidated mode.
+
+    In stepwise mode the model saw these facts because it called the middle tools;
+    consolidating must not make the recommendation *less* explainable, so the same
+    facts ride along on the single result -- computed once, and far smaller than
+    the two full tool payloads they replace."""
+    return {
+        "geocoded_location": (
+            {
+                "latitude": customer.location.latitude,
+                "longitude": customer.location.longitude,
+            }
+            if customer.location
+            else None
+        ),
+        "candidate_routes": [
+            {
+                "route_id": e.route.route_id,
+                "name": e.route.name,
+                "day": e.route.day.value,
+                "distance_miles": round(e.distance_miles, 1),
+                "feasible": e.feasible,
+                "failed_constraints": [
+                    CONSTRAINT_LABEL.get(c.name, c.name) for c in e.failed_constraints
+                ],
+            }
+            for e in evaluations
+        ],
+    }
+
+
+def assign_delivery_slot(
+    tool_context: ToolContext,
+    address: Optional[str] = None,
+    order_quantity_cases: Optional[int] = None,
+    preferred_day: Optional[str] = None,
+    preferred_window_start: Optional[str] = None,
+    preferred_window_end: Optional[str] = None,
+    customer_number: Optional[str] = None,
+    name: Optional[str] = None,
+    clear_preferred_slot: bool = False,
+) -> dict:
+    """
+    Record the prospect's details and run the ENTIRE assignment workflow in one
+    call: intake, geocoding, nearest-route lookup, hard constraints, scoring, and
+    the final recommend-or-escalate decision.
+
+    This is the only workflow tool you need. Call it as soon as the user has given
+    you an address and an order quantity, and call it again -- with ONLY the fields
+    that changed -- whenever they revise anything ("make it Tuesday", "200 cases
+    not 150", a corrected address). Everything already on file from an earlier call
+    in this conversation is kept automatically.
+
+    Args:
+      address: The prospect's street address. Required -- it is the primary
+        identifier, since most new customers are prospects with no Sysco
+        customer number yet.
+      order_quantity_cases: The size of the order, in cases. Required, positive.
+      preferred_day: Preferred delivery day, one of MON/TUE/WED/THU/FRI/SAT, if
+        the customer stated one. Must be given with both window fields.
+      preferred_window_start: Preferred window start, 24-hour "HH:MM" (e.g. "07:00").
+      preferred_window_end: Preferred window end, 24-hour "HH:MM".
+      customer_number: An existing Sysco customer number ("NNN-NNNNNN"), only if
+        the account already has one -- most prospects do not.
+      name: The business/contact name, if known. Not required to proceed.
+      clear_preferred_slot: Set true if the customer no longer has a day/time
+        preference, to remove one recorded earlier.
+
+    Returns:
+      On success, the final decision plus the trace behind it: {"ok": true,
+       "decision", "requires_human_review", "total_score", "recommended_route_id",
+       "recommended_route_name", "recommended_day", "recommended_window",
+       "recommended_window_basis", "reasoning", "rejected_alternatives",
+       "review_reason", the structured explanation on a route-slot RECOMMENDED pick
+       ("decision_summary", "primary_reasons", "key_tradeoff", "runner_up",
+       "default_comparison"), and "workflow_steps" with the geocoded location and
+       every candidate route considered with its distance and feasibility}.
+
+      On failure {"ok": false, "error": "..."} -- a missing/invalid intake field,
+      or an address that couldn't be geocoded. Relay the error to the customer and
+      ask for a correction; never guess a value yourself.
+
+      If "requires_human_review" is true you MUST hand off to a specialist before
+      treating this prospect as done -- never present it as final on your own.
+    """
+    intake_result = intake_customer(
+        tool_context,
+        address=address,
+        order_quantity_cases=order_quantity_cases,
+        preferred_day=preferred_day,
+        preferred_window_start=preferred_window_start,
+        preferred_window_end=preferred_window_end,
+        customer_number=customer_number,
+        name=name,
+        clear_preferred_slot=clear_preferred_slot,
+    )
+    # Intake validates BEFORE any geocoding, so a partial profile costs nothing
+    # and comes back as the same clarification prompt the stepwise flow produced.
+    if not intake_result.get("ok"):
+        return intake_result
+
+    customer = _profile_from_state_dict(tool_context.state[_STATE_PROFILE_KEY])
+    try:
+        candidates = _find_candidates(customer)
+    except GeocodingError as exc:
+        return _geocoding_error_result(exc)
+
+    # ONE geocode + constraint + scoring pass feeds the decision, instead of the
+    # three the stepwise tools each performed independently.
+    evaluations = evaluate_candidates(customer, candidates, DEFAULT_CONFIG)
+    # Copy before adding the step summary so what lands in session state (which the
+    # escalation-triage sub-agent reads) stays byte-identical to stepwise mode --
+    # the extra narration facts are for this tool's caller only.
+    result = dict(_decide_and_serialize(tool_context, customer, evaluations))
+    result["workflow_steps"] = _workflow_steps(customer, evaluations)
     return result

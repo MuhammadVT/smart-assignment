@@ -43,9 +43,41 @@ _STEP_DETAIL = {
 }
 
 
+# The consolidated tool (see Config.use_consolidated_pipeline_tool) performs all
+# four steps above in a single call, so there is no per-step tool event to hang a
+# breadcrumb on. The steps still genuinely run -- and the authoritative numbers
+# still come from the deterministic re-run that renders the step cards -- so the
+# streaming layer expands this one call into the same four rows rather than
+# collapsing the user's view of the workflow. These are signposts, not data (see
+# the module docstring), which is what makes expanding them honest.
+CONSOLIDATED_TOOL_NAME = "assign_delivery_slot"
+CONSOLIDATED_STEP_ORDER = (
+    "intake_customer",
+    "find_candidate_routes",
+    "evaluate_and_score_routes",
+    "recommend_or_escalate",
+)
+
+
 def step_label(tool_name: str) -> Optional[str]:
     """The breadcrumb heading for a pipeline tool, or None if it isn't a step."""
     return STEP_LABELS.get(tool_name)
+
+
+def consolidated_steps(args: Optional[Mapping[str, Any]] = None) -> list[dict]:
+    """The four breadcrumb frames a single consolidated tool call stands for.
+
+    ``args`` are the consolidated call's arguments -- the same intake fields
+    ``intake_customer`` would have received -- so the Intake row still echoes the
+    customer's own stated order size and preferred day back to them."""
+    frames: list[dict] = []
+    for name in CONSOLIDATED_STEP_ORDER:
+        frame: dict = {"type": "tool", "name": name, "label": STEP_LABELS[name]}
+        detail = step_detail(name, args if name == "intake_customer" else None)
+        if detail:
+            frame["detail"] = detail
+        frames.append(frame)
+    return frames
 
 
 def step_detail(tool_name: str, args: Optional[Mapping[str, Any]] = None) -> Optional[str]:

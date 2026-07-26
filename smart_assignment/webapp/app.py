@@ -56,6 +56,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from smart_assignment import runtime
 from smart_assignment.mock_customers import SAMPLE_CUSTOMERS
 from smart_assignment.pipeline import run_slot_recommendation
 from smart_assignment.reasoning import DeterministicReasoner
@@ -231,6 +232,51 @@ def recommend(req: RecommendRequest) -> RecommendResponse:
         f"{parsed.order_quantity_cases} cases, preferred slot: {slot_phrase}."
     )
     return RecommendResponse(ok=True, payload=payload, reply=reply)
+
+
+class AssignRequest(BaseModel):
+    """A prospect record, as structured fields.
+
+    The machine-facing counterpart to ``/api/recommend``: no free-text parsing, no
+    conversation, no agent -- just the intake a caller already has, straight into
+    the deterministic pipeline (see ``smart_assignment.runtime``)."""
+
+    address: str
+    order_quantity_cases: int
+    preferred_day: Optional[str] = None
+    preferred_window_start: Optional[str] = None
+    preferred_window_end: Optional[str] = None
+    name: Optional[str] = None
+    customer_number: Optional[str] = None
+    # Cost profile: "economy" (default, no LLM calls), "balanced" (~1 grounded
+    # call), or "full" (whatever this deployment's environment configures).
+    profile: str = runtime.DEFAULT_PROFILE
+
+
+@app.post("/api/assign")
+def assign(req: AssignRequest) -> dict:
+    """Run the workflow for one prospect and return the decision plus its audit
+    trail. The low-latency, low-cost path: no LLM in the loop unless ``profile``
+    asks for one.
+
+    Returns ``runtime.assign``'s payload verbatim -- ``{"ok": true, ...}`` with the
+    decision and every candidate considered, or ``{"ok": false, "error",
+    "error_kind"}`` for a bad intake or an unresolvable address. Expected failures
+    are values here, not 4xx/5xx, so a batch caller can process them uniformly; an
+    unknown ``profile`` is the one genuine client error and returns 400."""
+    try:
+        return runtime.assign(
+            req.address,
+            req.order_quantity_cases,
+            preferred_day=req.preferred_day,
+            preferred_window_start=req.preferred_window_start,
+            preferred_window_end=req.preferred_window_end,
+            name=req.name,
+            customer_number=req.customer_number,
+            profile=req.profile,
+        )
+    except ValueError as exc:  # unknown profile name
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 class ChatRequest(BaseModel):

@@ -43,6 +43,7 @@ from smart_assignment.shared import tracing
 from smart_assignment.shared.config import DEFAULT_CONFIG, ROLE_ROOT_AGENT
 from smart_assignment.shared.llm import get_llm, offload_to_worker_thread
 from smart_assignment.tools import (
+    assign_delivery_slot,
     evaluate_and_score_routes,
     find_candidate_routes,
     intake_customer,
@@ -89,17 +90,28 @@ def _build_root_agent() -> LlmAgent:
 
     triage_enabled = DEFAULT_CONFIG.use_escalation_triage
     address_resolution_enabled = DEFAULT_CONFIG.use_address_resolution
+    consolidated = DEFAULT_CONFIG.use_consolidated_pipeline_tool
 
     # Every pipeline tool is offloaded to a worker thread (see _offloaded_tool):
     # its body is synchronous and may make a grounded LLM call that needs the
     # server's event loop free, so it must not run inline on that loop.
-    tools = [
-        FunctionTool(_offloaded_tool(intake_customer)),
-        FunctionTool(_offloaded_tool(find_candidate_routes)),
-        FunctionTool(_offloaded_tool(evaluate_and_score_routes)),
-        FunctionTool(_offloaded_tool(recommend_or_escalate)),
-        request_input,
-    ]
+    #
+    # Two orchestration shapes, same deterministic pipeline underneath:
+    #  - stepwise (default): the model sequences the four steps itself, one tool
+    #    call each -- today's behavior, reproduced exactly.
+    #  - consolidated: ONE tool runs the whole chain, so the model spends its
+    #    round-trips on the conversation rather than on ordering deterministic
+    #    code (see Config.use_consolidated_pipeline_tool).
+    if consolidated:
+        pipeline_tools = [FunctionTool(_offloaded_tool(assign_delivery_slot))]
+    else:
+        pipeline_tools = [
+            FunctionTool(_offloaded_tool(intake_customer)),
+            FunctionTool(_offloaded_tool(find_candidate_routes)),
+            FunctionTool(_offloaded_tool(evaluate_and_score_routes)),
+            FunctionTool(_offloaded_tool(recommend_or_escalate)),
+        ]
+    tools = [*pipeline_tools, request_input]
     if address_resolution_enabled:
         # A grounded typo/ambiguity corrector: on a geocode miss it picks the
         # closest of the geocoder's real candidate matches for the user to
@@ -125,6 +137,7 @@ def _build_root_agent() -> LlmAgent:
         instruction=build_instruction(
             include_triage=triage_enabled,
             include_address_resolution=address_resolution_enabled,
+            consolidated=consolidated,
         ),
         tools=tools,
     )
