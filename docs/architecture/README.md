@@ -25,7 +25,7 @@ and `smart_assignment/prompts.py` for the instruction that enforces this.
 ## Delivery-slot selection (`shared/slot_selection.py`)
 
 The prospect should be delivered *when the truck is already in their
-neighborhood*, inferred from the route's nearest committed stops. Three
+neighborhood*, inferred from the route's nearest committed stops. Two
 deterministic steps:
 
 ```
@@ -38,22 +38,31 @@ identify_available_slots   nearest committed stops -> group by time (a morning
 select_candidate_slots     keep the top-N per route by quality (fit + low
                            contention), but ALWAYS keep any candidate that
                            overlaps a stated preference -> this is the menu.
-recommend_slot             pick one from the menu with a soft blend of
-                           preference overlap + fit + low contention.
 ```
+
+There is deliberately **no "pick one slot" step**. This module only enumerates;
+the winner is chosen by scoring every (route, slot) pair (below), where the
+customer's preference is one weighted, day-gated factor among four. Preference
+therefore influences the outcome through exactly one auditable weight
+(`RS_WEIGHT_WINDOW`) rather than compounding across a menu blend and a score.
 
 This replaced an earlier version that snapped the prospect to a route's nearest
 *existing* window and anchored the slot at that window's start. The candidate
 menu (`EvalContext.available_slots`, each `SlotOption` carrying its
-`anchor_time`, `fit_score`, `committed_overlap`, `basis`) is exactly the set a
-future recommendation LLM would reason over to pick the best slot.
+`anchor_time`, `fit_score`, `committed_overlap`, `basis`) is exactly the set the
+decision layer — deterministic or grounded — reasons over.
+
+`EvalContext.window_overlap_minutes` is the best overlap *any* candidate in the
+menu achieves with the preferred window (0 with no preference). It is a
+reference fact cited in triage briefs, never a decision input.
 
 **Phase A/B seam:** `stop_reference_time` is the single function that turns a
 committed stop into a "when is the truck near here" clock value — today the TW1
 window midpoint, later a real planned-arrival ETA (and, with a stop *sequence*,
 the interpolation becomes true bracketing between the two sequential stops the
 prospect is inserted between) — with no caller change. Knobs:
-`SMART_ASSIGNMENT_SLOT_{NEIGHBORS,CLUSTER_GAP,WINDOW_MINUTES,CANDIDATES,WEIGHT_*}`.
+`SMART_ASSIGNMENT_SLOT_{NEIGHBORS,CLUSTER_GAP,WINDOW_MINUTES,CANDIDATES}` and
+`SMART_ASSIGNMENT_SLOT_WEIGHT_{FIT,CONTENTION}`.
 
 ## Route-slot scoring (`routeslot/` package)
 

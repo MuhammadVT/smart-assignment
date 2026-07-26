@@ -69,8 +69,8 @@ way to meet the guarantees:
 
 ### Demote deterministic heuristics — don't remove them
 
-When a deterministic scorer/blend already exists (e.g. the slot `SLOT_WEIGHT_*`
-blend), **keep it, but demote it:** it stays the **fallback**, and its verdict (its
+When a deterministic scorer/blend already exists (e.g. the route-slot
+`RS_WEIGHT_*` weighted total), **keep it, but demote it:** it stays the **fallback**, and its verdict (its
 score, and the option it would pick on its own) goes **into the evidence packet as
 reference** — a *strong default the model may agree with, or diverge from with
 justification in its rationale.* The goal is to move hand-tuned weights from being

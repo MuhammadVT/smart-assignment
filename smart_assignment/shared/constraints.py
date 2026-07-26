@@ -25,12 +25,10 @@ from smart_assignment.shared.models import (
     CustomerProfile,
     Route,
     SlotOption,
-    Window,
 )
 from smart_assignment.shared.slot_selection import (
-    SLOT_BASIS_NONE,
+    best_preference_overlap,
     identify_available_slots,
-    recommend_slot,
     select_candidate_slots,
 )
 
@@ -56,9 +54,10 @@ class EvalContext:
     committed_volume: int
     remaining_capacity_after: int
     utilization_after: float
-    best_window: Optional[Window]  # the recommended slot (location-aware, preference-honoring)
-    window_overlap_minutes: int  # best achievable overlap with the preferred window
-    window_basis: str = SLOT_BASIS_NONE  # why best_window won (audit trail)
+    # Best overlap ANY candidate slot achieves with the preferred window (0 with
+    # no preference). A reference fact only -- the winning slot is chosen by
+    # scoring the whole menu, not by this number.
+    window_overlap_minutes: int
     available_slots: list[SlotOption] = field(default_factory=list)  # the full menu considered
 
 
@@ -82,11 +81,11 @@ def build_context(
 
     # Step 1: identify the route's candidate slots (clustered, location-aware).
     # Step 2: keep the top-N menu (always including any preference-overlapping
-    #         candidate). Step 3: recommend one from that menu.
+    #         candidate). Picking the winner from that menu is the decision
+    #         layer's job (see shared.scoring / routeslot), not this one's.
     preferred_window = customer.preferred_slot.window if customer.preferred_slot else None
     all_slots = identify_available_slots(customer.location, route, config)
     slots = select_candidate_slots(all_slots, preferred_window, config)
-    selection = recommend_slot(slots, preferred_window, config)
 
     return EvalContext(
         distance_miles=distance,
@@ -94,9 +93,7 @@ def build_context(
         committed_volume=committed,
         remaining_capacity_after=remaining_after,
         utilization_after=utilization_after,
-        best_window=selection.window,
-        window_overlap_minutes=selection.overlap_minutes,
-        window_basis=selection.basis,
+        window_overlap_minutes=best_preference_overlap(slots, preferred_window),
         available_slots=slots,
     )
 

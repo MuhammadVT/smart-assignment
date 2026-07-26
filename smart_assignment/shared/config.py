@@ -144,13 +144,14 @@ class Config:
     # a future LLM). Any candidate that overlaps a stated customer preference is
     # always kept, even if it falls outside the top-N by quality.
     slot_candidate_count: int = 3
-    # Blend weights for scoring/ranking candidate slots. Quality (used for the
-    # top-N cut and the no-preference pick) blends fit + low-contention; when a
-    # preference is stated, its overlap adds a third term. Need not sum to 1 --
-    # they are normalized over whichever terms are active.
+    # Weights for ranking candidate slots into the top-N MENU: location fit +
+    # low contention, normalized over the two. Preference deliberately plays no
+    # part here -- a preference-overlapping candidate is kept unconditionally
+    # (see select_candidate_slots), and preference is then weighed against slot
+    # openness as the day-gated `window_match` factor when the (route, slot)
+    # pair is scored. Need not sum to 1.
     slot_weight_fit: float = 0.5  # proximity-weight share of the slot's cluster
     slot_weight_contention: float = 0.2  # emptier (less committed overlap) is better
-    slot_weight_preference: float = 0.3  # overlap with the customer's stated slot
 
     # --- Route-slot scoring ---
     # The decision unit is the (route, slot) PAIR: every candidate slot on every
@@ -390,7 +391,6 @@ class Config:
             slot_candidate_count=_int_env("SMART_ASSIGNMENT_SLOT_CANDIDATES", 3),
             slot_weight_fit=_float_env("SMART_ASSIGNMENT_SLOT_WEIGHT_FIT", 0.5),
             slot_weight_contention=_float_env("SMART_ASSIGNMENT_SLOT_WEIGHT_CONTENTION", 0.2),
-            slot_weight_preference=_float_env("SMART_ASSIGNMENT_SLOT_WEIGHT_PREFERENCE", 0.3),
             rs_weight_geo=_float_env("SMART_ASSIGNMENT_RS_WEIGHT_GEO", 0.35),
             rs_weight_capacity=_float_env("SMART_ASSIGNMENT_RS_WEIGHT_CAPACITY", 0.25),
             rs_weight_window=_float_env("SMART_ASSIGNMENT_RS_WEIGHT_WINDOW", 0.20),

@@ -35,6 +35,7 @@ from smart_assignment.shared.models import (
     ScoredSlot,
 )
 from smart_assignment.shared.scoring import score_route_slot
+from smart_assignment.shared.slot_selection import SLOT_BASIS_NONE
 
 # --- Step 1: intake ---------------------------------------------------------
 
@@ -86,15 +87,14 @@ def evaluate_candidates(
         evaluation = CandidateEvaluation(
             route=route,
             distance_miles=ctx.distance_miles,
-            chosen_window=ctx.best_window,
+            chosen_window=None,  # set below from the best scored slot, if any
             remaining_capacity_after=ctx.remaining_capacity_after,
             utilization_after=ctx.utilization_after,
             constraint_outcomes=outcomes,
-            window_basis=ctx.window_basis,
+            window_basis=SLOT_BASIS_NONE,  # replaced below when a slot is scored
             available_slots=ctx.available_slots,
         )
-        if evaluation.feasible:
-            _apply_route_slot_scores(customer, route, ctx, evaluation, config)
+        _apply_route_slot_scores(customer, route, ctx, evaluation, config)
         evaluations.append(evaluation)
     return evaluations
 
@@ -107,12 +107,23 @@ def _apply_route_slot_scores(
     config: Config,
 ) -> None:
     """Score each candidate slot as its own (route, slot) option and fold the
-    route's BEST scored slot back onto the evaluation, so route-level ranking and
-    the existing serialization reflect the best obtainable route-slot.
+    route's BEST scored slot back onto the evaluation.
 
-    A feasible route that produced no candidate slot keeps its default 0.0 score:
-    it offers no assignable (route, slot) option, so it can only ever be reported,
-    never recommended (see routeslot.decide._escalate_no_slot)."""
+    Runs for EVERY candidate so that "the window this route offers" has one
+    definition everywhere -- including on an infeasible route, where it is the
+    diagnostic a specialist reads ("this route would have suited your Tuesday
+    morning, but it's out of area").
+
+    MERIT (`total_score`, `factor_scores`) is promoted only for a FEASIBLE
+    candidate. A rejected route must never carry a score: hard constraints are
+    absolute, and a merit number beside a rejection invites "it scored well, why
+    wasn't it used?". Infeasible candidates therefore keep the 0.0 / empty
+    defaults, and every decision layer filters on `feasible` before reasoning
+    (see routeslot.decide._all_route_slots and routeslot.evidence).
+
+    A route that produced no candidate slot keeps `chosen_window=None` and a 0.0
+    score: it offers no assignable (route, slot) option, so it can only ever be
+    reported, never recommended (see routeslot.decide._escalate_no_slot)."""
     scored = [
         ScoredSlot(slot=slot, factor_scores=fb, total_score=tot)
         for slot in evaluation.available_slots
@@ -122,10 +133,11 @@ def _apply_route_slot_scores(
         return
     evaluation.scored_slots = scored
     best = max(scored, key=lambda s: s.total_score)
-    evaluation.total_score = best.total_score
-    evaluation.factor_scores = best.factor_scores
     evaluation.chosen_window = best.slot.window
     evaluation.window_basis = best.slot.basis
+    if evaluation.feasible:
+        evaluation.total_score = best.total_score
+        evaluation.factor_scores = best.factor_scores
 
 
 def rank_feasible(evaluations: list[CandidateEvaluation]) -> list[CandidateEvaluation]:

@@ -34,7 +34,7 @@ def test_clear_case_is_recommended():
     # prospect), not snapped to a historical window's start -- and it's tagged
     # with an auditable basis.
     assert rec.recommended_window == "07:20-10:20"
-    assert rec.recommended_window_basis in {"between_adjacent_stops", "preference_accommodated"}
+    assert rec.recommended_window_basis in {"between_adjacent_stops", "least_contended"}
 
 
 def test_unserviceable_customer_escalates_no_feasible_slot():
@@ -112,3 +112,29 @@ def test_large_order_escalates_low_total_score():
 
 
 # --- total-score gating math -------------------------------------------------
+
+
+# --- what an infeasible candidate reports ------------------------------------
+
+
+def test_infeasible_candidate_reports_a_window_but_never_a_score():
+    """Every candidate reports the window it would have offered -- the diagnostic
+    a specialist reads on a rejected route -- but MERIT is promoted only for a
+    feasible one. A rejected route must never carry a score: hard constraints are
+    absolute, and a score beside a rejection invites "why wasn't it used?"."""
+    customer = CustomerProfile(
+        name="Katy Prairie Steakhouse",
+        address="5000 Katy Mills Cir, Katy, TX 77494",
+        order_quantity_cases=260,
+        preferred_slot=PreferredSlot(DayOfWeek.TUE, (time(6, 0), time(8, 0))),
+    )
+    result = _run(customer)
+    infeasible = [e for e in result.candidates_considered if not e.feasible]
+    assert infeasible, "this prospect should have at least one rejected route"
+
+    for ev in infeasible:
+        assert ev.total_score == 0.0        # no merit on a rejected candidate
+        assert ev.factor_scores == []
+        if ev.available_slots:              # a route that could offer a window
+            assert ev.chosen_window is not None
+            assert ev.window_basis in {"between_adjacent_stops", "least_contended"}
