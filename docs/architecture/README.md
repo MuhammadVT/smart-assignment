@@ -37,7 +37,8 @@ identify_available_slots   nearest committed stops -> group by time (a morning
                            the closer ones). No customer preference here.
 select_candidate_slots     keep the top-N per route by quality (fit + low
                            contention), but ALWAYS keep any candidate that
-                           overlaps a stated preference -> this is the menu.
+                           overlaps a stated preference ON THE PREFERRED DAY
+                           -> this is the menu.
 ```
 
 There is deliberately **no "pick one slot" step**. This module only enumerates;
@@ -53,8 +54,17 @@ menu (`EvalContext.available_slots`, each `SlotOption` carrying its
 decision layer — deterministic or grounded — reasons over.
 
 `EvalContext.window_overlap_minutes` is the best overlap *any* candidate in the
-menu achieves with the preferred window (0 with no preference). It is a
-reference fact cited in triage briefs, never a decision input.
+menu achieves with the preferred window. It is a reference fact cited in triage
+briefs, never a decision input.
+
+**The preference is day-gated once, up front.** A preference is always a
+(day, window) pair, so `constraints.applicable_preferred_window` returns `None`
+for a route running on a day the customer didn't ask for — and the menu's
+always-keep rule and the overlap fact both then behave as "no preference". Only
+same-day routes can earn preference credit, exactly as
+`scoring._slot_window_match` already gates the `window_match` factor. Without
+that gate a Wednesday route scored a time-of-day match against a Tuesday
+preference.
 
 **Phase A/B seam:** `stop_reference_time` is the single function that turns a
 committed stop into a "when is the truck near here" clock value — today the TW1

@@ -243,6 +243,11 @@ def select_candidate_slots(
     below the cut -- so a preferred-time option is never dropped from the menu.
     Assumes `options` is already quality-ranked (as identify_available_slots
     returns it).
+
+    `preferred_window` must already be day-applicable for this route: pass
+    ``None`` when the route runs on a day the customer didn't ask for, or a
+    time-of-day match would smuggle in candidates the customer can't actually
+    receive on (see `constraints.applicable_preferred_window`).
     """
     if not options:
         return []
@@ -261,6 +266,10 @@ def best_preference_overlap(
     """The BEST achievable overlap (minutes) between the customer's preferred
     window and any candidate slot in the menu -- 0 when no preference was stated
     or nothing overlaps.
+
+    Like `select_candidate_slots`, `preferred_window` must already be
+    day-applicable for this route (see `constraints.applicable_preferred_window`);
+    pass ``None`` on a day mismatch.
 
     A grounded reference fact (see `triage/evidence.py`), not a decision: which
     (route, slot) pair actually wins is decided by `shared.scoring.score_route_slot`

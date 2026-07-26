@@ -25,6 +25,7 @@ from smart_assignment.shared.models import (
     CustomerProfile,
     Route,
     SlotOption,
+    Window,
 )
 from smart_assignment.shared.slot_selection import (
     best_preference_overlap,
@@ -54,11 +55,28 @@ class EvalContext:
     committed_volume: int
     remaining_capacity_after: int
     utilization_after: float
-    # Best overlap ANY candidate slot achieves with the preferred window (0 with
-    # no preference). A reference fact only -- the winning slot is chosen by
-    # scoring the whole menu, not by this number.
+    # Best overlap ANY candidate slot achieves with the preferred window -- 0
+    # with no preference, and 0 on a route that runs on a different day (see
+    # applicable_preferred_window). A reference fact only: the winning slot is
+    # chosen by scoring the whole menu, not by this number.
     window_overlap_minutes: int
     available_slots: list[SlotOption] = field(default_factory=list)  # the full menu considered
+
+
+def applicable_preferred_window(customer: CustomerProfile, route: Route) -> Optional[Window]:
+    """The customer's preferred time window *as it applies to this route* --
+    ``None`` when they stated no preference, or when the route runs on a
+    different day.
+
+    A preference is always a (day, window) pair, so on the wrong day it simply
+    does not apply: nothing downstream should credit a time-of-day overlap for a
+    route the customer can't receive on. This is the single place that gate is
+    decided, mirroring `scoring._slot_window_match`, which drops the window
+    factor to 0 on a day mismatch."""
+    pref = customer.preferred_slot
+    if pref is None or route.day != pref.day:
+        return None
+    return pref.window
 
 
 def build_context(
@@ -83,7 +101,9 @@ def build_context(
     # Step 2: keep the top-N menu (always including any preference-overlapping
     #         candidate). Picking the winner from that menu is the decision
     #         layer's job (see shared.scoring / routeslot), not this one's.
-    preferred_window = customer.preferred_slot.window if customer.preferred_slot else None
+    # The preference is day-gated first, so a route on the wrong day is treated
+    # as having no preference at all rather than matching on time alone.
+    preferred_window = applicable_preferred_window(customer, route)
     all_slots = identify_available_slots(customer.location, route, config)
     slots = select_candidate_slots(all_slots, preferred_window, config)
 

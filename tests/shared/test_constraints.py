@@ -5,15 +5,18 @@ helpers it relies on. Deterministic, fast, no LLM or network.
 
 from __future__ import annotations
 
+from datetime import time
+
 from smart_assignment.shared.constraints import (
     HARD_CONSTRAINTS,
+    applicable_preferred_window,
     build_context,
     evaluate_constraints,
     geographic_serviceability,
     route_capacity,
 )
 from smart_assignment.shared.geo import haversine_miles
-from smart_assignment.shared.models import GeoPoint
+from smart_assignment.shared.models import CustomerProfile, DayOfWeek, GeoPoint
 
 
 def _all_pass(customer, route, config) -> bool:
@@ -57,3 +60,49 @@ def test_window_mismatch_does_not_make_route_infeasible(sample_customer, open_ro
 
     open_route.available_windows = [(time(13, 0), time(15, 0))]
     assert _all_pass(sample_customer, open_route, config)
+
+
+# --- the preference day gate --------------------------------------------------
+
+
+def test_applicable_preferred_window_is_none_on_a_different_day(sample_customer, open_route):
+    # sample_customer prefers TUE 07:00-10:00; open_route runs TUE.
+    assert applicable_preferred_window(sample_customer, open_route) == (time(7, 0), time(10, 0))
+
+    # Same clock window, wrong day -> the preference simply doesn't apply.
+    open_route.day = DayOfWeek.WED
+    assert applicable_preferred_window(sample_customer, open_route) is None
+
+
+def test_applicable_preferred_window_is_none_without_a_preference(open_route):
+    customer = CustomerProfile(
+        name="No Preference Cafe",
+        address="1200 McKinney St, Houston, TX 77010",
+        order_quantity_cases=50,
+        preferred_slot=None,
+        location=GeoPoint(29.7570, -95.3670),
+    )
+    assert applicable_preferred_window(customer, open_route) is None
+
+
+def test_window_overlap_is_zero_on_a_wrong_day_route(sample_customer, open_route):
+    # Right day: the route's slot overlaps the preferred hours, so the reference
+    # fact reports real overlap...
+    ctx_same_day = build_context(sample_customer, open_route)
+    assert ctx_same_day.window_overlap_minutes > 0
+
+    # ...but the identical clock window on WED earns nothing. A customer who
+    # asked for Tuesday cannot receive on Wednesday, so crediting a time-of-day
+    # match there would overstate the fit (mirrors scoring._slot_window_match).
+    open_route.day = DayOfWeek.WED
+    ctx_wrong_day = build_context(sample_customer, open_route)
+    assert ctx_wrong_day.window_overlap_minutes == 0
+
+
+def test_wrong_day_route_does_not_keep_extra_preference_candidates(sample_customer, open_route):
+    # The always-keep rule is preference-driven, so on a day the customer didn't
+    # ask for it must not pad the menu beyond the quality top-N.
+    same_day = build_context(sample_customer, open_route).available_slots
+    open_route.day = DayOfWeek.WED
+    wrong_day = build_context(sample_customer, open_route).available_slots
+    assert len(wrong_day) <= len(same_day)
