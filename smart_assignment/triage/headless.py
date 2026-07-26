@@ -41,11 +41,15 @@ _APP_NAME = "smart_assignment_headless_triage"
 _USER_ID = "headless"
 _SESSION_ID = "triage"
 
-# The agent has to load the context, draft, optionally self-check and revise, then
-# finalize. A handful of calls covers that; the cap is a guard against a revise
-# loop that never converges, not a budget. A production request cannot hang
-# because a model kept talking to itself.
-DEFAULT_MAX_LLM_CALLS = 8
+# The agent loads the context, drafts, self-checks the grounding, and revises
+# until the check passes -- so the call count scales with how many revisions the
+# brief needs, not with a fixed script. Measured against the mock world: a
+# low-score escalation converged inside 8, but a no-feasible-slot one (where every
+# figure is a constraint failure and the grounding check is fussier) needed more
+# than 8 and settled by 16. The cap is a guard against a revise loop that never
+# converges, not a budget, so it sits well above the worst case observed; the
+# timeout is the backstop that actually bounds latency.
+DEFAULT_MAX_LLM_CALLS = 24
 DEFAULT_TIMEOUT_SECONDS = 120.0
 
 _KICKOFF = (

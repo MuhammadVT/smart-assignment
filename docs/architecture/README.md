@@ -348,10 +348,14 @@ not copied — and the agent is cached per resolved model, since only the model
 varies with config.
 
 **Why it is bounded, and why it is deferred.** Writing a brief is the one
-open-ended, model-driven step in the system: an agent can loop drafting,
-self-checking, and revising. In a conversation a human is watching; in a
-production request that is a hang. So the run is capped by `max_llm_calls` and a
-timeout — and, more importantly, it is **called on demand** rather than inline
+open-ended, model-driven step in the system: the agent drafts, self-checks the
+grounding, and revises until the check passes, so its call count scales with how
+many revisions the brief needs. In a conversation a human is watching; in a
+production request an unbounded loop is a hang. So the run is capped by
+`max_llm_calls` (a guard against a loop that never converges, set well above the
+worst case measured — a no-feasible-slot escalation needs the most revisions) and
+by a timeout, which is what actually bounds latency — and, more importantly, it is
+**called on demand** rather than inline
 with the decision, so it sits behind a specialist actually opening the escalation
 instead of on the critical path of a decision nobody may read.
 `service.assign(..., include_brief=True)` composes it inline for a batch that must

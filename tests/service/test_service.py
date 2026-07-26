@@ -4,15 +4,21 @@ The headless decision service (`smart_assignment.service`).
 Two things these tests exist to protect:
 
 1. **It adds no decision logic.** `assign` must return exactly what
-   `pipeline.run_slot_recommendation` produced for the same prospect, under every
-   step-5 configuration. If that ever diverges, Mode 3 has become a second
-   pipeline -- the thing this design is meant to avoid.
+   `pipeline.run_slot_recommendation` produced for the same prospect, and must
+   hand the caller's `Config` to it untouched. If that ever diverges, Mode 3 has
+   become a second pipeline -- the thing this design is meant to avoid.
 2. **A bad record is a bad row, not a stopped run.** A production batch has to
    survive an unusable prospect, an unresolvable address, and an outright bug,
    and still decide everything else.
 
-All offline: tests/conftest.py pins the mock geocoder and the mock route world,
-and with no credentials the grounded layer falls back deterministically.
+**Why almost every call here pins `_DETERMINISTIC`.** Step 5 *samples* when
+grounded reasoning is on, so with real credentials present two runs of the same
+prospect may legitimately reach different decisions. A test that asserted a
+specific outcome, or compared two runs, would then be asserting something about
+the model rather than about this module -- passing or failing depending on whether
+an API key happens to be configured. Pinning the deterministic path keeps these
+tests about the service, and keeps them offline and fast. The grounded flags are
+covered where they belong: by asserting they reach the pipeline unchanged.
 """
 
 from __future__ import annotations
@@ -20,11 +26,11 @@ from __future__ import annotations
 import asyncio
 import json
 from copy import deepcopy
-from datetime import time
 
 import pytest
 
 from smart_assignment import service
+from smart_assignment.mock_customers import SAMPLE_CUSTOMERS
 from smart_assignment.pipeline import run_slot_recommendation
 from smart_assignment.shared.config import Config
 from smart_assignment.shared.geo import (
@@ -32,9 +38,16 @@ from smart_assignment.shared.geo import (
     GeocodingServiceError,
 )
 from smart_assignment.shared.llm import _HOST_EVENT_LOOP
-from smart_assignment.shared.models import CustomerProfile, DayOfWeek, GeoPoint, PreferredSlot
+from smart_assignment.shared.models import CustomerProfile, DayOfWeek, GeoPoint
 
 _ADDRESS = "1200 McKinney St, Houston, TX 77010"
+
+# Step 5 with no model in the loop: reproducible, offline, and independent of
+# whether the machine running the suite has credentials configured.
+_DETERMINISTIC = Config(
+    use_grounded_route_slot_pick=False,
+    use_grounded_route_slot_escalation=False,
+)
 
 
 def _prospect(**overrides) -> CustomerProfile:
@@ -60,49 +73,59 @@ class _BrokenGeocoder:
 # --- 1. the service adds nothing to the decision -----------------------------
 
 
+@pytest.mark.parametrize(
+    "name, expected_kind",
+    [
+        ("Bayou City Bistro", "RECOMMENDED"),
+        ("Galleria Grill & Catering", "ESCALATED_LOW_SCORE"),
+        ("Katy Prairie Steakhouse", "ESCALATED_NO_FEASIBLE_SLOT"),
+    ],
+)
+def test_assign_returns_exactly_what_the_pipeline_decided(name, expected_kind):
+    """Same input, same decision -- across all three decision kinds.
+
+    Uses the bundled prospects, which were designed against the mock world to
+    exercise the full outcome range (see mock_customers.py), rather than invented
+    case counts whose outcome would drift with the scoring weights."""
+    customer = next(c for c in SAMPLE_CUSTOMERS if c.name == name)
+
+    direct = run_slot_recommendation(deepcopy(customer), config=_DETERMINISTIC)
+    outcome = service.assign(deepcopy(customer), config=_DETERMINISTIC)
+
+    assert outcome.ok
+    assert direct.recommendation.decision.value == expected_kind
+    assert outcome.decision == direct.recommendation.to_state_dict()
+
+
 @pytest.mark.parametrize("pick", [False, True])
 @pytest.mark.parametrize("escalation", [False, True])
-def test_assign_matches_the_pipeline_under_every_step5_config(pick, escalation):
-    """The whole premise of Mode 3: same input, same decision, whichever way
-    step 5 is configured. Parametrized over both grounded flags so a future
-    change to the decision layer can't quietly make the two paths disagree."""
+def test_every_step5_config_reaches_the_pipeline_untouched(pick, escalation, monkeypatch):
+    """Mode 3 is config-identical to Mode 2 at step 5, which only holds if the
+    caller's Config arrives intact. Asserted over all four grounded combinations;
+    the decision itself is run deterministically so this stays offline."""
+    seen = {}
     config = Config(
         use_grounded_route_slot_pick=pick,
         use_grounded_route_slot_escalation=escalation,
     )
-    customer = _prospect(
-        preferred_slot=PreferredSlot(DayOfWeek.TUE, (time(7, 0), time(10, 0)))
-    )
-
-    direct = run_slot_recommendation(deepcopy(customer), config=config)
-    outcome = service.assign(deepcopy(customer), config=config)
-
-    assert outcome.ok
-    assert outcome.decision == direct.recommendation.to_state_dict()
-
-
-def test_assign_passes_the_caller_config_through_untouched(monkeypatch):
-    """A caller's Config must reach the pipeline as-is -- that is what lets one
-    process run a deterministic batch beside a grounded interactive surface."""
-    seen = {}
-    config = Config(use_grounded_route_slot_pick=True, top_n_candidate_routes=2)
 
     def _spy(customer, routes=None, config=None, geocoder=None, recommendation=None):
         seen["config"] = config
-        seen["routes"] = routes
-        return run_slot_recommendation(customer, routes=routes, config=config)
+        return run_slot_recommendation(customer, routes=routes, config=_DETERMINISTIC)
 
     monkeypatch.setattr(service, "run_slot_recommendation", _spy)
     service.assign(_prospect(), config=config)
 
     assert seen["config"] is config
+    assert seen["config"].use_grounded_route_slot_pick is pick
+    assert seen["config"].use_grounded_route_slot_escalation is escalation
 
 
 def test_infeasible_candidates_carry_no_merit_score():
     """A rejected route must never show a score: hard constraints are absolute,
     and a number beside a rejection invites "it scored well, why wasn't it
     used?" (see pipeline._apply_route_slot_scores)."""
-    outcome = service.assign(_prospect(order_quantity_cases=260))
+    outcome = service.assign(_prospect(order_quantity_cases=260), config=_DETERMINISTIC)
     assert outcome.ok
     rejected = [c for c in outcome.candidates if not c["feasible"]]
     assert rejected, "expected at least one infeasible candidate for this prospect"
@@ -115,7 +138,7 @@ def test_infeasible_candidates_carry_no_merit_score():
 
 
 def test_invalid_intake_returns_a_failure_rather_than_raising():
-    outcome = service.assign(_prospect(address="   "))
+    outcome = service.assign(_prospect(address="   "), config=_DETERMINISTIC)
     assert outcome.ok is False
     assert outcome.error_kind == service.ERROR_INTAKE
     assert outcome.decision is None
@@ -126,7 +149,7 @@ def test_unresolvable_address_is_reported_not_repaired():
     """There is no user here to confirm a correction with, so an address that
     doesn't resolve is reported for a human to fix upstream."""
     geocoder = _BrokenGeocoder(AddressNotFoundError(_ADDRESS, "no match"))
-    outcome = service.assign(_prospect(), geocoder=geocoder)
+    outcome = service.assign(_prospect(), config=_DETERMINISTIC, geocoder=geocoder)
     assert outcome.ok is False
     assert outcome.error_kind == service.ERROR_ADDRESS_NOT_FOUND
 
@@ -135,14 +158,14 @@ def test_geocoder_outage_is_distinguishable_from_a_bad_address():
     """Different kinds: a caller may retry a transport failure, but retrying an
     address that simply doesn't exist will never help."""
     geocoder = _BrokenGeocoder(GeocodingServiceError(_ADDRESS, "connection refused"))
-    outcome = service.assign(_prospect(), geocoder=geocoder)
+    outcome = service.assign(_prospect(), config=_DETERMINISTIC, geocoder=geocoder)
     assert outcome.ok is False
     assert outcome.error_kind == service.ERROR_GEOCODER_UNAVAILABLE
 
 
 def test_unexpected_error_is_contained_and_logged(caplog):
     geocoder = _BrokenGeocoder(RuntimeError("kaboom"))
-    outcome = service.assign(_prospect(), geocoder=geocoder)
+    outcome = service.assign(_prospect(), config=_DETERMINISTIC, geocoder=geocoder)
     assert outcome.ok is False
     assert outcome.error_kind == service.ERROR_INTERNAL
     assert "kaboom" in (outcome.error or "")
@@ -160,7 +183,7 @@ def test_batch_continues_past_a_bad_record_and_keeps_input_order():
         _prospect(name="Zero Cases", order_quantity_cases=0),
         _prospect(name="Good Two", order_quantity_cases=120),
     ]
-    outcomes = service.assign_many(batch)
+    outcomes = service.assign_many(batch, config=_DETERMINISTIC)
 
     assert len(outcomes) == 4
     assert [o.ok for o in outcomes] == [True, False, False, True]
@@ -181,14 +204,16 @@ def test_batch_fetches_the_route_world_once(monkeypatch):
         return real()
 
     monkeypatch.setattr(service, "fetch_candidate_routes", _counting)
-    service.assign_many([_prospect(), _prospect(), _prospect()])
+    service.assign_many([_prospect(), _prospect(), _prospect()], config=_DETERMINISTIC)
     assert calls["n"] == 1
 
 
-def test_batch_result_matches_running_each_prospect_alone():
+def test_batching_does_not_change_any_decision():
+    """Sharing the route world and one event loop across a batch is an
+    efficiency, not a behaviour change."""
     batch = [_prospect(), _prospect(order_quantity_cases=400)]
-    batched = service.assign_many(deepcopy(batch))
-    singly = [service.assign(deepcopy(p)) for p in batch]
+    batched = service.assign_many(deepcopy(batch), config=_DETERMINISTIC)
+    singly = [service.assign(deepcopy(p), config=_DETERMINISTIC) for p in batch]
     assert [o.decision for o in batched] == [o.decision for o in singly]
 
 
@@ -262,7 +287,7 @@ def test_malformed_records_name_the_offending_field(record, expected):
 
 
 def test_to_dict_is_json_safe_and_omits_the_in_process_trace():
-    outcome = service.assign(_prospect())
+    outcome = service.assign(_prospect(), config=_DETERMINISTIC)
     payload = outcome.to_dict()
 
     json.dumps(payload)  # raises if anything is unserializable
@@ -272,7 +297,7 @@ def test_to_dict_is_json_safe_and_omits_the_in_process_trace():
 
 
 def test_failure_wire_form_carries_the_reason_not_an_empty_decision():
-    payload = service.assign(_prospect(address="")).to_dict()
+    payload = service.assign(_prospect(address=""), config=_DETERMINISTIC).to_dict()
     assert payload["ok"] is False
     assert payload["requires_human_review"] is True
     assert payload["error_kind"] == service.ERROR_INTAKE
@@ -280,8 +305,8 @@ def test_failure_wire_form_carries_the_reason_not_an_empty_decision():
 
 
 def test_requires_human_review_mirrors_the_decision():
-    recommended = service.assign(_prospect())
-    escalated = service.assign(_prospect(order_quantity_cases=400))
+    recommended = service.assign(_prospect(), config=_DETERMINISTIC)
+    escalated = service.assign(_prospect(order_quantity_cases=400), config=_DETERMINISTIC)
     assert recommended.requires_human_review is False
     assert escalated.requires_human_review is True
 
@@ -309,7 +334,7 @@ def brief_calls(monkeypatch):
 
 
 def test_no_brief_is_composed_by_default(brief_calls):
-    outcome = service.assign(_prospect(order_quantity_cases=400))
+    outcome = service.assign(_prospect(order_quantity_cases=400), config=_DETERMINISTIC)
     assert outcome.requires_human_review is True
     assert outcome.brief is None
     assert brief_calls == [], "the brief must be deferred unless asked for"
@@ -317,7 +342,9 @@ def test_no_brief_is_composed_by_default(brief_calls):
 
 
 def test_include_brief_attaches_one_on_an_escalation(brief_calls):
-    outcome = service.assign(_prospect(order_quantity_cases=400), include_brief=True)
+    outcome = service.assign(
+        _prospect(order_quantity_cases=400), config=_DETERMINISTIC, include_brief=True
+    )
     assert outcome.requires_human_review is True
     assert outcome.brief is not None and "SITUATION" in outcome.brief
     assert outcome.to_dict()["brief"] == outcome.brief
@@ -325,14 +352,16 @@ def test_include_brief_attaches_one_on_an_escalation(brief_calls):
 
 
 def test_no_brief_when_the_prospect_was_auto_assigned(brief_calls):
-    outcome = service.assign(_prospect(), include_brief=True)
+    outcome = service.assign(_prospect(), config=_DETERMINISTIC, include_brief=True)
     assert outcome.requires_human_review is False
     assert outcome.brief is None
     assert brief_calls == [], "there is nothing to triage on a recommendation"
 
 
 def test_include_brief_respects_the_escalation_triage_flag(brief_calls):
-    config = Config(use_escalation_triage=False)
+    from dataclasses import replace
+
+    config = replace(_DETERMINISTIC, use_escalation_triage=False)
     outcome = service.assign(
         _prospect(order_quantity_cases=400), config=config, include_brief=True
     )
@@ -347,8 +376,10 @@ def test_a_brief_that_cannot_be_composed_leaves_the_decision_intact(monkeypatch)
 
     monkeypatch.setattr(headless, "compose_brief", lambda *a, **k: None)
 
-    plain = service.assign(_prospect(order_quantity_cases=400))
-    with_brief = service.assign(_prospect(order_quantity_cases=400), include_brief=True)
+    plain = service.assign(_prospect(order_quantity_cases=400), config=_DETERMINISTIC)
+    with_brief = service.assign(
+        _prospect(order_quantity_cases=400), config=_DETERMINISTIC, include_brief=True
+    )
 
     assert with_brief.brief is None
     assert with_brief.decision == plain.decision
@@ -358,7 +389,9 @@ def test_a_brief_that_cannot_be_composed_leaves_the_decision_intact(monkeypatch)
 
 def test_batch_passes_the_brief_choice_through(brief_calls):
     outcomes = service.assign_many(
-        [_prospect(), _prospect(order_quantity_cases=400)], include_brief=True
+        [_prospect(), _prospect(order_quantity_cases=400)],
+        config=_DETERMINISTIC,
+        include_brief=True,
     )
     assert outcomes[0].brief is None  # recommended: nothing to triage
     assert outcomes[1].brief is not None  # escalated: brief attached
