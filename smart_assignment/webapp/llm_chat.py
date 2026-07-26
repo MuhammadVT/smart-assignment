@@ -40,7 +40,12 @@ from smart_assignment.tools.slot_recommendation import (
     _STATE_PROFILE_KEY,
     _profile_from_state_dict,
 )
-from smart_assignment.webapp.narration import step_detail, step_label
+from smart_assignment.webapp.narration import (
+    CONSOLIDATED_TOOL_NAME,
+    consolidated_steps,
+    step_detail,
+    step_label,
+)
 from smart_assignment.webapp.parse import parse_intake
 
 _APP_NAME = "smart_assignment_webapp"
@@ -319,6 +324,16 @@ class LlmChatService:
             calls = event.get_function_calls()
             if calls:
                 for fc in calls:
+                    # Consolidated mode: one tool call performs all four steps, so
+                    # expand it into the same four breadcrumb rows the stepwise
+                    # agent emits (see narration.consolidated_steps). The step
+                    # cards below the chat are unaffected either way -- they come
+                    # from the deterministic re-run, not from these frames.
+                    if fc.name == CONSOLIDATED_TOOL_NAME:
+                        for frame in consolidated_steps(fc.args or {}):
+                            yield frame
+                        saw_recommendation = True
+                        continue
                     label = step_label(fc.name)
                     if label:
                         frame = {"type": "tool", "name": fc.name, "label": label}

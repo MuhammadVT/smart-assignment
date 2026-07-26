@@ -269,6 +269,33 @@ class Config:
     # reproduces that prior behavior exactly.
     use_address_resolution: bool = True
 
+    # --- Agent orchestration shape (optional) ---
+    # The conversational agent's four pipeline steps (intake -> geo-lookup ->
+    # score -> decide) are DETERMINISTIC and always run in that fixed order, and
+    # each one re-derives its inputs from session state rather than consuming the
+    # previous step's output -- so `recommend_or_escalate` alone already produces
+    # the identical final answer. Letting the LLM sequence them therefore costs ~3
+    # extra model round-trips (plus the large intermediate tool payloads, which
+    # then sit in the context window for the rest of the conversation) and repeats
+    # the geocode/constraint/scoring passes, purely so the model has something to
+    # narrate between steps.
+    #
+    # When True, root_agent instead gets ONE consolidated tool
+    # (`tools.assign_delivery_slot`) that runs the whole deterministic chain in a
+    # single call: ~2 model round-trips per prospect instead of ~5, one compute
+    # pass instead of three, and the "don't stop between steps" prompt block
+    # becomes unnecessary because stopping mid-flow is structurally impossible.
+    # The step tools are NOT removed -- they stay exported and tested, they are
+    # simply not registered with the agent in this mode. Everything else is
+    # unchanged: intake clarification, address-resolution confirmation, triage,
+    # and the request_input handoff all still work, because they run before or
+    # after the deterministic chain, not between its steps.
+    #
+    # Off by default: flag-off registers the same four tools and builds the same
+    # instruction as before, so the committed trajectory eval and every existing
+    # behavior are reproduced exactly.
+    use_consolidated_pipeline_tool: bool = False
+
     # --- Escalation triage (optional sub-agent) ---
     # When True, root_agent exposes an `escalation_triage` AgentTool (see the
     # `triage` package) and, on any escalation, calls it to compose a specialist
@@ -460,6 +487,9 @@ class Config:
                 "SMART_ASSIGNMENT_JUDGMENT_RETRY_ON_LOW_CONFIDENCE", True
             ),
             use_address_resolution=_bool_env("SMART_ASSIGNMENT_USE_ADDRESS_RESOLUTION", True),
+            use_consolidated_pipeline_tool=_bool_env(
+                "SMART_ASSIGNMENT_USE_CONSOLIDATED_PIPELINE", False
+            ),
             use_escalation_triage=_bool_env("SMART_ASSIGNMENT_USE_ESCALATION_TRIAGE", True),
             llm_backend=os.environ.get("SMART_ASSIGNMENT_LLM_BACKEND", "sage"),
             model=os.environ.get("SMART_ASSIGNMENT_MODEL", "gemini-3.5-flash"),

@@ -249,3 +249,46 @@ def test_chat_deterministic_conversation_remembers_context():
     assert viz3
     # The run reflects the revised order size (20 cases), proving the merge.
     assert "20 cases" in viz3[0]["payload"]["resultHtml"]
+
+
+# --- POST /api/assign: the structured, agent-free fast path ------------------
+
+
+def test_assign_endpoint_returns_a_decision_for_structured_input():
+    resp = client.post(
+        "/api/assign",
+        json={
+            "address": "1200 McKinney St, Houston, TX 77010",
+            "order_quantity_cases": 90,
+            "preferred_day": "TUE",
+            "preferred_window_start": "07:00",
+            "preferred_window_end": "10:00",
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["decision"]
+    assert body["profile"] == "economy"
+    # The audit trail rides along, not just the answer.
+    assert body["candidates_considered"]
+
+
+def test_assign_endpoint_reports_a_bad_intake_as_a_value_not_a_500():
+    resp = client.post("/api/assign", json={"address": "", "order_quantity_cases": 90})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is False
+    assert body["error_kind"] == "invalid_intake"
+
+
+def test_assign_endpoint_rejects_an_unknown_profile():
+    resp = client.post(
+        "/api/assign",
+        json={
+            "address": "1200 McKinney St, Houston, TX 77010",
+            "order_quantity_cases": 90,
+            "profile": "turbo",
+        },
+    )
+    assert resp.status_code == 400

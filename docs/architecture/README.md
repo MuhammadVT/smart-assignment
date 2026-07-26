@@ -22,6 +22,114 @@ a score itself -- every number comes back from the tool call. See
 `smart_assignment/tools/slot_recommendation.py` for the tool implementations
 and `smart_assignment/prompts.py` for the instruction that enforces this.
 
+## Three ways to run it
+
+The same deterministic pipeline (`pipeline.py`) is the only thing that ever
+decides. What varies is **who orchestrates its steps** and **how much LLM
+reasoning is switched on** — two independent axes, each a config knob, so you can
+serve an interactive chat and a low-latency API from one process:
+
+| Way | Entry point | Model round-trips / prospect | Use |
+|---|---|---|---|
+| Conversational, stepwise | `root_agent`, 4 step tools | ~5 orchestration + decision-layer calls | today's default, unchanged |
+| Conversational, consolidated | `root_agent`, 1 tool | ~2 orchestration + decision-layer calls | same chat, cheaper (`use_consolidated_pipeline_tool`) |
+| Direct / non-conversational | `runtime.assign(...)` | **0** (`economy`) or ~1 (`balanced`) | APIs, batch, integrations |
+
+### Consolidated agent orchestration (`Config.use_consolidated_pipeline_tool`)
+
+The four step tools are deterministic, always run in the same order, and each
+one **re-derives its inputs from session state** rather than consuming the
+previous step's output — `recommend_or_escalate` alone already produces the
+identical final answer. So steps 2 and 3 exist purely to give the model something
+to narrate, at the cost of ~3 extra model round-trips, two redundant
+geocode/constraint/scoring passes, and a large `evaluate_and_score_routes`
+payload that then sits in the context window for the rest of the conversation.
+
+When the flag is on (env `SMART_ASSIGNMENT_USE_CONSOLIDATED_PIPELINE`, default
+**off**), `root_agent` gets one tool instead:
+
+```
+assign_delivery_slot(address, order_quantity_cases, preferred_*, ...)
+   intake_customer(...)               <- same mergeable intake, same clarification
+     |  not ok? -> return the error   <- validated BEFORE any geocode
+     v
+   geo_lookup + evaluate_candidates   <- ONE pass, not three
+     v
+   _decide_and_serialize(...)         <- the SAME step-5 body recommend_or_escalate uses
+     + workflow_steps{geocoded_location, candidate_routes[]}   <- the narration facts
+```
+
+`_decide_and_serialize` is shared by both tools, so there is exactly one copy of
+the decision logic and the two shapes cannot disagree (a test asserts the payloads
+are identical field-for-field). The step tools are **demoted, not deleted**: still
+exported, still tested, simply not registered with the agent in this mode.
+
+Two things this buys beyond cost. First, the ~20 lines of `prompts.py` that exist
+solely to stop the model halting between deterministic steps (the "Golden rule"
+and "three things end your turn" blocks) become unnecessary — stopping mid-flow is
+*structurally impossible* when there are no intermediate steps, so a prompt-
+adherence failure mode is removed rather than argued against. Second, the tool
+result carries `workflow_steps` (geocoded point, every candidate with distance and
+feasibility), so consolidating costs the user no explanation.
+
+What is unchanged: intake clarification pauses, the address-confirmation loop
+(`resolve_address` reads state independently), the triage brief, and the
+`request_input` handoff — all of them run *before or after* the deterministic
+chain, never between its steps. What changes: the live chat's four breadcrumb
+rows now come from expanding the single tool call
+(`webapp/narration.consolidated_steps`) rather than from four tool events; the
+authoritative numbers still come from the deterministic re-run that renders the
+step cards, and `narration.py`'s breadcrumbs were always signposts, not data.
+Flag-off registers the same four tools and builds the same instruction byte-for-
+byte, so the committed trajectory eval (`eval/golden_cases.expected_trajectory`)
+is untouched — turning the flag on would require regenerating that dataset.
+
+### The direct path (`smart_assignment/runtime.py`)
+
+`run_slot_recommendation` was always the agent-free way to run this workflow;
+what it lacked was a named, structured front door. `runtime` is that facade — and
+only a facade: it builds the `CustomerProfile`, picks a `Config`, calls the one
+pipeline, and serializes. It scores and decides nothing itself.
+
+```python
+runtime.assign(address="...", order_quantity_cases=90, profile="economy") -> dict
+runtime.assign_batch([...], profile="balanced")   # fetches the route world once
+```
+
+Surfaced as `POST /api/assign` (structured input, unlike `/api/recommend`'s
+free-text parse) and `scripts/run_assign.py` (one prospect, or a JSONL batch).
+
+**Cost profiles are the real latency lever** — not the call shape. Where the time
+and money go is which LLM decision layers are active, so a `profile` selects that
+*per call*:
+
+| profile | LLM calls | what runs |
+|---|---|---|
+| `economy` (default) | **0** | pure deterministic pipeline |
+| `balanced` | ~1 | one grounded route-slot decision, `judgment_sample_count=1`, no triage |
+| `full` | 1–5 | whatever the environment configures |
+
+`economy` is **not a degraded mode**: it is exactly the deterministic result every
+grounded layer in this repo already guarantees as its fallback floor. Invoking it
+directly just skips calls that would have fallen back to it anyway — so it
+inherits the existing verification story rather than needing a new one. An
+explicit `config=` always wins over `profile`, so a caller with its own tuned
+configuration is never overridden.
+
+Because the profile is a per-call argument, this is a **dial, not a fork**: one
+process can serve the agent on the full configuration and a batch API on
+`economy` simultaneously. That is why it is a function with an injectable
+`Config` rather than a deployment-level switch or a separate package.
+
+**Import weight.** `smart_assignment/__init__.py` no longer eagerly imports the
+`agent` submodule. That import pulled Google ADK into *every* consumer of the
+package — the offline scripts, the eval scorer, any decisions-only service — for
+code they never touch. Nothing needed the eager binding (ADK, the web app, and
+the tests all import the submodule explicitly), and `root_agent` stays lazy via
+PEP 562, so credential-free import is unaffected. `tests/test_runtime.py` asserts
+that importing `runtime` pulls in no `google.adk`, so this cannot silently
+regress.
+
 ## Delivery-slot selection (`shared/slot_selection.py`)
 
 The prospect should be delivered *when the truck is already in their

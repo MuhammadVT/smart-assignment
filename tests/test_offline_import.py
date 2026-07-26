@@ -1,13 +1,16 @@
 """
 The package must import offline with no LLM credentials.
 
-``smart_assignment/__init__.py`` imports the ``agent`` module for every import of
-the package, and under the default ``sage`` backend building the agent needs
-credentials. ``agent.root_agent`` is therefore constructed lazily (PEP 562), so
-merely importing the package -- as ``scripts/run_local.py``,
-``scripts/generate_page.py``, and the test suite all do -- never resolves the LLM
-backend. These tests pin that contract with controlled, credential-free
-environments in a subprocess.
+Under the default ``sage`` backend, building the agent needs credentials. Two
+mechanisms keep that off the import path, and these tests pin both with
+controlled, credential-free environments in a subprocess:
+
+* ``agent.root_agent`` is constructed lazily (PEP 562), so even importing
+  ``smart_assignment.agent`` directly never resolves the LLM backend.
+* ``smart_assignment/__init__.py`` does not import the ``agent`` submodule at
+  all, so importing the package (or the agent-free ``runtime`` fast path) pulls
+  in no Google ADK -- the offline scripts, the eval scorer, and any
+  decisions-only service skip that import cost entirely.
 """
 
 from __future__ import annotations
@@ -80,3 +83,31 @@ def test_root_agent_access_still_requires_sage_credentials():
     )
     assert result.returncode != 0
     assert "SAGE" in result.stderr
+
+
+def test_importing_the_package_does_not_import_google_adk():
+    """The package must not drag the ADK in for consumers that never touch the
+    agent -- `smart_assignment/__init__.py` deliberately omits the eager
+    `from smart_assignment import agent` it used to carry."""
+    result = _run(
+        "import sys\n"
+        "import smart_assignment\n"
+        "import smart_assignment.pipeline\n"
+        "adk = [m for m in sys.modules if m.startswith('google.adk')]\n"
+        "assert not adk, adk\n"
+        "print('ok')\n"
+    )
+    assert result.returncode == 0, result.stderr
+    assert "ok" in result.stdout
+
+
+def test_agent_submodule_is_still_reachable_without_the_eager_import():
+    """Dropping the eager import must not break ADK discovery, which reaches the
+    agent as a submodule attribute."""
+    result = _run(
+        "from smart_assignment import agent\n"
+        "assert hasattr(agent, '_build_root_agent')\n"
+        "print('ok')\n"
+    )
+    assert result.returncode == 0, result.stderr
+    assert "ok" in result.stdout
