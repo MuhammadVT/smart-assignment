@@ -308,6 +308,81 @@ class SlotRecommendation:
     def requires_human_review(self) -> bool:
         return self.decision != Decision.RECOMMENDED
 
+    # --- lossless round-trip through JSON-able session state -----------------
+    #
+    # Step 5 can be non-deterministic (the grounded route-slot decision samples
+    # and may resample), so a surface that needs the SAME decision twice must
+    # carry it rather than recompute it -- see webapp/llm_chat, which would
+    # otherwise show the agent's narration over a second, independently-sampled
+    # result. Kept next to the fields so a newly added field is hard to forget.
+
+    def to_state_dict(self) -> dict:
+        """A JSON-safe snapshot carrying EVERY field (see `from_state_dict`)."""
+        return {
+            "customer_name": self.customer_name,
+            "decision": self.decision.value,
+            "total_score": self.total_score,
+            "reasoning": self.reasoning,
+            "customer_number": self.customer_number,
+            "customer_address": self.customer_address,
+            "recommended_route_id": self.recommended_route_id,
+            "recommended_route_name": self.recommended_route_name,
+            "recommended_day": self.recommended_day,
+            "recommended_window": self.recommended_window,
+            "recommended_window_basis": self.recommended_window_basis,
+            "recommended_window_rationale": self.recommended_window_rationale,
+            "decision_summary": self.decision_summary,
+            "primary_reasons": list(self.primary_reasons),
+            "key_tradeoff": self.key_tradeoff,
+            "runner_up": self.runner_up,
+            "default_comparison": self.default_comparison,
+            "factor_breakdown": [
+                {"name": f.name, "weight": f.weight, "value": f.value, "detail": f.detail}
+                for f in self.factor_breakdown
+            ],
+            "rejected_alternatives": list(self.rejected_alternatives),
+            "review_reason": self.review_reason,
+            "alternative_takes": list(self.alternative_takes),
+            "grounded_fallback": self.grounded_fallback,
+            "grounded_fallback_reason": self.grounded_fallback_reason,
+        }
+
+    @classmethod
+    def from_state_dict(cls, data: dict) -> "SlotRecommendation":
+        """Rebuild from `to_state_dict`. Raises on an unknown decision value, so a
+        corrupt snapshot fails loudly at the call site (which then recomputes)
+        rather than silently producing a wrong card."""
+        return cls(
+            customer_name=data["customer_name"],
+            decision=Decision(data["decision"]),
+            total_score=data["total_score"],
+            reasoning=data["reasoning"],
+            customer_number=data.get("customer_number"),
+            customer_address=data.get("customer_address"),
+            recommended_route_id=data.get("recommended_route_id"),
+            recommended_route_name=data.get("recommended_route_name"),
+            recommended_day=data.get("recommended_day"),
+            recommended_window=data.get("recommended_window"),
+            recommended_window_basis=data.get("recommended_window_basis"),
+            recommended_window_rationale=data.get("recommended_window_rationale"),
+            decision_summary=data.get("decision_summary"),
+            primary_reasons=list(data.get("primary_reasons") or []),
+            key_tradeoff=data.get("key_tradeoff"),
+            runner_up=data.get("runner_up"),
+            default_comparison=data.get("default_comparison"),
+            factor_breakdown=[
+                FactorScore(
+                    name=f["name"], weight=f["weight"], value=f["value"], detail=f["detail"]
+                )
+                for f in (data.get("factor_breakdown") or [])
+            ],
+            rejected_alternatives=list(data.get("rejected_alternatives") or []),
+            review_reason=data.get("review_reason"),
+            alternative_takes=list(data.get("alternative_takes") or []),
+            grounded_fallback=bool(data.get("grounded_fallback", False)),
+            grounded_fallback_reason=data.get("grounded_fallback_reason"),
+        )
+
 
 @dataclass
 class RecommendationResult:

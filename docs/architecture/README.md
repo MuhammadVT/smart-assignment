@@ -814,6 +814,26 @@ app — through `decide_route_slot`, and the conversational tool
 (`tools/slot_recommendation.recommend_or_escalate`) calls it directly. There is a
 single decision path, so no surface can drift from another.
 
+### Deciding once per turn
+
+The chat web app renders a turn twice: the agent calls `recommend_or_escalate`,
+then `webapp/llm_chat._visualization_from_state` rebuilds the Simulator payload.
+Steps 1–4 are deterministic, so re-deriving the candidates there keeps the
+numbers drift-free — but **step 5 is not** once grounded reasoning is on, since
+it samples and may resample for consensus. Re-deciding would therefore render a
+second, independently-sampled outcome underneath the agent's narration of the
+first, and record *that* one for feedback and tracing.
+
+So the tool snapshots its decision into session state, bound to the exact profile
+it was computed from (`SlotRecommendation.to_state_dict`, read back by
+`tools.slot_recommendation.cached_decision_for`), and the visualization passes it
+to `run_slot_recommendation(..., recommendation=...)`, which skips step 5
+entirely. The snapshot is ignored — and the decision simply recomputed once —
+whenever it is absent, belongs to a different profile (the prospect was revised
+mid-conversation), or can't be parsed. Reuse is therefore config-independent: it
+holds whether the decision was reached deterministically or by either grounded
+path.
+
 **What changes on purpose when escalation grounding is on:** the fixed
 `route_slot_score_threshold` no longer gates auto-assignment. The
 escalate/recommend call is the LLM's, made from the raw facts; "should a human

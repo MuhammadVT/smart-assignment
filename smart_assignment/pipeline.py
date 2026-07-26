@@ -33,6 +33,7 @@ from smart_assignment.shared.models import (
     RecommendationResult,
     Route,
     ScoredSlot,
+    SlotRecommendation,
 )
 from smart_assignment.shared.scoring import score_route_slot
 from smart_assignment.shared.slot_selection import SLOT_BASIS_NONE
@@ -153,6 +154,7 @@ def run_slot_recommendation(
     routes: Optional[list[Route]] = None,
     config: Optional[Config] = None,
     geocoder: Optional[Geocoder] = None,
+    recommendation: Optional[SlotRecommendation] = None,
 ) -> RecommendationResult:
     """Run the full workflow for one customer and return the complete trace.
 
@@ -165,6 +167,14 @@ def run_slot_recommendation(
     (`use_grounded_route_slot_pick` / `use_grounded_route_slot_escalation`); it
     falls back to the deterministic threshold decision on any failure, so this
     still runs fully offline with no backend or credentials.
+
+    `recommendation` REUSES a decision already made for this same customer,
+    skipping step 5 entirely. Steps 1-4 are deterministic, so recomputing them is
+    always reproducible -- but step 5 is not when grounded reasoning is on (it
+    samples, and may resample for consensus). A surface that needs the *same*
+    decision it already showed the user must pass it here rather than re-deciding
+    and getting a second, independently-sampled answer (see
+    `webapp/llm_chat._visualization_from_state`).
     """
     config = config or DEFAULT_CONFIG
     geocoder = geocoder or resolve_geocoder()
@@ -174,10 +184,11 @@ def run_slot_recommendation(
     candidates = geo_lookup(customer, all_routes, geocoder, config)
     evaluations = evaluate_candidates(customer, candidates, config)
 
-    # Imported lazily so importing the pipeline never pulls in the LLM plumbing.
-    from smart_assignment.routeslot import decide_route_slot
+    if recommendation is None:
+        # Imported lazily so importing the pipeline never pulls in the LLM plumbing.
+        from smart_assignment.routeslot import decide_route_slot
 
-    recommendation = decide_route_slot(customer, evaluations, config)
+        recommendation = decide_route_slot(customer, evaluations, config)
 
     return RecommendationResult(
         customer=customer,

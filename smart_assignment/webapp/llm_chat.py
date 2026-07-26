@@ -38,6 +38,7 @@ from smart_assignment.tools.slot_recommendation import (
     _GEOCODER,
     _STATE_PROFILE_KEY,
     _profile_from_state_dict,
+    cached_decision_for,
 )
 from smart_assignment.webapp.narration import step_detail, step_label
 from smart_assignment.webapp.parse import parse_intake
@@ -211,10 +212,17 @@ class LlmChatService:
         self, adk_session_id: str, reasoning_override: Optional[str] = None
     ) -> Optional[dict]:
         """Rebuild the profile from session state and produce the Simulator
-        payload by re-running the deterministic pipeline (drift-free on the
-        numbers). ``reasoning_override`` carries the agent's own recommendation
+        payload. ``reasoning_override`` carries the agent's own recommendation
         narration so the result card's "Why the agent chose this" shows the same
-        text the chat box did, not a separately-rendered one."""
+        text the chat box did, not a separately-rendered one.
+
+        Steps 1-4 are deterministic, so re-deriving the candidates here keeps the
+        numbers drift-free. Step 5 is NOT deterministic once grounded reasoning is
+        on -- it samples, and resamples for consensus -- so the decision the agent
+        already made is REUSED rather than recomputed. Without that, the card
+        could show a second, independently-sampled decision underneath the
+        agent's narration of the first one, and the feedback/trace would record
+        an outcome the user was never shown."""
         session = await self._get_session_service().get_session(
             app_name=_APP_NAME, user_id=_USER_ID, session_id=adk_session_id
         )
@@ -223,17 +231,20 @@ class LlmChatService:
         if not profile or not profile.get("address") or not profile.get("order_quantity_cases"):
             return None
         customer = _profile_from_state_dict(profile)
-        # This re-runs the real pipeline, which (grounded route-slot scoring on)
-        # can make a synchronous grounded LLM call. We are on the server's event
-        # loop here, and for the sage backend that call must run a coroutine on
-        # this loop -- impossible if we block it. Offload the blocking re-run to a
-        # worker thread so the loop stays free (see offload_to_worker_thread).
+        # None whenever the snapshot is missing, stale (the prospect was revised)
+        # or unreadable -- in which case we decide once here, exactly as before.
+        cached = cached_decision_for(state, profile)
+        # The pipeline runs synchronously and, with no cached decision, may make a
+        # grounded LLM call. We are on the server's event loop here, and for the
+        # sage backend that call must run a coroutine on this loop -- impossible
+        # if we block it. Offload to a worker thread so the loop stays free.
         with traced_decision(DEFAULT_CONFIG) as decision:
             result = await offload_to_worker_thread(
                 run_slot_recommendation,
                 customer,
                 config=DEFAULT_CONFIG,
                 geocoder=self._geocoder,
+                recommendation=cached,
             )
             decision.record(result)
         payload = build_workflow_payload(

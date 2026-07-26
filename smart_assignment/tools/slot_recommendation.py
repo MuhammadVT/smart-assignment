@@ -32,6 +32,7 @@ of them can later be lifted into its own sub-agent (wrapped in an
 
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 from google.adk.tools import ToolContext
@@ -47,14 +48,23 @@ from smart_assignment.shared.models import (
     DayOfWeek,
     PreferredSlot,
     Route,
+    SlotRecommendation,
 )
 from smart_assignment.shared.timeutils import fmt_time, fmt_window, parse_time
 from smart_assignment.address_resolve import resolve_from_geocoder
 from smart_assignment.pipeline import evaluate_candidates, geo_lookup, intake
 
+logger = logging.getLogger(__name__)
+
 # Namespaced so this doesn't collide with other state a larger app might keep.
 _STATE_PROFILE_KEY = "sa_profile"
 _STATE_LAST_RECOMMENDATION_KEY = "sa_last_recommendation"
+# The full decision, kept SEPARATE from the agent-facing summary above so the
+# agent's context stays lean while a surface that must re-render the very same
+# decision can rebuild it exactly (see `cached_decision_for`). Bound to the
+# profile it was computed from, because step 5 is non-deterministic under
+# grounded reasoning and must never be reused for a different prospect.
+_STATE_LAST_DECISION_KEY = "sa_last_decision"
 
 # Geocoder for the conversational path, chosen by SMART_ASSIGNMENT_GEOCODER
 # (census | mock; default census -- see geocoding_client.resolve_geocoder).
@@ -486,4 +496,33 @@ def recommend_or_escalate(tool_context: ToolContext) -> dict:
         "alternative_takes": rec.alternative_takes,
     }
     tool_context.state[_STATE_LAST_RECOMMENDATION_KEY] = result
+    # Snapshot the decision against the exact profile that produced it, so a
+    # surface rendering the same turn reuses THIS decision instead of sampling a
+    # second, possibly different one (see webapp/llm_chat).
+    tool_context.state[_STATE_LAST_DECISION_KEY] = {
+        "profile": dict(profile),
+        "recommendation": rec.to_state_dict(),
+    }
     return result
+
+
+def cached_decision_for(state: dict, profile: dict) -> Optional[SlotRecommendation]:
+    """The decision `recommend_or_escalate` already made for exactly this profile,
+    or ``None`` if there isn't one.
+
+    Returns ``None`` whenever anything is off -- no snapshot, a snapshot for a
+    different profile (the prospect was revised mid-conversation), or a snapshot
+    that can't be parsed. Every such case means "recompute", which is always
+    correct: the caller then simply runs the decision once itself. That keeps the
+    reuse safe for every config, including the fully deterministic one where the
+    recomputed answer would have matched anyway."""
+    snapshot = state.get(_STATE_LAST_DECISION_KEY)
+    if not isinstance(snapshot, dict):
+        return None
+    if snapshot.get("profile") != profile:
+        return None  # stale: this decision belongs to a different prospect
+    try:
+        return SlotRecommendation.from_state_dict(snapshot["recommendation"])
+    except (KeyError, TypeError, ValueError) as exc:  # corrupt/older snapshot
+        logger.warning("Ignoring unreadable cached decision (%s); recomputing.", exc)
+        return None
