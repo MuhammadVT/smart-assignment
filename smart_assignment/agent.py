@@ -89,6 +89,7 @@ def _build_root_agent() -> LlmAgent:
 
     triage_enabled = DEFAULT_CONFIG.use_escalation_triage
     address_resolution_enabled = DEFAULT_CONFIG.use_address_resolution
+    session_memory_enabled = DEFAULT_CONFIG.use_session_memory
 
     # Every pipeline tool is offloaded to a worker thread (see _offloaded_tool):
     # its body is synchronous and may make a grounded LLM call that needs the
@@ -114,6 +115,19 @@ def _build_root_agent() -> LlmAgent:
         from smart_assignment.triage import build_triage_tool
 
         tools.append(build_triage_tool(DEFAULT_CONFIG))
+    if session_memory_enabled:
+        # Opt-in cross-prospect recall: ADK's preload_memory auto-runs on every
+        # turn (the model never calls it), searching the memory service for facts
+        # from earlier, rotated-away prospects and injecting the matches into the
+        # instruction. The matching InMemoryMemoryService is wired onto the Runner
+        # in webapp/llm_chat.py, which also folds a concluding prospect into memory
+        # on rotation. Safe even without a memory service (e.g. a bare ``adk web``):
+        # the tool swallows the lookup error and is a no-op, so the only effect of
+        # the flag being on with no backend is nothing. Imported lazily to match
+        # the other gated tools; credential-free.
+        from google.adk.tools.preload_memory_tool import preload_memory_tool
+
+        tools.append(preload_memory_tool)
 
     return LlmAgent(
         name="smart_assignment_agent",

@@ -240,6 +240,23 @@ class Config:
     # turning it off just reverts to a bare request_input handoff.
     use_escalation_triage: bool = True
 
+    # --- Session memory (optional cross-prospect recall; off by default) ---
+    # When True, the chat web app remembers free-form facts stated in EARLIER
+    # prospects of the same browser session -- e.g. an aside the user made before
+    # the conversation rotated to a new address. Purely additive: the deterministic
+    # pipeline, the per-prospect rotation, and the decision are all unchanged; the
+    # model simply gains RECALL of the prior transcript, it does not gain a new
+    # actionable value. Mechanics (see webapp/llm_chat.py and agent.py): the app
+    # wires an ADK ``InMemoryMemoryService`` into the Runner, folds a concluding
+    # prospect's transcript into memory when it rotates to the next one, and
+    # root_agent gains ADK's ``preload_memory`` tool, which auto-injects relevant
+    # past-conversation snippets into each turn. Memory is scoped per browser
+    # session (the browser session_id becomes the ADK user_id when this is on), so
+    # one browser's facts never leak into another's. Off by default; flag-off wires
+    # no memory service, adds no tool, and keeps the fixed webapp user_id -- i.e.
+    # reproduces today's behavior exactly.
+    use_session_memory: bool = False
+
     # --- LLM backend ---
     # "sage"     → enterprise-governed SageLlmRegistry (requires SAGE_CLIENT_ID,
     #              SAGE_CLIENT_SECRET, SAGE_ENVIRONMENT to be set) -- unless
@@ -417,6 +434,7 @@ class Config:
             ),
             use_address_resolution=_bool_env("SMART_ASSIGNMENT_USE_ADDRESS_RESOLUTION", True),
             use_escalation_triage=_bool_env("SMART_ASSIGNMENT_USE_ESCALATION_TRIAGE", True),
+            use_session_memory=_bool_env("SMART_ASSIGNMENT_USE_SESSION_MEMORY", False),
             llm_backend=os.environ.get("SMART_ASSIGNMENT_LLM_BACKEND", "sage"),
             model=os.environ.get("SMART_ASSIGNMENT_MODEL", "gemini-3.5-flash"),
             sage_model=os.environ.get("SMART_ASSIGNMENT_SAGE_MODEL", "sage-gemini-2.5-flash"),

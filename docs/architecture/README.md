@@ -869,3 +869,38 @@ escalate/recommend call is the LLM's, made from the raw facts; "should a human
 look at this?" is answered by the model's own confidence plus cross-sample
 agreement, not a fixed cutoff. The bar remains in the packet as a reference and
 remains the deterministic fallback.
+
+### Prospect rotation and session memory (opt-in)
+
+A browser session can walk through many prospects in a row. To stop one
+prospect's numbers, profile, or a pending `request_input` from bleeding into the
+next, `webapp/llm_chat._maybe_rotate_prospect` starts a **fresh underlying ADK
+conversation** whenever a new *address* arrives after the current prospect
+concluded/escalated: it bumps a generation counter and suffixes the ADK session
+id (`s1`, `s1#1`, …) while the browser's own `session_id` never changes. A
+*revision* (no new address — "try 20 cases") carries none, so it stays in the
+same conversation and keeps its context. This is why `adk web` (one eternal
+session) remembers an earlier aside but the web app, by default, does not: the
+rotation deliberately drops the prior transcript.
+
+`Config.use_session_memory` (env `SMART_ASSIGNMENT_USE_SESSION_MEMORY`, **off by
+default**) restores cross-prospect recall *without* touching rotation. It is
+purely additive — the model gains recall, never a new actionable value:
+
+- The app wires an ADK `InMemoryMemoryService` onto the `Runner`
+  (`_get_memory_service`), and `root_agent` gains ADK's `preload_memory` tool
+  (gated in `agent.py`), which auto-runs each turn, keyword-searches memory for
+  the user's query, and injects the matches as `<PAST_CONVERSATIONS>` context.
+- On rotation, `_ingest_current_into_memory` folds the concluding prospect's
+  transcript into memory *before* the fresh session is minted, so its facts
+  survive. That is the only ingest point, so the still-active prospect is never
+  double-counted against what normal session replay already shows the model.
+- Memory is keyed by `(app_name, user_id)`, so to scope recall to one browser
+  (and never leak between browsers) the browser `session_id` becomes the ADK
+  `user_id` while the flag is on (`_user_id_for`); off, the fixed `webapp_user`
+  is used exactly as before.
+
+With the flag off, no memory service is built (even an injected one is ignored),
+no tool is added, and the fixed user id is used — flag-off reproduces today's
+behavior exactly. If the runner has no memory service (e.g. a bare `adk web`
+without a memory backend), `preload_memory` swallows the lookup and is a no-op.

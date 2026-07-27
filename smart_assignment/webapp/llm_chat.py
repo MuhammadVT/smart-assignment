@@ -116,9 +116,19 @@ class LlmChatService:
     ``CensusGeocoder`` the tools use (so the visualization matches the agent).
     """
 
-    def __init__(self, runner=None, session_service=None, geocoder: Optional[Geocoder] = None):
+    def __init__(
+        self,
+        runner=None,
+        session_service=None,
+        geocoder: Optional[Geocoder] = None,
+        memory_service=None,
+    ):
         self._runner = runner
         self._session_service = session_service
+        # The ADK memory service backing opt-in cross-prospect recall. Only built
+        # (and only passed to the Runner) when Config.use_session_memory is on --
+        # with the flag off it stays None and the Runner behaves exactly as before.
+        self._memory_service = memory_service
         self._geocoder = geocoder or _GEOCODER
         self._known_sessions: set[str] = set()
         # browser session_id -> {"id", "name"} of a pending request_input to resume.
@@ -144,6 +154,19 @@ class LlmChatService:
             self._session_service = InMemorySessionService()
         return self._session_service
 
+    def _get_memory_service(self):
+        """The ADK memory service backing cross-prospect recall, built lazily only
+        when session memory is enabled. Returns None when the flag is off -- the
+        Runner then gets no memory service and behavior is byte-for-byte unchanged.
+        Read at call time (not cached in __init__) so a test may flip the flag."""
+        if not DEFAULT_CONFIG.use_session_memory:
+            return None
+        if self._memory_service is None:
+            from google.adk.memory import InMemoryMemoryService
+
+            self._memory_service = InMemoryMemoryService()
+        return self._memory_service
+
     def _get_runner(self):
         if self._runner is None:
             from google.adk.runners import Runner
@@ -154,8 +177,22 @@ class LlmChatService:
                 agent=root_agent,
                 app_name=_APP_NAME,
                 session_service=self._get_session_service(),
+                # None when session memory is off -> identical to the prior Runner.
+                memory_service=self._get_memory_service(),
             )
         return self._runner
+
+    def _user_id_for(self, session_id: str) -> str:
+        """The ADK user_id for a browser session.
+
+        With session memory ON, the browser session_id IS the user_id: ADK's
+        per-user memory is keyed by (app_name, user_id), so using the browser id
+        scopes recall to that one browser and its prospects -- never leaking one
+        browser's facts into another's. With the flag OFF, the fixed ``_USER_ID``
+        is used exactly as before, so nothing about the current behavior changes."""
+        if DEFAULT_CONFIG.use_session_memory:
+            return session_id
+        return _USER_ID
 
     def _adk_session_id(self, session_id: str) -> str:
         """The underlying ADK session id for a browser session's CURRENT prospect.
@@ -164,7 +201,7 @@ class LlmChatService:
         gen = self._generation.get(session_id, 0)
         return session_id if gen == 0 else f"{session_id}#{gen}"
 
-    def _maybe_rotate_prospect(self, session_id: str, message: str) -> None:
+    async def _maybe_rotate_prospect(self, session_id: str, message: str) -> None:
         """Start a new underlying ADK conversation when the user begins a NEW
         prospect after the current one already concluded/escalated. A new prospect
         is a message that carries a street address; a revision (e.g. "try 20
@@ -173,6 +210,13 @@ class LlmChatService:
         has_address = parse_intake(message).address is not None
         concluded = session_id in self._concluded or session_id in self._pending_input
         if has_address and concluded:
+            # Before the fresh session wipes the concluding prospect's transcript,
+            # fold it into memory so cross-prospect recall survives the rotation.
+            # A no-op when session memory is off (no memory service). This is the
+            # ONLY point that ingests: the current (still-active) prospect is never
+            # in memory, so preload never double-counts what session replay already
+            # shows the model.
+            await self._ingest_current_into_memory(session_id)
             self._generation[session_id] = self._generation.get(session_id, 0) + 1
             # A rotated prospect is a fresh start: drop any pending escalation resume
             # (so the new prospect isn't misrouted as the specialist's reply) and
@@ -180,11 +224,29 @@ class LlmChatService:
             self._pending_input.pop(session_id, None)
             self._concluded.discard(session_id)
 
-    async def _ensure_session(self, adk_session_id: str) -> None:
+    async def _ingest_current_into_memory(self, session_id: str) -> None:
+        """Fold the browser session's CURRENT (concluding) ADK conversation into
+        the memory service, so its facts remain recallable after rotation minted a
+        fresh, empty session. Called before the generation is bumped, so
+        ``_adk_session_id`` still points at the prospect being left behind. A no-op
+        when session memory is off, or if that session was never created."""
+        memory_service = self._get_memory_service()
+        if memory_service is None:
+            return
+        adk_session_id = self._adk_session_id(session_id)
+        session = await self._get_session_service().get_session(
+            app_name=_APP_NAME,
+            user_id=self._user_id_for(session_id),
+            session_id=adk_session_id,
+        )
+        if session is not None:
+            await memory_service.add_session_to_memory(session)
+
+    async def _ensure_session(self, adk_session_id: str, user_id: str) -> None:
         if adk_session_id in self._known_sessions:
             return
         await self._get_session_service().create_session(
-            app_name=_APP_NAME, user_id=_USER_ID, session_id=adk_session_id
+            app_name=_APP_NAME, user_id=user_id, session_id=adk_session_id
         )
         self._known_sessions.add(adk_session_id)
 
@@ -209,7 +271,10 @@ class LlmChatService:
         return types.Content(role="user", parts=[types.Part(text=message)])
 
     async def _visualization_from_state(
-        self, adk_session_id: str, reasoning_override: Optional[str] = None
+        self,
+        adk_session_id: str,
+        user_id: Optional[str] = None,
+        reasoning_override: Optional[str] = None,
     ) -> Optional[dict]:
         """Rebuild the profile from session state and produce the Simulator
         payload. ``reasoning_override`` carries the agent's own recommendation
@@ -224,7 +289,7 @@ class LlmChatService:
         agent's narration of the first one, and the feedback/trace would record
         an outcome the user was never shown."""
         session = await self._get_session_service().get_session(
-            app_name=_APP_NAME, user_id=_USER_ID, session_id=adk_session_id
+            app_name=_APP_NAME, user_id=user_id or _USER_ID, session_id=adk_session_id
         )
         state = (session.state if session else None) or {}
         profile = state.get(_STATE_PROFILE_KEY)
@@ -273,10 +338,15 @@ class LlmChatService:
         """
         # Start a fresh ADK conversation if this message begins a NEW prospect
         # after the current one concluded/escalated, so nothing bleeds across.
-        self._maybe_rotate_prospect(session_id, message)
+        # (When session memory is on, this also folds the concluding prospect into
+        # memory first, so its facts survive the rotation.)
+        await self._maybe_rotate_prospect(session_id, message)
         adk_session_id = self._adk_session_id(session_id)
+        # With session memory on, the browser session_id is the ADK user_id, so
+        # memory is scoped to this browser; off, it's the fixed _USER_ID as before.
+        user_id = self._user_id_for(session_id)
 
-        await self._ensure_session(adk_session_id)
+        await self._ensure_session(adk_session_id, user_id)
         runner = self._get_runner()
         new_message = self._build_message(session_id, message)
 
@@ -288,7 +358,7 @@ class LlmChatService:
         # "Why the agent chose this" can show the same words as the chat box.
         recommendation_reply: list[str] = []
         async for event in runner.run_async(
-            user_id=_USER_ID,
+            user_id=user_id,
             session_id=adk_session_id,
             new_message=new_message,
             # Run the model in NON-streaming mode -- exactly what ``adk web`` does
@@ -360,7 +430,7 @@ class LlmChatService:
             self._concluded.add(session_id)
             override = "\n\n".join(recommendation_reply) or None
             payload = await self._visualization_from_state(
-                adk_session_id, reasoning_override=override
+                adk_session_id, user_id=user_id, reasoning_override=override
             )
             if payload:
                 yield {"type": "visualization", "payload": payload}
