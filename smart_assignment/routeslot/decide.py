@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 from collections import Counter
+from json import JSONDecodeError
 from typing import Callable, Optional
 
 from smart_assignment.routeslot.evidence import (
@@ -39,6 +40,7 @@ from smart_assignment.routeslot.prompts import (
 from smart_assignment.routeslot.schema import (
     VERDICT_AGREE,
     RouteSlotChoice,
+    RouteSlotChoiceParseError,
     RSDecision,
     parse_route_slot_choice,
 )
@@ -168,7 +170,91 @@ def _all_route_slots(evaluations: list[CandidateEvaluation]) -> list[RouteSlotOp
     return pairs
 
 
-# --- grounded selection (over the eligible, above-threshold options) ---------
+# --- grounded selection (shared call -> parse -> verify -> retry machinery) ---
+
+
+# A malformed reply (prose instead of JSON, or JSON that doesn't fit the schema)
+# is NOT the same as a backend/credentials failure: the model DID answer, it just
+# wrapped the answer wrong -- and it is usually correct reasoning it forgot to
+# encode as JSON. So it earns the SAME single corrective retry a failed
+# verification already gets, instead of falling straight through to the
+# deterministic floor. A backend/transport error is still not retried (retrying
+# missing creds only doubles the latency).
+_SHAPE_ERRORS = (JSONDecodeError, RouteSlotChoiceParseError)
+
+
+def _malformed_retry_feedback(exc: Exception) -> str:
+    """Corrective feedback for a reply that couldn't be parsed into a choice --
+    names the one thing that went wrong (it wasn't the required JSON object) so the
+    retry fixes the envelope rather than second-guessing the reasoning."""
+    return (
+        f"Your previous reply could not be parsed as the required choice "
+        f"({type(exc).__name__}: {exc}). Reply with ONLY a single JSON object -- no "
+        f"prose, no commentary, no markdown fences -- starting with '{{' and ending "
+        f"with '}}'."
+    )
+
+
+def _grounded_choice(
+    packet: RouteSlotPacket,
+    config: Config,
+    choice_fn: Optional[ChoiceFn],
+    build_prompt: Callable[[RouteSlotPacket], str],
+    build_retry_prompt: Callable[[RouteSlotPacket, str], str],
+) -> tuple[Optional[RouteSlotChoice], Optional[str]]:
+    """Run one grounded route-slot call through call -> parse -> verify, with a
+    SINGLE corrective retry that covers BOTH recoverable failure modes:
+
+      - the reply wouldn't parse into a choice (prose instead of JSON, or a
+        malformed / incomplete object), or
+      - it parsed but failed grounding verification.
+
+    Returns ``(choice, None)`` on a verified choice, or ``(None, reason)`` on any
+    failure (all logged) so the caller falls back deterministically. A backend /
+    credentials / transport error is NOT retried -- only a shape or verification
+    failure is. Shared by the pick-only and the grounded-escalation paths so the
+    retry policy lives in exactly one place."""
+    fn = choice_fn or generate_route_slot_choice
+    try:
+        try:
+            choice = parse_route_slot_choice(fn(config, build_prompt(packet)))
+            result = verify_choice(choice, packet)
+            feedback = None if result.ok else result.as_feedback()
+        except _SHAPE_ERRORS as exc:
+            # The model replied, but not as a parseable choice -> retry, nudging it
+            # to return JSON only. Its reasoning is often already correct.
+            logger.info(
+                "Grounded route-slot reply was not a parseable choice (%s: %s); "
+                "retrying once for JSON only.",
+                type(exc).__name__,
+                exc,
+            )
+            feedback = _malformed_retry_feedback(exc)
+        if feedback is not None:
+            choice = parse_route_slot_choice(fn(config, build_retry_prompt(packet, feedback)))
+            result = verify_choice(choice, packet)
+    except Exception as exc:  # noqa: BLE001 - any backend/parse failure -> fallback
+        logger.warning(
+            "Grounded route-slot decision failed (%s: %s); using the deterministic "
+            "fallback. Check SMART_ASSIGNMENT_LLM_BACKEND and its credentials.",
+            type(exc).__name__,
+            exc,
+        )
+        return None, (
+            "Grounded LLM reasoning was unavailable, so this shows the deterministic "
+            "result. Check the LLM backend and its credentials."
+        )
+    if not result.ok:
+        logger.warning(
+            "Grounded route-slot choice ungrounded after one retry (%s); using the "
+            "deterministic fallback.",
+            result.as_feedback(),
+        )
+        return None, (
+            "Grounded route-slot reasoning could not be verified; showing the "
+            "deterministic result."
+        )
+    return choice, None
 
 
 def _grounded_index(
@@ -176,35 +262,15 @@ def _grounded_index(
 ):
     """Return (index, choice, None) on a verified grounded pick, or
     (None, None, reason) to signal a deterministic fallback."""
-    fn = choice_fn or generate_route_slot_choice
-    try:
-        choice = parse_route_slot_choice(fn(config, build_route_slot_prompt(packet)))
-        result = verify_choice(choice, packet)
-        if not result.ok:
-            retry = build_route_slot_retry_prompt(packet, result.as_feedback())
-            choice = parse_route_slot_choice(fn(config, retry))
-            result = verify_choice(choice, packet)
-    except Exception as exc:  # noqa: BLE001 - any backend/parse failure -> fallback
-        logger.warning(
-            "Grounded route-slot decision failed (%s: %s); using the deterministic "
-            "best route-slot. Check SMART_ASSIGNMENT_LLM_BACKEND and its credentials.",
-            type(exc).__name__,
-            exc,
-        )
-        return None, None, (
-            "Grounded LLM reasoning was unavailable, so this shows the deterministic "
-            "best route-slot. Check the LLM backend and its credentials."
-        )
-    if not result.ok:
-        logger.warning(
-            "Grounded route-slot choice ungrounded after one retry (%s); using the "
-            "deterministic best route-slot.",
-            result.as_feedback(),
-        )
-        return None, None, (
-            "Grounded route-slot reasoning could not be verified; showing the "
-            "deterministic best route-slot."
-        )
+    choice, reason = _grounded_choice(
+        packet,
+        config,
+        choice_fn,
+        build_route_slot_prompt,
+        build_route_slot_retry_prompt,
+    )
+    if choice is None:
+        return None, None, reason
     return choice.chosen_index, choice, None
 
 
@@ -259,29 +325,16 @@ def _verified_sample(
     packet: RouteSlotPacket, config: Config, choice_fn: Optional[ChoiceFn]
 ) -> Optional[RouteSlotChoice]:
     """One decision sample: call, parse, verify; one corrective retry on a
-    verification failure; None on any mechanical failure (all logged)."""
-    fn = choice_fn or generate_route_slot_choice
-    try:
-        choice = parse_route_slot_choice(fn(config, build_route_slot_decision_prompt(packet)))
-        result = verify_choice(choice, packet)
-        if not result.ok:
-            retry = build_route_slot_decision_retry_prompt(packet, result.as_feedback())
-            choice = parse_route_slot_choice(fn(config, retry))
-            result = verify_choice(choice, packet)
-    except Exception as exc:  # noqa: BLE001 - any backend/parse failure -> fallback
-        logger.warning(
-            "Grounded route-slot decision failed (%s: %s); falling back to the "
-            "deterministic threshold decision. Check SMART_ASSIGNMENT_LLM_BACKEND.",
-            type(exc).__name__,
-            exc,
-        )
-        return None
-    if not result.ok:
-        logger.warning(
-            "Grounded route-slot decision ungrounded after one retry (%s); falling back.",
-            result.as_feedback(),
-        )
-        return None
+    malformed OR unverified reply; None on any mechanical failure (all logged).
+    The recommend-vs-escalate path decides the fallback reason itself, so only the
+    choice is returned here."""
+    choice, _ = _grounded_choice(
+        packet,
+        config,
+        choice_fn,
+        build_route_slot_decision_prompt,
+        build_route_slot_decision_retry_prompt,
+    )
     return choice
 
 

@@ -273,22 +273,38 @@ def _maybe_install_sage_response_diagnostic(config: "Config") -> None:
 # ---------------------------------------------------------------------------
 
 
-async def _generate_via_sage_async(llm: Any, prompt: str) -> str:
+async def _sage_call_async(
+    llm: Any, prompt: str, tools: Optional[list] = None
+) -> "tuple[Optional[dict], str]":
     """Drive one content-generation turn through an ADK BaseLlm object.
+
+    Returns ``(function_call_args, text)``:
+
+      - ``function_call_args`` is the arguments dict of the model's tool call when
+        ``tools`` were offered and the model answered by CALLING one (the reliable
+        way to get structured output from the conversational SAGE agent, which
+        narrates when merely asked for JSON but readily emits function calls).
+        ``None`` when no tool call was made.
+      - ``text`` is the concatenated free-text parts (the model's prose reply, or
+        empty on a pure tool call).
 
     ADK's ``LlmResponse`` has no flat ``.text`` attribute (that was an incorrect
     assumption that raised ``AttributeError: 'LlmResponse' object has no attribute
     'text'`` on the first real sage reply); the generated text lives in
-    ``response.content.parts[i].text``. Concatenate those, skip empty/tool-only
-    parts, and raise on an error response so the caller falls back deterministically
-    with a clear reason rather than silently returning "".
+    ``response.content.parts[i].text`` and a tool call in
+    ``response.content.parts[i].function_call``. Raise on an error response so the
+    caller falls back deterministically with a clear reason rather than silently
+    returning "".
     """
     from google.adk.models.llm_request import LlmRequest  # ADK 2.x
     from google.genai import types
 
+    gen_config = types.GenerateContentConfig(tools=tools or None)
     request = LlmRequest(
-        contents=[types.Content(role="user", parts=[types.Part(text=prompt)])]
+        contents=[types.Content(role="user", parts=[types.Part(text=prompt)])],
+        config=gen_config,
     )
+    call_args: Optional[dict] = None
     chunks: list[str] = []
     async for response in llm.generate_content_async(request, stream=False):
         error_code = getattr(response, "error_code", None)
@@ -297,13 +313,77 @@ async def _generate_via_sage_async(llm: Any, prompt: str) -> str:
             raise RuntimeError(f"Sage backend returned an error: {error_code} {message}".strip())
         content = getattr(response, "content", None)
         for part in getattr(content, "parts", None) or []:
+            fc = getattr(part, "function_call", None)
+            if fc is not None and getattr(fc, "args", None):
+                # The model answered via the structured tool call -- its args ARE
+                # the answer (already JSON-repaired by the SDK on the way through).
+                call_args = dict(fc.args)
             text = getattr(part, "text", None)
             if text:
                 chunks.append(text)
-    return "".join(chunks)
+    return call_args, "".join(chunks)
 
 
-def _run_coro_blocking(coro: "Coroutine[Any, Any, str]") -> str:
+async def _generate_via_sage_async(llm: Any, prompt: str) -> str:
+    """Text-only convenience over ``_sage_call_async`` (no tools) for the plain
+    ``generate_text`` path -- unchanged behavior: concatenated text, raises on an
+    error response."""
+    _, text = await _sage_call_async(llm, prompt, tools=None)
+    return text
+
+
+def _to_genai_schema(node: dict) -> Any:
+    """Build a ``google.genai`` ``Schema`` from a small JSON-schema dict (the
+    subset a tool-parameter declaration needs: type, description, enum, properties,
+    required, items, nullable). Kept explicit so the JSON-schema ``"object"`` /
+    ``"string"`` type strings map to the genai ``Type`` enum deterministically."""
+    from google.genai import types
+
+    type_map = {
+        "object": types.Type.OBJECT,
+        "array": types.Type.ARRAY,
+        "string": types.Type.STRING,
+        "integer": types.Type.INTEGER,
+        "number": types.Type.NUMBER,
+        "boolean": types.Type.BOOLEAN,
+    }
+    kwargs: dict[str, Any] = {}
+    if node.get("type") in type_map:
+        kwargs["type"] = type_map[node["type"]]
+    if node.get("description"):
+        kwargs["description"] = node["description"]
+    if node.get("enum"):
+        kwargs["enum"] = list(node["enum"])
+    if node.get("properties"):
+        kwargs["properties"] = {k: _to_genai_schema(v) for k, v in node["properties"].items()}
+    if node.get("required"):
+        kwargs["required"] = list(node["required"])
+    if node.get("items"):
+        kwargs["items"] = _to_genai_schema(node["items"])
+    if node.get("nullable"):
+        kwargs["nullable"] = True
+    return types.Schema(**kwargs)
+
+
+def _to_genai_tools(tool: dict) -> list:
+    """Wrap a provider-agnostic tool dict ``{name, description, parameters}`` into
+    the ``google.genai`` ``Tool``/``FunctionDeclaration`` shape ADK expects."""
+    from google.genai import types
+
+    return [
+        types.Tool(
+            function_declarations=[
+                types.FunctionDeclaration(
+                    name=tool["name"],
+                    description=tool.get("description", ""),
+                    parameters=_to_genai_schema(tool["parameters"]),
+                )
+            ]
+        )
+    ]
+
+
+def _run_coro_blocking(coro: "Coroutine[Any, Any, _T]") -> _T:
     """Drive an async coroutine to completion from *synchronous* code, choosing
     the right loop for wherever the caller happens to be running.
 
@@ -445,6 +525,64 @@ def generate_text(config: "Config", prompt: str, role: Optional[str] = None) -> 
         result = _generate_text_impl(config, prompt)
         span.set_attribute("smart_assignment.response_chars", len(result))
         return result
+
+
+def generate_tool_call(
+    config: "Config", prompt: str, tool: dict, role: Optional[str] = None
+) -> "tuple[Optional[dict], str]":
+    """One-shot STRUCTURED generation: offer the model a single function whose
+    arguments ARE the answer, and return ``(call_args, text)``.
+
+    ``tool`` is a provider-agnostic declaration ``{name, description, parameters}``
+    where ``parameters`` is a small JSON-schema dict.
+
+    Why a tool instead of "reply with JSON": the direct SAGE agent is a
+    conversational agent that narrates when asked for JSON (returning prose a
+    downstream ``json.loads`` rejects), but it reliably emits *function calls* --
+    so handing it one tool is the dependable channel for structured output. On a
+    successful call ``call_args`` is the (SDK-repaired) arguments dict and ``text``
+    is usually empty; if the model narrates anyway, ``call_args`` is ``None`` and
+    ``text`` carries the prose for the caller to salvage/parse and log.
+
+    Only the sage backend uses the tool channel today (both the direct agent and
+    the LLM-Gateway sibling drive an ADK ``BaseLlm``). Other backends have no tool
+    path here yet and return ``(None, <generated text>)`` -- they gain real JSON
+    mode when the project moves to the gateway. Raises on backend failure; callers
+    guard with ``except Exception`` and fall back deterministically.
+    """
+    active_model = config.sage_model if config.llm_backend == "sage" else config.model
+    with tracing.llm_span(
+        config,
+        "llm.generate_tool_call",
+        backend=config.llm_backend,
+        model=active_model,
+        role=role or "",
+        prompt_chars=len(prompt),
+    ) as span:
+        call_args, text = _generate_tool_call_impl(config, prompt, tool)
+        span.set_attribute("smart_assignment.tool_called", call_args is not None)
+        span.set_attribute("smart_assignment.response_chars", len(text))
+        return call_args, text
+
+
+def _generate_tool_call_impl(
+    config: "Config", prompt: str, tool: dict
+) -> "tuple[Optional[dict], str]":
+    """Backend-routing body of ``generate_tool_call``. The sage backend offers the
+    tool through the ADK ``BaseLlm`` (direct agent or gateway); every other backend
+    has no tool channel yet, so it degrades to plain text generation."""
+    if config.llm_backend == "sage":
+        _maybe_install_sage_response_diagnostic(config)
+        llm = (
+            get_sage_gateway_llm(config.sage_model)
+            if config.use_sage_gateway
+            else get_sage_llm(config.sage_model)
+        )
+        return _run_coro_blocking(_sage_call_async(llm, prompt, _to_genai_tools(tool)))
+
+    # No tool channel on the other backends yet -> text only (JSON mode arrives
+    # with the LLM Gateway); the caller salvages/parses the text as before.
+    return None, _generate_text_impl(config, prompt)
 
 
 def _generate_text_impl(config: "Config", prompt: str) -> str:

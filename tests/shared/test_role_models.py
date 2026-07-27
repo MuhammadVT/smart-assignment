@@ -128,12 +128,14 @@ def test_route_slot_choice_uses_the_judgment_role_model(monkeypatch):
 
     captured = {}
 
-    def fake_generate_text(config, prompt):
+    # The route-slot choice now comes from a tool call: capture the model the
+    # judgment-role-scoped config resolved to, and return the decision as the
+    # tool's arguments (call_args, text).
+    def fake_generate_tool_call(config, prompt, tool, role=None):
         captured["model"] = config.model
-        return '{"chosen_index":0,"decision_summary":"ok",' \
-               '"primary_reasons":["r"],"citations":[]}'
+        return {"chosen_index": 0, "decision_summary": "ok", "primary_reasons": ["r"]}, ""
 
-    monkeypatch.setattr(llm_module, "generate_text", fake_generate_text)
+    monkeypatch.setattr(llm_module, "generate_tool_call", fake_generate_tool_call)
     cfg = Config(llm_backend="standard", model="base", role_models={ROLE_JUDGMENT: "judge-model"})
     generate_route_slot_choice(cfg, "prompt")
     assert captured["model"] == "judge-model"

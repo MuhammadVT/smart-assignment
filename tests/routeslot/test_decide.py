@@ -6,6 +6,8 @@ test_grounded_escalation.py. Offline -- the LLM is an injected fake."""
 
 from __future__ import annotations
 
+import json
+
 from smart_assignment.routeslot import decide_route_slot
 from smart_assignment.shared.config import Config
 from smart_assignment.shared.models import Decision
@@ -121,6 +123,70 @@ def test_grounded_pick_diverges_to_a_more_open_slot():
     assert "more open" in rec.recommended_window_rationale
     assert "Diverged" in rec.default_comparison
     assert rec.runner_up and "Alpha" in rec.runner_up  # runner-up rendered with its route name
+
+
+def test_grounded_pick_retries_once_on_a_non_json_reply():
+    # The observed failure: the model reasons correctly but replies in PROSE, so
+    # the reply won't parse. That is recoverable -- it earns one corrective retry
+    # (JSON only), not an immediate deterministic fallback.
+    cfg = _cfg(use_grounded_route_slot_pick=True)
+    calls = {"n": 0, "retry_prompt": ""}
+
+    def prose_then_json(config, prompt):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # Exactly what the sage agent did: prose -> JSONDecodeError at char 0.
+            raise json.JSONDecodeError("Expecting value", "Based on the options...", 0)
+        calls["retry_prompt"] = prompt
+        return choice_dict(
+            1,  # diverges to the more-open slot
+            runner_up_index=0,
+            primary_reasons=["RTE-B's slot is far more open (0.90), protecting incumbents."],
+            citations=[{"index": 1, "field": "slot_availability", "value": 0.90}],
+        )
+
+    rec = decide_route_slot(customer(), _evals(), cfg, choice_fn=prose_then_json)
+    assert calls["n"] == 2                             # retried once, didn't give up
+    assert rec.recommended_route_id == "RTE-B"         # the recovered grounded pick shipped
+    assert rec.grounded_fallback is not True
+    assert "more open" in rec.recommended_window_rationale
+    # The retry told the model exactly what to fix: return JSON only.
+    assert "JSON object" in calls["retry_prompt"] and "REJECTED" in calls["retry_prompt"]
+
+
+def test_grounded_pick_retries_once_on_a_malformed_choice_dict():
+    # The other shape failure: valid JSON that doesn't fit the schema (here it's
+    # missing chosen_index) -> RouteSlotChoiceParseError -> same one retry.
+    cfg = _cfg(use_grounded_route_slot_pick=True)
+    calls = {"n": 0}
+
+    def bad_then_good(config, prompt):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {"primary_reasons": ["no chosen_index here"]}  # fails parse
+        return choice_dict(0, runner_up_index=1)
+
+    rec = decide_route_slot(customer(), _evals(), cfg, choice_fn=bad_then_good)
+    assert calls["n"] == 2
+    assert rec.recommended_route_id == "RTE-A"
+    assert rec.grounded_fallback is not True
+
+
+def test_grounded_pick_falls_back_when_the_retry_is_also_non_json():
+    # One retry, not infinite: if the reply is STILL unparseable, fall back to the
+    # deterministic best -- never worse than the baseline.
+    cfg = _cfg(use_grounded_route_slot_pick=True)
+    calls = {"n": 0}
+
+    def always_prose(config, prompt):
+        calls["n"] += 1
+        raise json.JSONDecodeError("Expecting value", "still prose", 0)
+
+    rec = decide_route_slot(customer(), _evals(), cfg, choice_fn=always_prose)
+    assert calls["n"] == 2                             # tried exactly twice, then gave up
+    assert rec.recommended_route_id == "RTE-A"         # deterministic best
+    assert rec.grounded_fallback is True
+    assert rec.recommended_window_rationale is None
 
 
 def test_grounded_falls_back_to_deterministic_on_backend_error():

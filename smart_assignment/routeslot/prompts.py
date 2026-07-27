@@ -36,7 +36,11 @@ different route-slot, and if you diverge, say why.
 """
 
 _OUTPUT_CONTRACT = """\
-Reply with a SINGLE JSON object and nothing else (no markdown). Shape:
+Submit your decision by CALLING the `submit_route_slot_decision` function with the \
+fields below if it is available to you. Otherwise output a SINGLE JSON object and \
+NOTHING else -- no sentence before or after it, no markdown fences, no commentary; \
+your entire reply must start with `{{` and end with `}}`. Either way, do NOT narrate \
+your reasoning in prose (it goes inside the fields). The fields:
 
 {{
   "chosen_index": <index of the route-slot you pick>,
@@ -85,6 +89,8 @@ Rules (STRICT):
   write it as "<route_id> - <route_name>" using that option's own route_id and
   route_name -- always both together, never one alone.
 - Citable fact keys are exactly: {fields}.
+- REMEMBER: reply with the JSON object ONLY. Any text outside it -- even a single
+  sentence of explanation -- makes the whole reply unusable. Begin at `{{`.
 """.format(fields=", ".join(NUMERIC_FACT_KEYS))
 
 
@@ -96,7 +102,7 @@ def build_route_slot_prompt(packet: RouteSlotPacket) -> str:
 def build_route_slot_retry_prompt(packet: RouteSlotPacket, feedback: str) -> str:
     return (
         f"{build_route_slot_prompt(packet)}\n\n"
-        f"YOUR PREVIOUS REPLY FAILED VERIFICATION for these reasons:\n{feedback}\n"
+        f"YOUR PREVIOUS REPLY WAS REJECTED for these reasons:\n{feedback}\n"
         f"Return a corrected JSON object. Pick only an enumerated option index, keep the "
         f"verdict consistent with that pick, include the trade-off and runner-up when more "
         f"than one option exists, and cite every number you state."
@@ -125,7 +131,11 @@ say why.
 """
 
 _DECISION_OUTPUT_CONTRACT = """\
-Reply with a SINGLE JSON object and nothing else (no markdown). Shape:
+Submit your decision by CALLING the `submit_route_slot_decision` function with the \
+fields below if it is available to you. Otherwise output a SINGLE JSON object and \
+NOTHING else -- no sentence before or after it, no markdown fences, no commentary; \
+your entire reply must start with `{{` and end with `}}`. Either way, do NOT narrate \
+your reasoning in prose (it goes inside the fields). The fields:
 
 {{
   "decision": "RECOMMEND" | "ESCALATE",
@@ -178,6 +188,8 @@ Rules (STRICT):
 - Whenever you name a route, write it as "<route_id> - <route_name>" using that
   option's own route_id and route_name -- always both together, never one alone.
 - Citable fact keys are exactly: {fields}.
+- REMEMBER: reply with the JSON object ONLY. Any text outside it -- even a single
+  sentence of explanation -- makes the whole reply unusable. Begin at `{{`.
 """.format(fields=", ".join(NUMERIC_FACT_KEYS))
 
 
@@ -192,8 +204,105 @@ def build_route_slot_decision_prompt(packet: RouteSlotPacket) -> str:
 def build_route_slot_decision_retry_prompt(packet: RouteSlotPacket, feedback: str) -> str:
     return (
         f"{build_route_slot_decision_prompt(packet)}\n\n"
-        f"YOUR PREVIOUS REPLY FAILED VERIFICATION for these reasons:\n{feedback}\n"
+        f"YOUR PREVIOUS REPLY WAS REJECTED for these reasons:\n{feedback}\n"
         f"Return a corrected JSON object. Keep your decision and confidence, pick only an "
         f"enumerated option index, keep the verdict consistent with that pick, include the "
         f"trade-off and runner-up when more than one option exists, and cite every number."
     )
+
+
+# The route-slot decision as a callable FUNCTION. Handing a conversational backend
+# (the direct SAGE agent) one tool whose ARGUMENTS are the decision is the reliable
+# way to get structured output from it -- it narrates when asked for a JSON string
+# but readily emits a function call. The parameter shape mirrors the JSON output
+# contract above; `parse_route_slot_choice` still validates it, and it stays
+# provider-agnostic ({name, description, parameters}) so `shared/llm.py` can wrap it
+# for whichever backend is active. `decision`/`confidence` are optional so the SAME
+# tool serves both the pick-only and grounded-escalation prompts (the parser
+# defaults them to a confident RECOMMEND when absent).
+ROUTE_SLOT_DECISION_TOOL = {
+    "name": "submit_route_slot_decision",
+    "description": (
+        "Submit your final route-slot decision and its grounded rationale. Call this "
+        "exactly once. Every number you state must be a real fact from the option you "
+        "attribute it to and must also appear in `citations`."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "chosen_index": {
+                "type": "integer",
+                "description": "Index of the route-slot option you pick (an enumerated option).",
+            },
+            "decision": {
+                "type": "string",
+                "enum": ["RECOMMEND", "ESCALATE"],
+                "description": (
+                    "RECOMMEND to auto-assign the pick, ESCALATE to send it to a specialist."
+                ),
+            },
+            "confidence": {
+                "type": "string",
+                "enum": ["HIGH", "LOW"],
+                "description": "How sure you are of the decision.",
+            },
+            "decision_summary": {
+                "type": "string",
+                "description": (
+                    "One action line, e.g. 'assign <route_id> - <route_name> · <day> · <window>'."
+                ),
+            },
+            "primary_reasons": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "One short line per scored factor the chosen option carries "
+                    "(geographic_clustering, capacity_buffer, window_match when present, "
+                    "slot_availability), each citing that factor's own value."
+                ),
+            },
+            "key_tradeoff": {
+                "type": "string",
+                "description": (
+                    "What the pick gives up vs. the next-best option and why it is still "
+                    "the better call -- reference BOTH options' numbers."
+                ),
+            },
+            "runner_up": {
+                "type": "object",
+                "properties": {
+                    "index": {"type": "integer"},
+                    "why_not": {"type": "string"},
+                },
+                "description": (
+                    "The next-best option and the fact that tips the pick away from it; "
+                    "omit with a single option."
+                ),
+            },
+            "vs_deterministic_default": {
+                "type": "object",
+                "properties": {
+                    "verdict": {"type": "string", "enum": ["AGREE", "DIVERGE"]},
+                    "note": {"type": "string"},
+                },
+                "description": (
+                    "AGREE only when chosen_index equals the deterministic default, else "
+                    "DIVERGE with a justifying note."
+                ),
+            },
+            "citations": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "index": {"type": "integer"},
+                        "field": {"type": "string"},
+                        "value": {"type": "number"},
+                    },
+                },
+                "description": "Every number you state, each grounded to a real option fact.",
+            },
+        },
+        "required": ["chosen_index", "decision_summary", "primary_reasons"],
+    },
+}

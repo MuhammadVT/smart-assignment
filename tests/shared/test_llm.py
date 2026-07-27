@@ -322,6 +322,79 @@ def test_generate_via_sage_async_over_real_adk_litellm():
         ]
 
 
+def test_sage_call_async_extracts_tool_call_args_over_real_adk_litellm():
+    """The reliable structured channel: when the (sage) model answers by CALLING
+    the offered function, ``_sage_call_async`` must return its arguments as a dict.
+    Drives the REAL ADK ``LiteLlm`` through a fake litellm provider that returns
+    ``tool_calls`` in the exact shape ``SageLiteLlm`` produces (name + a JSON-string
+    ``arguments``) -- so this catches ADK response-shape drift, not just a hand fake."""
+    import litellm
+    from google.adk.models.lite_llm import LiteLlm
+    from litellm import Choices, CustomLLM, Message, ModelResponse
+
+    from smart_assignment.shared.llm import _sage_call_async, _to_genai_tools
+
+    class _ToolCallingProvider(CustomLLM):
+        async def acompletion(self, model, messages, model_response=None, **kwargs):
+            mr = model_response or ModelResponse()
+            mr.choices = [
+                Choices(
+                    message=Message(
+                        role="assistant",
+                        content=None,
+                        tool_calls=[
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "submit_route_slot_decision",
+                                    # A JSON *string*, exactly as the SDK repairs it.
+                                    "arguments": '{"chosen_index": 1, "decision": "RECOMMEND"}',
+                                },
+                            }
+                        ],
+                    )
+                )
+            ]
+            return mr
+
+    tool = {
+        "name": "submit_route_slot_decision",
+        "description": "submit",
+        "parameters": {"type": "object", "properties": {"chosen_index": {"type": "integer"}}},
+    }
+
+    litellm.custom_provider_map.append(
+        {"provider": "smart_assignment_tooltest", "custom_handler": _ToolCallingProvider()}
+    )
+    try:
+        llm = LiteLlm(model="smart_assignment_tooltest/model")
+        call_args, text = asyncio.run(_sage_call_async(llm, "prompt", _to_genai_tools(tool)))
+    finally:
+        litellm.custom_provider_map[:] = [
+            p
+            for p in litellm.custom_provider_map
+            if p.get("provider") != "smart_assignment_tooltest"
+        ]
+
+    assert call_args == {"chosen_index": 1, "decision": "RECOMMEND"}
+    assert text == ""  # a pure tool call carries no prose
+
+
+def test_sage_call_async_returns_text_when_the_model_narrates():
+    """The fallback path: no tool call, just prose -> (None, text) so the caller can
+    salvage/parse the narration."""
+    from smart_assignment.shared.llm import _sage_call_async
+
+    class FakeLlm:
+        async def generate_content_async(self, request, stream=False):
+            yield _llm_response_with_text("I recommend route 6032.")
+
+    call_args, text = asyncio.run(_sage_call_async(FakeLlm(), "prompt", tools=None))
+    assert call_args is None
+    assert text == "I recommend route 6032."
+
+
 def test_generate_via_sage_async_raises_on_error_response():
     """An error response surfaces as a RuntimeError so the caller falls back with a
     reason, instead of silently returning an empty string that fails JSON parsing."""

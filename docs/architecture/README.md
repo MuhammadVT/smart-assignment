@@ -208,6 +208,35 @@ integers carrying a unit or percent sign are checked. Any failure feeds the
 single corrective retry, then the deterministic fallback: never worse than
 before, only — on success — better explained.
 
+The **one corrective retry covers two failure modes, not just one** (shared by
+both the pick-only and grounded-escalation paths in `_grounded_choice`): a reply
+that fails *verification*, **and** a reply that won't *parse* into a choice at all.
+A parse/shape failure (`JSONDecodeError`/`RouteSlotChoiceParseError`) retries once
+with a "return JSON only" corrective rather than dropping straight to the
+deterministic floor. A *backend/credentials/transport* error is still **not**
+retried (retrying missing creds only doubles the latency) — it falls back
+immediately, logged.
+
+**How the choice is obtained — a tool call, not a JSON string.** The direct SAGE
+"generic agent" is a *conversational* agent: asked to "reply with a JSON object" it
+reliably **narrates** ("I recommend route 6032…"), which a downstream `json.loads`
+rejects, and the direct-agent API exposes no JSON/structured-output enforcement (its
+`response_schema` only selects the SAGE *envelope* — text vs. function_call — not a
+content schema). Prompt-nudging and the retry above lower the failure rate but can't
+eliminate it. So `routeslot/llm.py` gets structured output the way the agent
+actually cooperates: it offers **one function**, `submit_route_slot_decision`
+(`ROUTE_SLOT_DECISION_TOOL`, a provider-agnostic `{name, description, parameters}`
+mirroring the output contract), and uses the model's **call arguments** as the
+choice. `shared/llm.py`'s `generate_tool_call` drives this through the ADK `BaseLlm`
+(direct agent *and* LLM-Gateway sibling), returning `(call_args, text)`: on a tool
+call `call_args` is the SDK-repaired arguments dict; if the model narrates anyway,
+`call_args` is `None` and the prose is salvaged (strict → brace-slice →
+`json_repair`) and, failing that, logged. Non-sage backends have no tool channel yet
+and fall back to text + extraction — they gain real JSON mode when the project moves
+to the gateway. Net: the grounded layer fires on the conversational SAGE backend
+instead of silently degrading, with every guarantee (deterministic floor,
+verification, retry, fallback) intact.
+
 **Threshold.** `route_slot_score_threshold` defaults to `0.55`, a touch below the
 route-only `0.60`: dropping the 0.6 window neutral and adding availability shifts
 the score distribution, and ops asked to err slightly toward recommending. On the

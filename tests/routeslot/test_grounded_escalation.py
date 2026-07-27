@@ -8,6 +8,8 @@ is an injected fake.
 
 from __future__ import annotations
 
+import json
+
 from smart_assignment.routeslot import decide_route_slot
 from smart_assignment.routeslot.evidence import build_route_slot_packet
 from smart_assignment.shared.config import Config
@@ -176,6 +178,39 @@ def test_unanimous_consensus_escalates_a_mixed_batch():
 
 
 # --- fallbacks (never worse than the deterministic threshold baseline) --------
+
+
+def test_grounded_escalation_retries_once_on_a_non_json_reply():
+    """A prose (non-JSON) reply on the escalation path is recoverable too: retry
+    once for JSON only rather than dropping straight to the threshold fallback."""
+    calls = {"n": 0}
+
+    def prose_then_json(config, prompt):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise json.JSONDecodeError("Expecting value", "Based on the options...", 0)
+        return _recommend(
+            0, runner_up_index=1,
+            citations=[{"index": 0, "field": "reference_weighted_score", "value": 0.80}],
+        )
+
+    rec = decide_route_slot(customer(), _evals(), _cfg(), choice_fn=prose_then_json)
+    assert calls["n"] == 2                        # one call + one corrective retry
+    assert rec.decision is Decision.RECOMMENDED   # the recovered grounded recommend shipped
+    assert rec.recommended_route_id == "RTE-A"
+    assert rec.grounded_fallback is not True
+
+
+def test_grounded_escalation_falls_back_when_the_retry_is_also_non_json():
+    """Still exactly one retry per sample: a persistently unparseable reply falls
+    back to the deterministic threshold decision (never worse than the baseline)."""
+    def always_prose(config, prompt):
+        raise json.JSONDecodeError("Expecting value", "still prose", 0)
+
+    rec = decide_route_slot(customer(), _evals(), _cfg(), choice_fn=always_prose)
+    assert rec.decision is Decision.RECOMMENDED   # deterministic best clears 0.55
+    assert rec.recommended_route_id == "RTE-A"
+    assert rec.grounded_fallback is True
 
 
 def test_backend_error_falls_back_to_deterministic_threshold():
