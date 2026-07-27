@@ -114,7 +114,6 @@ def build_bundle(
     skipped (logged), so a partial batch still yields a valid bundle."""
     from eval.case_source import SkippedCase, candidate_to_case
     from smart_assignment.pipeline import run_slot_recommendation
-    from smart_assignment.reasoning import DeterministicReasoner
 
     world: Dict[Tuple[str, str], Route] = {}
     geocode: Dict[str, GeoPoint] = {}
@@ -130,7 +129,7 @@ def build_bundle(
             continue
 
         customer = case.customer
-        run_kwargs: Dict[str, Any] = {"config": config, "reasoner": DeterministicReasoner()}
+        run_kwargs: Dict[str, Any] = {"config": config}
         if geocoder is not None:
             run_kwargs["geocoder"] = geocoder
         try:
@@ -195,8 +194,9 @@ def build_bundle(
         "captured_with": {
             "backend": config.llm_backend,
             "model": config.resolved_model(ROLE_ROOT_AGENT),
-            "total_score_threshold": config.total_score_threshold,
-            "use_route_slot_scoring": config.use_route_slot_scoring,
+            "route_slot_score_threshold": config.route_slot_score_threshold,
+            "use_grounded_route_slot_pick": config.use_grounded_route_slot_pick,
+            "use_grounded_route_slot_escalation": config.use_grounded_route_slot_escalation,
         },
     }
     return list(world.values()), geocode, cases, manifest

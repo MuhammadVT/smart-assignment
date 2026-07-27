@@ -13,7 +13,6 @@ from html import escape as html_escape
 
 from smart_assignment.mock_customers import SAMPLE_CUSTOMERS
 from smart_assignment.pipeline import run_slot_recommendation
-from smart_assignment.reasoning import DeterministicReasoner
 from smart_assignment.reporting.page import (
     build_map_data,
     build_page,
@@ -25,9 +24,8 @@ from smart_assignment.shared.models import Decision
 
 
 def _results(config):
-    reasoner = DeterministicReasoner()
     return [
-        run_slot_recommendation(c, config=config, reasoner=reasoner) for c in SAMPLE_CUSTOMERS
+        run_slot_recommendation(c, config=config) for c in SAMPLE_CUSTOMERS
     ]
 
 
@@ -58,10 +56,19 @@ def test_page_reflects_live_decisions_and_reasoning():
     config = Config()
     results = _results(config)
     html = build_page(results, config)
-    # Every decision's actual reasoning text must be present (no drift) --
-    # HTML-escaped, since the natural-language text contains apostrophes.
+    # Every decision's actual explanation must be present (no drift) --
+    # HTML-escaped, since the natural-language text contains apostrophes. A
+    # recommendation surfaces the STRUCTURED explanation (summary + each
+    # reason); an escalation surfaces its flat reasoning line.
     for result in results:
-        assert html_escape(result.recommendation.reasoning) in html
+        rec = result.recommendation
+        if rec.decision is Decision.RECOMMENDED:
+            assert rec.decision_summary and html_escape(rec.decision_summary) in html
+            assert rec.primary_reasons
+            for reason in rec.primary_reasons:
+                assert html_escape(reason) in html
+        else:
+            assert html_escape(rec.reasoning) in html
     # All three outcome states are exercised by the sample set.
     decisions = {r.recommendation.decision for r in results}
     assert Decision.RECOMMENDED in decisions
@@ -70,8 +77,7 @@ def test_page_reflects_live_decisions_and_reasoning():
 
 
 def test_page_reflects_configured_weights():
-    config = Config()
-    config.factor_weights["geographic_clustering"] = 0.50
+    config = Config(rs_weight_geo=0.50)
     html = build_page(_results(config), config)
     assert "weight 0.50" in html  # picked up from config, not hard-coded
 
@@ -165,53 +171,49 @@ def test_frontend_tab_renders_sc_facing_slot_view_per_prospect():
 def test_scoring_section_shows_real_formulas():
     config = Config()
     html = build_page(_results(config), config)
-    # The scoring dimensions and their code formulas are spelled out.
-    assert "Exactly how each dimension is scored" in html
+    # The decision unit is the (route, slot) pair, and each factor's code
+    # formula is spelled out.
+    assert "Every route-<em>slot</em> is scored on its own" in html
     assert "avg_miles_to_stops" in html
-    assert "preferred_window_minutes" in html
     # Slot match gates on the day-of-week term -- wrong day (or no time
     # overlap at all) scores 0, it's not a source of partial credit.
-    assert "route_day</b> ≠ <b>preferred_day" in html
+    assert "The day is a gate" in html
     assert "Slot match (day + time)" in html
+    # With no stated preference the factor is dropped entirely -- there is no
+    # arbitrary neutral value standing in for a fact nobody supplied.
+    assert "Dropped entirely" in html
+    # Slot openness is tier-weighted contention, the fourth (slot-level) factor.
+    assert "Slot availability" in html
+    assert "harm(incumbent)" in html
     # Capacity buffer is a flat-then-decay curve anchored on the safety margin,
     # not a straight "more headroom always wins" ratio.
     assert "capacity_buffer_safety_margin" in html
-    assert "up to 75% full" in html  # default margin -> 90% ceiling - 15pp
-    assert "15%-point safety margin" in html
-    # total_score IS the gating number -- there's no separate confidence
-    # formula, and a route's own score is never discounted for a close
-    # runner-up (see reasoning.compute_total_score).
-    assert "total_score = (" in html
-    assert "no separate" in html and "confidence" in html
-    assert "Total score threshold (auto-assign bar)" in html
+    assert "75% full" in html  # default margin -> 90% ceiling - 15pp
+    assert "Route-slot auto-assign bar" in html
 
-    # The per-step simulator payload shows the scoring arithmetic for a scored route.
+    # The per-step simulator payload shows the scoring arithmetic for each
+    # (route, slot) option, with the math checkable on demand.
     marker = '<script type="application/json" id="workflow-data">'
     start = html.index(marker) + len(marker)
     payload = json.loads(html[start : html.index("</script>", start)])
 
     bayou_key = SAMPLE_CUSTOMERS[0].lookup_key
-    galleria_key = SAMPLE_CUSTOMERS[1].lookup_key
     woodlands_key = SAMPLE_CUSTOMERS[3].lookup_key
 
-    # Bayou stays comfortably under the safe line -> flat branch.
     bayou_joined = " ".join(payload[bayou_key]["steps"][3]["lines"])
     assert payload[bayou_key]["steps"][3]["title"] == "Score & Rank"
-    assert "clustering = clamp(" in bayou_joined
-    assert "total =" in bayou_joined
-    assert "slot match = day(" in bayou_joined  # day-of-week gates the slot score
-    assert "capacity buffer = 1.00 flat" in bayou_joined
+    assert "scored as its own (route, slot) option" in bayou_joined
+    assert "Route-slot score" in bayou_joined
+    assert "clamp(1 − avg_mi ÷" in bayou_joined
+    # Slot openness is shown per option, tier-weighted.
+    assert "1 ÷ (1 + Σ tier-harm over overlapping stops)" in bayou_joined
+    # Bayou stays comfortably under the safe line -> the flat capacity branch.
+    assert "1.00 if util ≤ 75%" in bayou_joined
 
     # Woodlands is mock-tuned to land in the 75-90% decay band, so the demo
-    # actually exercises the decaying branch, not just the flat one.
+    # actually exercises the decaying branch too.
     woodlands_joined = " ".join(payload[woodlands_key]["steps"][3]["lines"])
-    assert "capacity buffer = clamp((" in woodlands_joined
-
-    # Galleria is mock-tuned so her only feasible route's OWN score is
-    # mediocre -- a genuine low-total-score escalation, not a tie-breaking
-    # artifact between two good options.
-    galleria_joined = " ".join(payload[galleria_key]["steps"][3]["lines"])
-    assert "capacity buffer = clamp((" in galleria_joined
+    assert "else clamp((90% − util) ÷ 15%)" in woodlands_joined
 
     # Intake step now surfaces the preferred slot (day + time).
     intake_lines = " ".join(payload[bayou_key]["steps"][0]["lines"])
@@ -293,7 +295,7 @@ def test_build_map_data_carries_slot_rationale():
     route, not the slot."""
     from smart_assignment.shared.timeutils import overlap_minutes as _overlap
 
-    config = Config(use_route_slot_scoring=True)
+    config = Config()
     result = _results(config)[0]  # a clean recommend
     rec = result.recommendation
     winner = next(
@@ -407,7 +409,7 @@ def test_route_slot_cards_and_payload_are_slot_level():
         build_map_data,
     )
 
-    config = Config(use_route_slot_scoring=True)
+    config = Config()
     bayou = _results(config)[0]  # a clean recommend with feasible routes + slots
     feasible = [e for e in bayou.candidates_considered if e.feasible]
     assert feasible and any(e.scored_slots for e in feasible)
@@ -449,7 +451,7 @@ def test_route_slot_card_shows_unscored_slot_match_without_preference():
     so the user knows it exists and why it wasn't scored."""
     from smart_assignment.reporting.page import _example_card, _route_cards
 
-    config = Config(use_route_slot_scoring=True)
+    config = Config()
     # Galleria: a sample with preferred_slot=None but a feasible route to score.
     galleria = _results(config)[1]
     assert galleria.customer.preferred_slot is None
@@ -494,7 +496,7 @@ def test_route_slot_page_renders_availability_and_new_threshold():
     """With route-slot scoring on, the page explains the (route, slot) unit, the
     availability factor, and the route-slot auto-assign bar -- not the stale
     route-only narrative."""
-    config = Config(use_route_slot_scoring=True)
+    config = Config()
     html = build_page(_results(config), config)
     assert html.startswith("<!DOCTYPE html>")
     # The route-slot explainer and factor are present...

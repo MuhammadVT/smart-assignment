@@ -6,7 +6,7 @@ may cite. Nothing here calls an LLM or a geocoder.
 A deterministic token-overlap **similarity** is attached to every candidate and
 the highest-similarity candidate is offered as the ``deterministic_choice_index``
 -- the same "demote the heuristic to a grounded reference + fallback" move the
-other layers use (see slotpick's ``blended_score``). It is a strong default the
+other layers use (see ``routeslot``'s reference score). It is a strong default the
 model may agree with or, with justification, diverge from; it is also the pick
 used when the LLM path fails.
 """

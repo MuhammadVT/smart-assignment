@@ -30,7 +30,7 @@ get_llm(config)
     Returns the value for an ADK LlmAgent ``model=`` parameter.
 
 generate_text(config, prompt)
-    One-shot content generation — used by LLMReasoner so that path also flows
+    One-shot content generation — used by the grounded layers so they also flow
     through the same backend.
 """
 
@@ -467,7 +467,7 @@ def _generate_text_impl(config: "Config", prompt: str) -> str:
         )
         return (resp.choices[0].message.content or "").strip()
 
-    # bare Gemini model name — matches the original LLMReasoner implementation
+    # bare Gemini model name — the original single-model implementation
     from google import genai  # type: ignore[import-untyped]
 
     client = genai.Client()

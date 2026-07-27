@@ -2,12 +2,16 @@
 Unit tests for the location- and time-aware delivery-slot selector
 (shared/slot_selection.py). Deterministic, fast, no LLM or network.
 
-Three steps are exercised:
+Exercised here:
   * identify_available_slots() — cluster the nearest committed stops by time and
     emit one candidate per cluster, centered on the proximity-weighted midpoint.
   * select_candidate_slots() — the top-N menu, always keeping any candidate that
     overlaps a stated preference.
-  * recommend_slot() — the single pick, blending preference with fit/contention.
+  * best_preference_overlap() — the reference "best achievable overlap" fact.
+
+There is no single-slot pick to test: the winning (route, slot) pair is chosen
+by shared.scoring.score_route_slot over the whole menu (see
+tests/routeslot/test_scoring.py).
 """
 
 from __future__ import annotations
@@ -19,12 +23,10 @@ from smart_assignment.shared.models import DayOfWeek, GeoPoint, Route, RouteStop
 from smart_assignment.shared.slot_selection import (
     SLOT_BASIS_BETWEEN_STOPS,
     SLOT_BASIS_LEAST_CONTENDED,
-    SLOT_BASIS_NONE,
-    SLOT_BASIS_PREFERENCE,
+    best_preference_overlap,
     centered_window,
     identify_available_slots,
     nearest_neighbors,
-    recommend_slot,
     select_candidate_slots,
     stop_reference_time,
 )
@@ -217,53 +219,40 @@ def test_candidate_count_is_configurable():
     assert len(menu) == 2
 
 
-# --- recommend_slot: the final pick -----------------------------------------
+# --- best_preference_overlap: the reference fact ----------------------------
 
 
-def test_recommend_no_preference_takes_the_best_quality_candidate():
+def test_best_overlap_is_the_maximum_across_the_whole_menu():
+    # A morning cluster and an afternoon cluster; the preference covers the
+    # afternoon one. The fact must report the BEST overlap available, even
+    # though the morning candidate ranks higher on fit.
     stops = [
-        _stop(29.75005, -95.36000, AFTERNOON),  # very close -> afternoon dominates
-        _stop(29.9000, -95.5000, MORNING),      # far
-    ]
-    options = identify_available_slots(PROSPECT, _route([], stops), Config())
-    menu = select_candidate_slots(options, None, Config())
-    sel = recommend_slot(menu, preferred_window=None, config=Config())
-    assert _mins(time(12, 0)) < _mins(sel.window[0]) or sel.window[0] >= time(12, 0)
-    assert sel.overlap_minutes == 0
-    assert sel.basis == SLOT_BASIS_BETWEEN_STOPS
-
-
-def test_recommend_blends_toward_a_preference_overlapping_candidate():
-    stops = [
-        _stop(29.7505, -95.3600, (time(8, 0), time(9, 0))),      # morning cluster
+        _stop(29.7505, -95.3600, (time(8, 0), time(9, 0))),      # morning, closest
         _stop(29.7503, -95.3600, (time(8, 30), time(9, 30))),
         _stop(29.7498, -95.3600, (time(13, 30), time(14, 30))),  # afternoon
     ]
+    pref = (time(13, 0), time(15, 30))
     options = identify_available_slots(PROSPECT, _route([], stops), Config())
-    menu = select_candidate_slots(options, (time(13, 0), time(15, 30)), Config())
-    sel = recommend_slot(menu, preferred_window=(time(13, 0), time(15, 30)), config=Config())
-    assert sel.basis == SLOT_BASIS_PREFERENCE
-    assert sel.overlap_minutes > 0
-    assert sel.window[0] >= time(12, 0)  # the afternoon candidate
+    menu = select_candidate_slots(options, pref, Config())
+    assert best_preference_overlap(menu, pref) > 0
 
 
-def test_recommend_still_returns_a_slot_when_preference_cannot_be_met():
+def test_best_overlap_is_zero_when_the_preference_cannot_be_met():
     # Afternoon-only neighbourhood; a morning preference can't be honored, but
-    # the route is NOT dropped -- it still gets its afternoon slot, overlap 0.
+    # the route is NOT dropped -- it still offers its afternoon slot.
     stops = [_stop(29.7501, -95.3601, AFTERNOON)]
     options = identify_available_slots(PROSPECT, _route([], stops), Config())
     menu = select_candidate_slots(options, MORNING, Config())
-    sel = recommend_slot(menu, preferred_window=MORNING, config=Config())
-    assert sel.window is not None
-    assert sel.overlap_minutes == 0
-    assert sel.basis == SLOT_BASIS_BETWEEN_STOPS
+    assert menu
+    assert best_preference_overlap(menu, MORNING) == 0
 
 
-def test_recommend_on_empty_menu_returns_no_window():
-    sel = recommend_slot([], preferred_window=MORNING, config=Config())
-    assert sel.window is None
-    assert sel.basis == SLOT_BASIS_NONE
-    assert sel.overlap_minutes == 0
+def test_best_overlap_is_zero_without_a_preference_or_a_menu():
+    stops = [_stop(29.7501, -95.3601, AFTERNOON)]
+    options = identify_available_slots(PROSPECT, _route([], stops), Config())
+    menu = select_candidate_slots(options, None, Config())
+    assert best_preference_overlap(menu, None) == 0
+    assert best_preference_overlap([], MORNING) == 0
 
 
 def test_slot_window_minutes_is_configurable():

@@ -1,7 +1,7 @@
 """
 Data-source resolution for route_capacity_client: the SMART_ASSIGNMENT_DATA_SOURCE
-knob (mock | cache | live_sql, default cache), the deprecated ROUTE_SOURCE alias,
-and the graceful mock fallback when a requested cache snapshot is absent.
+knob (mock | cache | live_sql, default cache) and the graceful mock fallback when
+a requested cache snapshot is absent.
 """
 
 from __future__ import annotations
@@ -11,13 +11,11 @@ import pytest
 from smart_assignment.integrations import route_capacity_client as rc
 
 _DATA = "SMART_ASSIGNMENT_DATA_SOURCE"
-_LEGACY = "SMART_ASSIGNMENT_ROUTE_SOURCE"
 
 
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
     monkeypatch.delenv(_DATA, raising=False)
-    monkeypatch.delenv(_LEGACY, raising=False)
     rc.clear_route_cache()
     yield
     rc.clear_route_cache()
@@ -39,19 +37,6 @@ def test_data_source_resolution(monkeypatch, value, expected):
     if value is not None:
         monkeypatch.setenv(_DATA, value)
     assert rc._data_source() == expected
-
-
-def test_legacy_route_source_is_honored_and_maps_prepared_to_live_sql(monkeypatch):
-    monkeypatch.setenv(_LEGACY, "prepared")
-    assert rc._data_source() == rc.SOURCE_LIVE_SQL
-    monkeypatch.setenv(_LEGACY, "mock")
-    assert rc._data_source() == rc.SOURCE_MOCK
-
-
-def test_data_source_takes_precedence_over_legacy(monkeypatch):
-    monkeypatch.setenv(_DATA, "mock")
-    monkeypatch.setenv(_LEGACY, "prepared")
-    assert rc._data_source() == rc.SOURCE_MOCK
 
 
 def test_mock_source_returns_the_demo_routes(monkeypatch):

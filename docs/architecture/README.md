@@ -25,7 +25,7 @@ and `smart_assignment/prompts.py` for the instruction that enforces this.
 ## Delivery-slot selection (`shared/slot_selection.py`)
 
 The prospect should be delivered *when the truck is already in their
-neighborhood*, inferred from the route's nearest committed stops. Three
+neighborhood*, inferred from the route's nearest committed stops. Two
 deterministic steps:
 
 ```
@@ -37,98 +37,50 @@ identify_available_slots   nearest committed stops -> group by time (a morning
                            the closer ones). No customer preference here.
 select_candidate_slots     keep the top-N per route by quality (fit + low
                            contention), but ALWAYS keep any candidate that
-                           overlaps a stated preference -> this is the menu.
-recommend_slot             pick one from the menu with a soft blend of
-                           preference overlap + fit + low contention.
+                           overlaps a stated preference ON THE PREFERRED DAY
+                           -> this is the menu.
 ```
+
+There is deliberately **no "pick one slot" step**. This module only enumerates;
+the winner is chosen by scoring every (route, slot) pair (below), where the
+customer's preference is one weighted, day-gated factor among four. Preference
+therefore influences the outcome through exactly one auditable weight
+(`RS_WEIGHT_WINDOW`) rather than compounding across a menu blend and a score.
 
 This replaced an earlier version that snapped the prospect to a route's nearest
 *existing* window and anchored the slot at that window's start. The candidate
 menu (`EvalContext.available_slots`, each `SlotOption` carrying its
-`anchor_time`, `fit_score`, `committed_overlap`, `basis`) is exactly the set a
-future recommendation LLM would reason over to pick the best slot.
+`anchor_time`, `fit_score`, `committed_overlap`, `basis`) is exactly the set the
+decision layer — deterministic or grounded — reasons over.
+
+`EvalContext.window_overlap_minutes` is the best overlap *any* candidate in the
+menu achieves with the preferred window. It is a reference fact cited in triage
+briefs, never a decision input.
+
+**The preference is day-gated once, up front.** A preference is always a
+(day, window) pair, so `constraints.applicable_preferred_window` returns `None`
+for a route running on a day the customer didn't ask for — and the menu's
+always-keep rule and the overlap fact both then behave as "no preference". Only
+same-day routes can earn preference credit, exactly as
+`scoring._slot_window_match` already gates the `window_match` factor. Without
+that gate a Wednesday route scored a time-of-day match against a Tuesday
+preference.
 
 **Phase A/B seam:** `stop_reference_time` is the single function that turns a
 committed stop into a "when is the truck near here" clock value — today the TW1
 window midpoint, later a real planned-arrival ETA (and, with a stop *sequence*,
 the interpolation becomes true bracketing between the two sequential stops the
 prospect is inserted between) — with no caller change. Knobs:
-`SMART_ASSIGNMENT_SLOT_{NEIGHBORS,CLUSTER_GAP,WINDOW_MINUTES,CANDIDATES,WEIGHT_*}`.
-
-## Grounded slot selection (`slotpick/` package)
-
-The deterministic `recommend_slot` blend above is auditable but its weights
-(`SLOT_WEIGHT_{FIT,CONTENTION,PREFERENCE}`) are hand-picked and can't adapt to a
-situation the weights didn't anticipate. When `Config.use_grounded_slot_selection`
-is on (env `SMART_ASSIGNMENT_USE_GROUNDED_SLOT_SELECTION`, default **off**), an LLM
-picks the final window instead — but only from the *same* deterministically
-enumerated menu, and only by index. It reasons over the evidence; it never
-generates a window.
-
-The weighted blend is **demoted, not removed**. Its per-candidate `blended_score`
-and the index it would pick on its own (`deterministic_choice_index`) ride along
-in the evidence packet as *reference* — a strong default the model is told to
-agree with unless the other facts clearly justify diverging (and to say why in
-its rationale when it does). And it stays the **fallback**: any parse/verify
-failure or backend error reverts to exactly that blended pick. So the weights go
-from being the sole, opaque decider to one grounded input among several, with the
-LLM doing the reasoning over the valid set — while the auditable heuristic remains
-the floor.
-
-This is the same **constrained-option + grounded + deterministic-fallback**
-pattern as the judgment and triage layers, applied to the slot pick:
-
-```
-route already chosen (route/score/decision are FINAL and untouched)
-        |
-        v
-build_slot_packet   enumerate the winning route's available_slots -> for each,
- (evidence.py)      index + window + anchor_time + basis + numeric facts
-                    (fit_score, committed_overlap, preference_overlap_minutes,
-                    blended_score) + deterministic_choice_index
-        |
-        v
-generate_slot_choice  LLM returns {chosen_index, rationale, citations[]}
- (prompts + llm.py)    -- "pick by index from this menu, cite the facts"
-        |
-        v
-parse_slot_choice   strict shape (schema.py); one retry on parse/verify failure
-verify_choice       chosen_index in range AND every cited (index, field, value)
- (verifier.py)      matches the packet within tolerance -> no fabricated numbers
-        |
-   ok / fail
-        v
-refine_slot         on OK: rewrite recommendation.recommended_window / _basis /
- (selector.py)      _window_rationale to the model's pick.
-                    on fail / backend error: keep the deterministic blended pick
-                    (logs a warning). Never worse than the flag being off.
-```
-
-`GroundedSlotSelector` wraps the call/parse/verify/fallback; `DeterministicSlotSelector`
-is the trivial "return the blended `chosen_window`" default. `refine_slot(recommendation,
-evaluations, customer, config, selector=None)` locates the winning route by
-`recommended_route_id` and *only re-orders that route's already-computed candidate
-slots* — it never changes the route, score, or decision, and is a no-op when there
-is no recommended route (e.g. a no-feasible escalation) or the flag is off.
-
-It's deliberately lightweight — a single grounded call + verify + fallback, no
-resampling (unlike escalation-side judgment) — because a slot pick from a small
-valid menu is low-stakes: the worst case is a suboptimal-but-feasible window, and
-the deterministic pick is always there as the floor. Wired in two places behind the
-flag: `pipeline.run_slot_recommendation` and the conversational
-`tools/slot_recommendation.recommend_or_escalate` (which also serializes
-`recommended_window_rationale`).
+`SMART_ASSIGNMENT_SLOT_{NEIGHBORS,CLUSTER_GAP,WINDOW_MINUTES,CANDIDATES}` and
+`SMART_ASSIGNMENT_SLOT_WEIGHT_{FIT,CONTENTION}`.
 
 ## Route-slot scoring (`routeslot/` package)
 
-The layers above have a blind spot: scoring ranks **routes**, and slot contention
-only enters *after* a route is chosen (slotpick). So a route can win on capacity
-and clustering while its only workable slot is densely shared by high-value
-customers — and the route ranker can't see that. When
-`Config.use_route_slot_scoring` is on (env `SMART_ASSIGNMENT_USE_ROUTE_SLOT_SCORING`,
-default **off** in code, on in `.env.example`), the **decision unit becomes the
+Ranking **routes** alone has a blind spot: a route can win on capacity and
+clustering while its only workable slot is densely shared by high-value
+customers, and a route-level ranker can't see that. So the **decision unit is the
 (route, slot) pair**: every candidate slot on every feasible route is scored
-separately, so slot availability influences which *route* wins.
+separately, and slot availability influences which *route* wins.
 
 Two factor levels (`shared/scoring.score_route_slot`):
 
@@ -167,10 +119,10 @@ decide_route_slot         non-feasible cases ALWAYS escalate deterministically; 
                             · feasible route-slots:
                                – flag ON (default): the LLM decides over ALL feasible
                                  route-slots (see below)
-                               – flag OFF (rollback): the 0.55 bar gates it; none ≥ bar
+                               – flag OFF: the 0.55 bar gates it; none ≥ bar
                                  -> ESCALATED_LOW_SCORE (deterministic best proposed, NO
                                  llm call); ≥1 ≥ bar -> RECOMMENDED, LLM picks among the
-                                 eligible (above-bar) menu. ABSORBS the slotpick pass.
+                                 eligible (above-bar) menu when pick-grounding is on.
 ```
 
 **LLM-decided escalation (`use_grounded_route_slot_escalation`, default on).** The
@@ -186,18 +138,15 @@ below-bar one** — so the k-try guardrail matters: a confident RECOMMEND ships 
 verified call; an ESCALATE or a LOW-confidence RECOMMEND is resampled
 `judgment_sample_count` times and must reach `judgment_consensus` (unanimous/majority)
 to auto-assign, else it escalates (`ESCALATED_LOW_SCORE`, distinct review_reason,
-strongest option proposed, all reasoned takes in `alternative_takes`). This is the
-same sampling+consensus machinery as `judgment/`, applied to the route-slot unit. On
+strongest option proposed, all reasoned takes in `alternative_takes`). On
 **any** mechanical/verification failure it falls back to the deterministic threshold
-decision, so it is never worse than the bar-gated baseline. Set the flag off to
-reproduce the prior threshold-gated behavior exactly (the LLM then only picks among
-above-bar options, as the box's rollback branch describes).
+decision, so it is never worse than the bar-gated baseline. Set the flag off to gate
+on the bar instead (the LLM then only picks among above-bar options, as the box's
+flag-off branch describes).
 
 This is the same **constrained-option + grounded + deterministic-fallback**
-pattern as judgment/triage/slotpick, applied to the route-slot unit; the weighted
-total per route-slot is the reference and the fallback. The prior route-only path
-(scoring, `judgment`, `slotpick`) is **untouched** and remains the rollback when
-the flag is off — flag-off reproduces prior output exactly.
+pattern as `triage/` and `address_resolve/`, applied to the route-slot unit; the
+weighted total per route-slot is the reference and the deterministic fallback.
 
 **Structured explanation (`routeslot/schema.py`).** A one-line rationale can't
 carry the *trade-off* an ops manager needs to trust an auto-assign, so on a
@@ -233,8 +182,9 @@ lead with the summary, give the reasons, and state the trade-off vs. the runner-
 — so the web-app recommendation reads the same way the page does, not as a
 one-sentence verdict.
 
-Because this rides on `use_route_slot_scoring` (opt-in, default off), the flag-off
-route-only path never populates these fields and its output is unchanged.
+These fields are populated for every recommendation: a deterministic structured
+floor is always built from the score breakdown, and a verified grounded choice
+replaces it with the model's own reasoned prose.
 
 **Naming routes.** Everywhere a route is named to the user — the deterministic
 narrative (`decision_summary`, `runner_up`, `reasoning`, the rejected/infeasible
@@ -341,7 +291,7 @@ resolve_address             the LLM picks a candidate BY INDEX with a cited
 `resolve_address` is a **`FunctionTool`** (not a sub-agent): the choice is a
 constrained, verifiable, index-based selection whose output is checked
 deterministically, so it belongs in the grounded-function family
-(`judgment`/`slotpick`/`routeslot`), not the `AgentTool` family (which is for the
+(`routeslot`/`address_resolve`), not the `AgentTool` family (which is for the
 free-form triage brief). The tool only ever returns a **suggestion**: on a hit it
 returns `needs_confirmation` with the suggested address + alternatives, and the
 instruction (`prompts.py`, `ADDRESS_RESOLUTION_GUIDANCE`) requires the agent to
@@ -370,9 +320,7 @@ without changing any call site's logic. Roles and their env overrides:
 |---|---|---|
 | `root_agent` | the conversational `LlmAgent` | `SMART_ASSIGNMENT_MODEL_ROOT_AGENT` |
 | `triage` | the escalation-triage sub-agent | `SMART_ASSIGNMENT_MODEL_TRIAGE` |
-| `judgment` | the grounded recommend/escalate decision | `SMART_ASSIGNMENT_MODEL_JUDGMENT` |
-| `reasoning` | the LLM-narrated reasoning trace (`LLMReasoner`) | `SMART_ASSIGNMENT_MODEL_REASONING` |
-| `slotpick` | the grounded delivery-slot pick (`slotpick/` package) | `SMART_ASSIGNMENT_MODEL_SLOTPICK` |
+| `judgment` | the grounded route-slot decision (`routeslot/` package) | `SMART_ASSIGNMENT_MODEL_JUDGMENT` |
 | `address_resolve` | the grounded address-candidate pick (`address_resolve/` package) | `SMART_ASSIGNMENT_MODEL_ADDRESS_RESOLVE` |
 
 `for_role` returns a copy of the config with the *active* model field overridden
@@ -463,15 +411,13 @@ The callback always runs, so ungrounded figures are flagged for the specialist
 even if the agent skipped the self-check. It only *annotates* (never silently
 drops the brief), and is defensively wrapped so it can never break the agent —
 triage is advisory and human-reviewed, so a visible caveat is the right
-guarantee (vs. the judgment layer, which hard-rejects + falls back because it
-gates an auto-assign decision).
+guarantee (vs. the route-slot decision layer, which hard-rejects + falls back
+because it gates an auto-assign decision).
 
-Reasoning (the natural-language trace on the final recommendation) is
-produced deterministically inside `recommend_or_escalate` and then narrated
-by the agent; the pipeline's own optional LLM-narrated reasoner
-(`reasoning.LLMReasoner`, with a deterministic fallback) is a separate,
-lower-level option used when calling `pipeline.run_slot_recommendation(...)`
-directly (e.g. `scripts/run_local.py`), not by the conversational agent.
+Reasoning (the natural-language trace on the final recommendation) is produced
+inside the route-slot decision — a deterministic structured floor
+(`_apply_deterministic_narrative`), replaced by the model's own reasoned prose
+when a grounded choice verifies — and then narrated by the agent.
 
 No image file is included in this package — generate one (e.g. via the
 ADK Web UI's trace view, or any diagramming tool) and drop it here as
@@ -815,11 +761,11 @@ geocoder env it pins). This closes the flywheel: production feedback (or a
 synthetic design) → an anonymized, self-contained golden dataset → the current
 model scored against it, automatically, in CI.
 
-## Step 5, two ways: weighted-sum vs. grounded LLM judgment
+## Step 5: the route-slot decision, deterministic or grounded
 
-Step 5 (recommend-or-escalate) has two interchangeable *decision strategies*
-behind a common `Judge` protocol (`judgment/judge.py`), selected by
-`Config.use_grounded_judgment` (env `SMART_ASSIGNMENT_USE_GROUNDED_JUDGMENT`):
+Step 5 (recommend-or-escalate) always operates on the **deterministically
+enumerated (route, slot) options** produced by step 4. What varies is only
+*whether an LLM reasons over that set* — never what is in it.
 
 ```
                        hard constraints (constraints.py) -- ALWAYS run first,
@@ -827,105 +773,70 @@ behind a common `Judge` protocol (`judgment/judge.py`), selected by
                                      |
                        feasible / infeasible split (deterministic)
                                      |
-             +-----------------------+------------------------+
-             |  use_grounded_judgment=False  (DEFAULT)        |  =True
-             v                                                v
-   WeightedScoreJudge                               GroundedJudge
-   rank feasible by weighted total_score            (judgment/ package)
-   gate on total_score_threshold (0.60)             see the flow below
-   -> today's behavior, unchanged
+                       every feasible (route, slot) pair scored
+                       (shared/scoring.score_route_slot)
+                                     |
+                       routeslot/decide.decide_route_slot
+                                     |
+        +----------------------------+----------------------------+
+        | grounded flags OFF          | grounded flags ON          |
+        | highest total, gated on     | LLM picks / decides over   |
+        | route_slot_score_threshold  | the SAME enumerated set,   |
+        | (the reproducible floor)    | verified, with that floor  |
+        |                             | as the fallback            |
+        +----------------------------+----------------------------+
 ```
 
-**Default path is unchanged.** `WeightedScoreJudge` is a thin wrapper over the
-existing `pipeline.decide`, so with the flag off nothing about the current
-behavior, tests, or offline demo changes.
-
-### GroundedJudge flow (opt-in)
-
-Instead of collapsing the soft factors into one weighted number and gating on a
-fixed threshold, an LLM reasons over a structured **evidence packet** of the raw
-per-candidate facts and makes the recommend/escalate call itself:
-
-```
-evaluate_candidates()                                    [UNCHANGED, deterministic]
-  hard constraints -> feasible / infeasible split
-        |
-        v
-build_evidence_packet (evidence.py)
-  raw per-candidate facts (distance, clustering, utilization, headroom,
-  window overlap) for feasible AND infeasible candidates; the legacy weighted
-  total_score is included only as `reference_weighted_score` (NOT a gate)
-        |
-        v
-Grounded Judgment call x1  (llm.py -> shared/llm.generate_text)
-  structured JSON: decision (RECOMMEND|ESCALATE), confidence (HIGH|LOW),
-  recommended_route_id (a feasible id or null), rationale, citations
-        |
-        v
-Structured-Citation Verifier (verifier.py, deterministic -- no model call)
-  1. pick must be in the feasible set (hard safety net on top of the schema),
-     and a RECOMMEND must be backed by >=1 citation on a route-varying fact of
-     the picked route (no citation-padding via other routes / shared constants)
-  2. every fact citation must resolve + match the packet (percent form allowed
-     only for fraction-valued fields, so a figure can't shift magnitude 100x);
-     every comparison must name two different routes and be arithmetically true
-  3. tolerant prose scan: numbers (incl. "1,234" thousands), route-ids,
-     "route N" mentions, day names, and HH:MM times in the rationale must all
-     be grounded; unit-bearing figures ("84 miles") can't launder through
-     percent normalization, and small counts with a unit ("5 cases") are checked
-        | pass                                    | fail
-        v                                         v
-  first sample confident recommend?          one corrective retry -> still
-        |                                     fails -> DETERMINISTIC FALLBACK
-   yes  |  no ("escalation-side":             (WeightedScoreJudge pick +
-        |   ESCALATE, or LOW-confidence        DeterministicReasoner text) --
-        |   recommend when the knob is on)     never worse than today
-        v                          v
-   SHIP on 1 call        resample up to k = judgment_sample_count
-                         (env SMART_ASSIGNMENT_JUDGMENT_SAMPLE_COUNT)
-                                   |
-                                   v
-                         consensus over the DECISION axis only
-                         (judgment_consensus = unanimous|majority);
-                         differing-but-good picks are NOT disagreement
-                                   |
-                         cleared -> RECOMMENDED ; otherwise -> ESCALATE,
-                         surfacing all k reasoned takes to the specialist
-                         (SlotRecommendation.alternative_takes)
-```
-
-**What stays invariant:** hard constraints run first and are the only thing that
-eliminates a candidate; the LLM only ever chooses among the already-feasible set
-(enforced by both the output schema and the verifier), so it can never place a
-customer on an over-capacity or out-of-area route. Any mechanical failure
-(unparseable/ungrounded output surviving one corrective retry, or a no-feasible
-case) falls back to the exact deterministic result, so the grounded path is
-never *worse* than the weighted one -- only, when it succeeds, better-reasoned.
-
-**What changes on purpose:** the arbitrary `total_score_threshold` no longer
-gates auto-assignment when grounded judgment is on. The escalate/recommend call
-is the LLM's, made from the raw facts; "should a human look at this?" is
-answered by the model's own confidence plus cross-sample agreement, not a fixed
-0.60 cutoff.
+The LLM never free-generates a route, a window, or a score: it returns an
+**index** into the enumerated menu plus citations, `routeslot/verifier.py`
+checks the index is in range and every cited number matches the packet within
+tolerance, and one corrective retry is allowed. Hard constraints have already
+run, so it can never place a customer on an over-capacity or out-of-area route.
+Any mechanical failure (unparseable output, an ungrounded claim surviving the
+retry, a backend/credentials error) falls back to the exact deterministic
+threshold result and logs why — so the grounded path is never *worse* than the
+deterministic one, only better-reasoned when it succeeds.
 
 ### Config knobs (`shared/config.py`)
 
 | Knob (env) | Default | Meaning |
 |---|---|---|
-| `SMART_ASSIGNMENT_USE_GROUNDED_JUDGMENT` | `false` | Master switch: grounded judgment vs. weighted-sum. |
+| `SMART_ASSIGNMENT_USE_GROUNDED_ROUTE_SLOT_PICK` | `false` | Let the LLM pick the winning route-slot from the enumerated options instead of taking the top-scoring one. |
+| `SMART_ASSIGNMENT_USE_GROUNDED_ROUTE_SLOT_ESCALATION` | `true` | Let the LLM make the recommend-vs-escalate call itself over **all** feasible route-slots, with the bar demoted to a reference fact. |
+| `SMART_ASSIGNMENT_ROUTE_SLOT_SCORE_THRESHOLD` | `0.55` | The auto-assign bar. Gates the decision when escalation grounding is off; a reference fact (and the fallback) when it is on. |
 | `SMART_ASSIGNMENT_JUDGMENT_SAMPLE_COUNT` | `3` | `k` — samples drawn for an escalation-side case (`1` disables resampling). |
 | `SMART_ASSIGNMENT_JUDGMENT_CONSENSUS` | `unanimous` | How the `k` decisions clear back to a recommend: `unanimous` (precautionary) or `majority`. |
 | `SMART_ASSIGNMENT_JUDGMENT_RETRY_ON_LOW_CONFIDENCE` | `true` | Whether a LOW-confidence *recommend* is escalation-side (resample) or ships as-is. A hard ESCALATE always resamples. |
 
-**Where the flag takes effect.** `run_slot_recommendation(...)` honors
-`use_grounded_judgment` whenever no explicit `judge=` is injected, so the master
-switch reaches every surface — the offline demo (`scripts/run_local.py`), the
-page generator, the web app, and the conversational tool alike. An explicitly
-passed `judge=` always wins over the flag.
+**Where the flags take effect.** `run_slot_recommendation(...)` routes every
+surface — the offline demo (`scripts/run_local.py`), the page generator, the web
+app — through `decide_route_slot`, and the conversational tool
+(`tools/slot_recommendation.recommend_or_escalate`) calls it directly. There is a
+single decision path, so no surface can drift from another.
 
-**Credentials required to see a difference.** Grounded judgment needs a working
-LLM backend (`SMART_ASSIGNMENT_LLM_BACKEND` + its credentials). Without them the
-judgment call fails and `GroundedJudge` deterministically falls back to the
-weighted pick + `DeterministicReasoner` text — *byte-identical to the flag-off
-output*. So on an offline/no-key run the two flag settings produce the same
-text by design; a real LLM backend is what surfaces the grounded reasoning.
+### Deciding once per turn
+
+The chat web app renders a turn twice: the agent calls `recommend_or_escalate`,
+then `webapp/llm_chat._visualization_from_state` rebuilds the Simulator payload.
+Steps 1–4 are deterministic, so re-deriving the candidates there keeps the
+numbers drift-free — but **step 5 is not** once grounded reasoning is on, since
+it samples and may resample for consensus. Re-deciding would therefore render a
+second, independently-sampled outcome underneath the agent's narration of the
+first, and record *that* one for feedback and tracing.
+
+So the tool snapshots its decision into session state, bound to the exact profile
+it was computed from (`SlotRecommendation.to_state_dict`, read back by
+`tools.slot_recommendation.cached_decision_for`), and the visualization passes it
+to `run_slot_recommendation(..., recommendation=...)`, which skips step 5
+entirely. The snapshot is ignored — and the decision simply recomputed once —
+whenever it is absent, belongs to a different profile (the prospect was revised
+mid-conversation), or can't be parsed. Reuse is therefore config-independent: it
+holds whether the decision was reached deterministically or by either grounded
+path.
+
+**What changes on purpose when escalation grounding is on:** the fixed
+`route_slot_score_threshold` no longer gates auto-assignment. The
+escalate/recommend call is the LLM's, made from the raw facts; "should a human
+look at this?" is answered by the model's own confidence plus cross-sample
+agreement, not a fixed cutoff. The bar remains in the packet as a reference and
+remains the deterministic fallback.

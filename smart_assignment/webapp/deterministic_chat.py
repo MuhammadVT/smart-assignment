@@ -27,7 +27,6 @@ from __future__ import annotations
 from typing import AsyncGenerator, Optional
 
 from smart_assignment.pipeline import run_slot_recommendation
-from smart_assignment.reasoning import DeterministicReasoner
 from smart_assignment.reporting.page import build_workflow_payload
 from smart_assignment.shared.config import DEFAULT_CONFIG
 from smart_assignment.shared.geo import Geocoder
@@ -82,7 +81,7 @@ class DeterministicChatService:
         self._sessions: dict[str, _SessionIntake] = {}
 
     def _run(self, profile: CustomerProfile):
-        kwargs = {"config": DEFAULT_CONFIG, "reasoner": DeterministicReasoner()}
+        kwargs = {"config": DEFAULT_CONFIG}
         if self._geocoder is not None:
             kwargs["geocoder"] = self._geocoder
         return run_slot_recommendation(profile, **kwargs)

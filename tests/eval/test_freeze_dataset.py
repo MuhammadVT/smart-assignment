@@ -16,7 +16,6 @@ from smart_assignment.integrations.geocoding_client import (
 )
 from smart_assignment.mock_customers import SAMPLE_CUSTOMERS
 from smart_assignment.pipeline import run_slot_recommendation
-from smart_assignment.reasoning import DeterministicReasoner
 from smart_assignment.shared.config import Config
 
 
@@ -45,7 +44,7 @@ def test_freeze_mock_then_replay_reproduces_and_anonymizes(tmp_path, monkeypatch
     candidates = []
     for index, customer in enumerate(SAMPLE_CUSTOMERS):
         result = run_slot_recommendation(
-            customer, config=config, reasoner=DeterministicReasoner(), geocoder=MockGeocoder()
+            customer, config=config, geocoder=MockGeocoder()
         )
         baseline[f"case_{index}"] = _outcome(result.recommendation.decision)
         candidates.append(_candidate(index, customer))
@@ -87,7 +86,7 @@ def test_freeze_mock_then_replay_reproduces_and_anonymizes(tmp_path, monkeypatch
     for case_dict in cases:
         case = candidate_to_case(case_dict)
         result = run_slot_recommendation(
-            case.customer, config=config, reasoner=DeterministicReasoner()
+            case.customer, config=config
         )
         got = _outcome(result.recommendation.decision)
         # The replayed decision matches the frozen expected AND the mock baseline.

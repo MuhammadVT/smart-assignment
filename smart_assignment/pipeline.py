@@ -8,43 +8,35 @@ both drive these same functions, so there is no logic drift between
     1. intake            — validate the new customer's profile
     2. geo_lookup        — geocode + pick Top-N nearest candidate routes
     3. evaluate          — hard-constraint check each candidate (constraints.py)
-    4. rank              — weighted multi-factor score & sort  (scoring.py)
-    5. decide            — recommend the top slot, or escalate to a human
+    4. rank              — score every (route, slot) pair & sort  (scoring.py)
+    5. decide            — recommend the best route-slot, or escalate to a human
+                           (routeslot/decide.py)
 
-Every collaborator (routes source, geocoder, reasoner, config) is injectable,
-so pointing this at real systems is a matter of passing different arguments —
-not editing this file.
+Every collaborator (routes source, geocoder, config) is injectable, so pointing
+this at real systems is a matter of passing different arguments — not editing
+this file.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional
+from typing import Optional
 
 from smart_assignment.integrations.geocoding_client import resolve_geocoder
 from smart_assignment.integrations.route_capacity_client import fetch_candidate_routes
 from smart_assignment.shared.config import DEFAULT_CONFIG, Config
-from smart_assignment.shared.constraints import (
-    CONSTRAINT_LABEL,
-    build_context,
-    evaluate_constraints,
-)
+from smart_assignment.shared.constraints import build_context, evaluate_constraints
 from smart_assignment.shared.customer import validate_customer_number
 from smart_assignment.shared.geo import Geocoder, haversine_miles
 from smart_assignment.shared.models import (
     CandidateEvaluation,
     CustomerProfile,
-    Decision,
     RecommendationResult,
     Route,
     ScoredSlot,
     SlotRecommendation,
 )
-from smart_assignment.shared.scoring import score_candidate, score_route_slot
-from smart_assignment.shared.timeutils import fmt_window
-from smart_assignment.reasoning import LLMReasoner, Reasoner, compute_total_score
-
-if TYPE_CHECKING:
-    from smart_assignment.judgment import Judge
+from smart_assignment.shared.scoring import score_route_slot
+from smart_assignment.shared.slot_selection import SLOT_BASIS_NONE
 
 # --- Step 1: intake ---------------------------------------------------------
 
@@ -96,19 +88,14 @@ def evaluate_candidates(
         evaluation = CandidateEvaluation(
             route=route,
             distance_miles=ctx.distance_miles,
-            chosen_window=ctx.best_window,
+            chosen_window=None,  # set below from the best scored slot, if any
             remaining_capacity_after=ctx.remaining_capacity_after,
             utilization_after=ctx.utilization_after,
             constraint_outcomes=outcomes,
-            window_basis=ctx.window_basis,
+            window_basis=SLOT_BASIS_NONE,  # replaced below when a slot is scored
             available_slots=ctx.available_slots,
         )
-        if evaluation.feasible:
-            breakdown, total = score_candidate(customer, route, ctx, config)
-            evaluation.factor_scores = breakdown
-            evaluation.total_score = total
-            if config.use_route_slot_scoring:
-                _apply_route_slot_scores(customer, route, ctx, evaluation, config)
+        _apply_route_slot_scores(customer, route, ctx, evaluation, config)
         evaluations.append(evaluation)
     return evaluations
 
@@ -121,8 +108,23 @@ def _apply_route_slot_scores(
     config: Config,
 ) -> None:
     """Score each candidate slot as its own (route, slot) option and fold the
-    route's BEST scored slot back onto the evaluation, so route-level ranking and
-    the existing serialization reflect the best obtainable route-slot."""
+    route's BEST scored slot back onto the evaluation.
+
+    Runs for EVERY candidate so that "the window this route offers" has one
+    definition everywhere -- including on an infeasible route, where it is the
+    diagnostic a specialist reads ("this route would have suited your Tuesday
+    morning, but it's out of area").
+
+    MERIT (`total_score`, `factor_scores`) is promoted only for a FEASIBLE
+    candidate. A rejected route must never carry a score: hard constraints are
+    absolute, and a merit number beside a rejection invites "it scored well, why
+    wasn't it used?". Infeasible candidates therefore keep the 0.0 / empty
+    defaults, and every decision layer filters on `feasible` before reasoning
+    (see routeslot.decide._all_route_slots and routeslot.evidence).
+
+    A route that produced no candidate slot keeps `chosen_window=None` and a 0.0
+    score: it offers no assignable (route, slot) option, so it can only ever be
+    reported, never recommended (see routeslot.decide._escalate_no_slot)."""
     scored = [
         ScoredSlot(slot=slot, factor_scores=fb, total_score=tot)
         for slot in evaluation.available_slots
@@ -132,76 +134,16 @@ def _apply_route_slot_scores(
         return
     evaluation.scored_slots = scored
     best = max(scored, key=lambda s: s.total_score)
-    evaluation.total_score = best.total_score
-    evaluation.factor_scores = best.factor_scores
     evaluation.chosen_window = best.slot.window
     evaluation.window_basis = best.slot.basis
+    if evaluation.feasible:
+        evaluation.total_score = best.total_score
+        evaluation.factor_scores = best.factor_scores
 
 
 def rank_feasible(evaluations: list[CandidateEvaluation]) -> list[CandidateEvaluation]:
     feasible = [e for e in evaluations if e.feasible]
     return sorted(feasible, key=lambda e: e.total_score, reverse=True)
-
-
-# --- Step 5: decide (recommend or escalate) --------------------------------
-
-
-def decide(
-    customer: CustomerProfile,
-    evaluations: list[CandidateEvaluation],
-    reasoner: Reasoner,
-    config: Config,
-) -> SlotRecommendation:
-    ranked = rank_feasible(evaluations)
-    infeasible = [e for e in evaluations if not e.feasible]
-    total_score = compute_total_score(ranked)
-    reasoning = reasoner.explain(customer, ranked, infeasible, total_score, config)
-
-    rejected: list[str] = []
-    for cand in ranked[1:]:
-        rejected.append(
-            f"{cand.route.route_id} ({cand.route.day.value}): feasible but scored "
-            f"{cand.total_score:.2f}"
-        )
-    for cand in infeasible:
-        failed = ", ".join(CONSTRAINT_LABEL.get(c.name, c.name) for c in cand.failed_constraints)
-        rejected.append(f"{cand.route.route_id} ({cand.route.day.value}): infeasible — {failed}")
-
-    if not ranked:
-        return SlotRecommendation(
-            customer_number=customer.customer_number,
-            customer_address=customer.address,
-            customer_name=customer.name,
-            decision=Decision.ESCALATED_NO_FEASIBLE_SLOT,
-            total_score=total_score,
-            reasoning=reasoning,
-            rejected_alternatives=rejected,
-            review_reason="No candidate route satisfied all hard constraints.",
-        )
-
-    winner = ranked[0]
-    escalate = total_score < config.total_score_threshold
-    decision = Decision.ESCALATED_LOW_SCORE if escalate else Decision.RECOMMENDED
-    return SlotRecommendation(
-        customer_number=customer.customer_number,
-        customer_address=customer.address,
-        customer_name=customer.name,
-        decision=decision,
-        total_score=total_score,
-        reasoning=reasoning,
-        recommended_route_id=winner.route.route_id,
-        recommended_route_name=winner.route.name,
-        recommended_day=winner.route.day.value,
-        recommended_window=fmt_window(winner.chosen_window),
-        recommended_window_basis=winner.window_basis or None,
-        factor_breakdown=winner.factor_scores,
-        rejected_alternatives=rejected,
-        review_reason=(
-            f"Total score {total_score:.0%} below {config.total_score_threshold:.0%} threshold."
-            if escalate
-            else None
-        ),
-    )
 
 
 # --- End-to-end -------------------------------------------------------------
@@ -212,63 +154,41 @@ def run_slot_recommendation(
     routes: Optional[list[Route]] = None,
     config: Optional[Config] = None,
     geocoder: Optional[Geocoder] = None,
-    reasoner: Optional[Reasoner] = None,
-    judge: Optional["Judge"] = None,
+    recommendation: Optional[SlotRecommendation] = None,
 ) -> RecommendationResult:
     """Run the full workflow for one customer and return the complete trace.
 
-    `judge` selects the step-5 decision strategy. Precedence:
-      1. an explicitly-passed `judge` always wins;
-      2. otherwise, if `config.use_grounded_judgment` is on, an LLM makes the
-         recommend/escalate call over the evidence packet (`judgment` package);
-      3. otherwise, the weighted-sum `decide(...)` gated on
-         `total_score_threshold` (the default).
-    Hard constraints run first in every case, so the choice only affects how the
-    *feasible* survivors are ranked and gated. Note the grounded path needs an
-    LLM backend + credentials; without them it transparently falls back to the
-    weighted deterministic result, so this still runs fully offline.
+    Step 5 is a single decision over the deterministically enumerated
+    (route, slot) options (see `routeslot.decide_route_slot`). Hard constraints
+    run first and remain the only thing that can eliminate a candidate, so the
+    decision only ever ranks and gates the *feasible* survivors.
+
+    Whether an LLM reasons over those options is internal to that layer
+    (`use_grounded_route_slot_pick` / `use_grounded_route_slot_escalation`); it
+    falls back to the deterministic threshold decision on any failure, so this
+    still runs fully offline with no backend or credentials.
+
+    `recommendation` REUSES a decision already made for this same customer,
+    skipping step 5 entirely. Steps 1-4 are deterministic, so recomputing them is
+    always reproducible -- but step 5 is not when grounded reasoning is on (it
+    samples, and may resample for consensus). A surface that needs the *same*
+    decision it already showed the user must pass it here rather than re-deciding
+    and getting a second, independently-sampled answer (see
+    `webapp/llm_chat._visualization_from_state`).
     """
     config = config or DEFAULT_CONFIG
     geocoder = geocoder or resolve_geocoder()
-    # LLM-backed reasoning by default; it transparently falls back to the
-    # deterministic trace when GOOGLE_API_KEY / Vertex credentials are absent,
-    # so this still runs fully offline.
-    reasoner = reasoner or LLMReasoner(config)
-
-    # No explicit strategy injected -> honor the config flag. This is what makes
-    # SMART_ASSIGNMENT_USE_GROUNDED_JUDGMENT take effect on the offline demo, the
-    # page generator, and the web app -- not just the conversational tool.
-    if judge is None and config.use_grounded_judgment:
-        from smart_assignment.judgment import default_judge
-
-        judge = default_judge(config, reasoner=reasoner)
 
     customer = intake(customer)
     all_routes = routes if routes is not None else fetch_candidate_routes()
     candidates = geo_lookup(customer, all_routes, geocoder, config)
     evaluations = evaluate_candidates(customer, candidates, config)
 
-    if config.use_route_slot_scoring and judge is None:
-        # The decision unit is the (route, slot) pair: one grounded decision over
-        # route-slot options that also absorbs the slot pick (see the `routeslot`
-        # package). Its own grounded/deterministic + fallback logic is internal,
-        # so slotpick's separate pass is skipped here.
+    if recommendation is None:
+        # Imported lazily so importing the pipeline never pulls in the LLM plumbing.
         from smart_assignment.routeslot import decide_route_slot
 
         recommendation = decide_route_slot(customer, evaluations, config)
-    else:
-        if judge is not None:
-            recommendation = judge.decide(customer, evaluations, config)
-        else:
-            recommendation = decide(customer, evaluations, reasoner, config)
-
-        # Optionally let an LLM pick the winning route's final slot from its
-        # candidate menu (constrained + grounded); a no-op unless
-        # use_grounded_slot_selection is on, and it never changes the route/score.
-        if config.use_grounded_slot_selection:
-            from smart_assignment.slotpick import refine_slot
-
-            refine_slot(recommendation, evaluations, customer, config)
 
     return RecommendationResult(
         customer=customer,

@@ -3,8 +3,8 @@ The escalation-triage agent's single data tool: assemble, from session state,
 the grounded facts a specialist brief needs.
 
 Read-only by design -- it re-derives the candidate evaluation (feasible +
-infeasible, with the same raw per-route facts the grounded-judgment layer uses)
-and returns it alongside the escalation reason and any split model opinions. It
+infeasible, with the raw per-route facts from `triage/evidence.py`) and returns
+it alongside the escalation reason and any split model opinions. It
 never writes state and never changes the decision, the route, or a score; the
 triage agent only *explains* what deterministic code already decided.
 
@@ -18,7 +18,6 @@ from __future__ import annotations
 
 from google.adk.tools import ToolContext
 
-from smart_assignment.judgment.evidence import build_evidence_packet
 from smart_assignment.pipeline import evaluate_candidates
 from smart_assignment.shared.config import DEFAULT_CONFIG
 from smart_assignment.shared.geo import GeocodingError
@@ -29,6 +28,7 @@ from smart_assignment.tools.slot_recommendation import (
     _geocoding_error_result,
     _profile_from_state_dict,
 )
+from smart_assignment.triage.evidence import build_evidence_packet
 from smart_assignment.triage.verifier import collect_grounding, verify_brief
 
 # Grounding facts stashed by get_escalation_context so the self-check tool and

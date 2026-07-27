@@ -16,11 +16,13 @@ neighborhood*. We approximate that from the route's nearest committed stops:
   2. `select_candidate_slots()` — keep the top-N candidates per route by
      quality (fit + low contention), but ALWAYS keep any candidate that overlaps
      the customer's stated preference, even if it falls outside the top-N. This
-     is the menu handed to the recommender (and, later, to an LLM).
+     is the menu the decision layer reasons over.
 
-  3. `recommend_slot()` — pick one from the menu with a soft blend of preference
-     overlap, location fit, and low contention (not a hard "preference wins"
-     gate). A route is never eliminated for a slot miss.
+There is deliberately no "pick one slot" step here. The winning (route, slot)
+pair is chosen by `shared.scoring.score_route_slot` over the whole menu — where
+the customer's preference is one weighted, day-gated factor among four — so this
+module only ever *enumerates* options. A route is never eliminated for a slot
+miss.
 
 Phased fidelity: today a committed stop carries only its TW1 *permitted* window,
 not a real planned-arrival time. `stop_reference_time` is the single seam that
@@ -44,10 +46,9 @@ from smart_assignment.shared.geo import haversine_miles
 from smart_assignment.shared.models import GeoPoint, Route, RouteStop, SlotOption, Window
 from smart_assignment.shared.timeutils import overlap_minutes, window_midpoint
 
-# Why a given slot exists / won -- surfaced on the trace and the tool JSON.
+# Why a given slot exists -- surfaced on the trace and the tool JSON.
 SLOT_BASIS_BETWEEN_STOPS = "between_adjacent_stops"
 SLOT_BASIS_LEAST_CONTENDED = "least_contended"
-SLOT_BASIS_PREFERENCE = "preference_accommodated"
 SLOT_BASIS_NONE = "no_windows"
 
 # Guards a divide-by-zero when a committed stop sits exactly on the prospect.
@@ -61,16 +62,6 @@ class Neighbor:
 
     stop: RouteStop
     distance_miles: float
-
-
-@dataclass(frozen=True)
-class SlotSelection:
-    """The single recommended window, why it won, and its overlap (minutes)
-    with the customer's preferred window (0 when there is no preference)."""
-
-    window: Optional[Window]
-    basis: str
-    overlap_minutes: int
 
 
 def _minutes(t: time) -> int:
@@ -252,6 +243,11 @@ def select_candidate_slots(
     below the cut -- so a preferred-time option is never dropped from the menu.
     Assumes `options` is already quality-ranked (as identify_available_slots
     returns it).
+
+    `preferred_window` must already be day-applicable for this route: pass
+    ``None`` when the route runs on a day the customer didn't ask for, or a
+    time-of-day match would smuggle in candidates the customer can't actually
+    receive on (see `constraints.applicable_preferred_window`).
     """
     if not options:
         return []
@@ -264,45 +260,20 @@ def select_candidate_slots(
     return kept
 
 
-def _blended_score(option: SlotOption, preferred_window: Optional[Window], config: Config) -> float:
-    """Soft blend used to pick the single recommended slot: preference overlap
-    (when stated) + location fit + low contention, normalized over active terms."""
-    wf, wc = config.slot_weight_fit, config.slot_weight_contention
-    fit_term = wf * option.fit_score + wc * _contention_score(option.committed_overlap)
-    if preferred_window is None:
-        return fit_term / ((wf + wc) or 1.0)
-    wp = config.slot_weight_preference
-    window_len = max(1, config.slot_window_minutes)
-    pref_frac = overlap_minutes(preferred_window, option.window) / window_len
-    return (wp * pref_frac + fit_term) / ((wp + wf + wc) or 1.0)
+def best_preference_overlap(
+    options: list[SlotOption], preferred_window: Optional[Window]
+) -> int:
+    """The BEST achievable overlap (minutes) between the customer's preferred
+    window and any candidate slot in the menu -- 0 when no preference was stated
+    or nothing overlaps.
 
+    Like `select_candidate_slots`, `preferred_window` must already be
+    day-applicable for this route (see `constraints.applicable_preferred_window`);
+    pass ``None`` on a day mismatch.
 
-def blended_slot_score(
-    option: SlotOption, preferred_window: Optional[Window], config: Config
-) -> float:
-    """Public view of the deterministic blend score for one candidate slot -- the
-    exact number `recommend_slot` maximizes. Surfaced as *reference* evidence to
-    the grounded slot picker (the LLM may agree with or diverge from it), while
-    remaining the deterministic fallback pick."""
-    return _blended_score(option, preferred_window, config)
-
-
-def recommend_slot(
-    options: list[SlotOption],
-    preferred_window: Optional[Window],
-    config: Config,
-) -> SlotSelection:
-    """
-    STEP 3 -- pick one slot from the menu, blending preference with fit and
-    contention (a soft weighting, not a hard preference gate). Windows are
-    already fixed-length and centered, so the pick is returned as-is. A route is
-    never eliminated for a slot miss; `overlap_minutes` is the chosen window's
-    overlap with the preference (0 when there is none), which feeds `window_match`.
-    """
-    if not options:
-        return SlotSelection(None, SLOT_BASIS_NONE, 0)
-
-    chosen = max(options, key=lambda o: (_blended_score(o, preferred_window, config), o.fit_score))
-    overlap = overlap_minutes(preferred_window, chosen.window) if preferred_window else 0
-    basis = SLOT_BASIS_PREFERENCE if (preferred_window and overlap > 0) else chosen.basis
-    return SlotSelection(chosen.window, basis, overlap)
+    A grounded reference fact (see `triage/evidence.py`), not a decision: which
+    (route, slot) pair actually wins is decided by `shared.scoring.score_route_slot`
+    over the whole menu, never by this number."""
+    if preferred_window is None or not options:
+        return 0
+    return max(overlap_minutes(preferred_window, o.window) for o in options)

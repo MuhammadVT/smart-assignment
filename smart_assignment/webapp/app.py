@@ -58,7 +58,6 @@ from pydantic import BaseModel
 
 from smart_assignment.mock_customers import SAMPLE_CUSTOMERS
 from smart_assignment.pipeline import run_slot_recommendation
-from smart_assignment.reasoning import DeterministicReasoner
 from smart_assignment.reporting.page import _FE_STYLE, _STYLE, build_workflow_payload
 from smart_assignment.shared.config import DEFAULT_CONFIG
 from smart_assignment.webapp.decision import traced_decision
@@ -213,7 +212,6 @@ def recommend(req: RecommendRequest) -> RecommendResponse:
             result = run_slot_recommendation(
                 parsed.profile,
                 config=DEFAULT_CONFIG,
-                reasoner=DeterministicReasoner(),
             )
             decision.record(result)
     except ValueError as exc:

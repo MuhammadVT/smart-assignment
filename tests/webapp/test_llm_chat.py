@@ -9,9 +9,15 @@ and the mode/credential resolution. No network, no key.
 
 from __future__ import annotations
 
+import pytest
+
 from smart_assignment.integrations.geocoding_client import MockGeocoder
 from smart_assignment.shared.config import Config
-from smart_assignment.tools.slot_recommendation import _STATE_PROFILE_KEY
+from smart_assignment.shared.models import Decision, SlotRecommendation
+from smart_assignment.tools.slot_recommendation import (
+    _STATE_LAST_DECISION_KEY,
+    _STATE_PROFILE_KEY,
+)
 from smart_assignment.webapp.llm_chat import (
     LlmChatService,
     llm_credentials_available,
@@ -356,3 +362,149 @@ async def test_visualization_none_when_profile_incomplete():
         geocoder=MockGeocoder(),
     )
     assert await service._visualization_from_state("s1") is None
+
+
+# --- the decision is made ONCE per turn --------------------------------------
+#
+# Step 5 can sample (grounded reasoning), so re-deciding for the visualization
+# would show the user a second, possibly different outcome underneath the
+# agent's narration of the first -- and record THAT one for feedback/tracing.
+
+
+def _decision_state(recommendation, profile=None):
+    """Session state carrying a profile plus a decision snapshot bound to it."""
+    profile = profile if profile is not None else dict(_SAMPLE_STATE[_STATE_PROFILE_KEY])
+    return {
+        _STATE_PROFILE_KEY: profile,
+        _STATE_LAST_DECISION_KEY: {
+            "profile": dict(profile),
+            "recommendation": recommendation.to_state_dict(),
+        },
+    }
+
+
+def _counting_decider(monkeypatch):
+    """Count how many times step 5 actually runs, keeping real behaviour."""
+    import smart_assignment.routeslot as routeslot
+
+    calls = []
+    real = routeslot.decide_route_slot
+
+    def _spy(*args, **kwargs):
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(routeslot, "decide_route_slot", _spy)
+    return calls
+
+
+async def test_cached_decision_is_reused_instead_of_re_deciding(monkeypatch):
+    calls = _counting_decider(monkeypatch)
+    # A decision the agent already made -- deliberately an ESCALATION, which a
+    # fresh run of this healthy downtown prospect would NOT produce.
+    cached = SlotRecommendation(
+        customer_name="Test Prospect",
+        decision=Decision.ESCALATED_LOW_SCORE,
+        total_score=0.11,
+        reasoning="Cached decision from the agent's own turn.",
+        recommended_route_id="RTE-4100",
+        recommended_route_name="Central Houston",
+        recommended_day="TUE",
+        recommended_window="07:20-10:20",
+        review_reason="Cached escalation.",
+    )
+    service = LlmChatService(
+        runner=_FakeRunner([[]]),
+        session_service=_FakeSessionService(_decision_state(cached)),
+        geocoder=MockGeocoder(),
+    )
+    payload = await service._visualization_from_state("s1")
+
+    assert payload is not None
+    assert not calls, "step 5 must not run again when a valid decision is cached"
+    # The card -- and the feedback/trace context recorded for it -- carry the
+    # CACHED outcome, not a freshly-sampled one.
+    assert payload["_decision"]["outcome"] == "escalate"
+    assert payload["_decision"]["review_reason"] == "Cached escalation."
+
+
+async def test_stale_cached_decision_is_ignored_and_the_decision_is_recomputed(monkeypatch):
+    calls = _counting_decider(monkeypatch)
+    cached = SlotRecommendation(
+        customer_name="Someone Else",
+        decision=Decision.ESCALATED_LOW_SCORE,
+        total_score=0.11,
+        reasoning="Belongs to a different prospect.",
+    )
+    # Snapshot bound to a DIFFERENT profile than the one now in state.
+    state = _decision_state(cached, profile=dict(_SAMPLE_STATE[_STATE_PROFILE_KEY]))
+    state[_STATE_LAST_DECISION_KEY]["profile"]["order_quantity_cases"] = 400
+
+    service = LlmChatService(
+        runner=_FakeRunner([[]]),
+        session_service=_FakeSessionService(state),
+        geocoder=MockGeocoder(),
+    )
+    payload = await service._visualization_from_state("s1")
+
+    assert payload is not None
+    assert len(calls) == 1, "a stale snapshot must be ignored and the decision recomputed"
+    # The recomputed decision wins, not the stale escalation.
+    assert payload["_decision"]["outcome"] == "recommend"
+
+
+async def test_decision_is_computed_once_when_nothing_is_cached(monkeypatch):
+    calls = _counting_decider(monkeypatch)
+    service = LlmChatService(
+        runner=_FakeRunner([[]]),
+        session_service=_FakeSessionService(dict(_SAMPLE_STATE)),
+        geocoder=MockGeocoder(),
+    )
+    payload = await service._visualization_from_state("s1")
+
+    assert payload is not None
+    assert len(calls) == 1, "with no snapshot the decision runs exactly once"
+
+
+@pytest.mark.parametrize(
+    "pick,escalation",
+    [(False, False), (True, False), (False, True), (True, True)],
+)
+async def test_cached_decision_is_reused_under_every_grounded_config(
+    monkeypatch, pick, escalation
+):
+    """Reuse must not depend on how the decision was originally reached.
+
+    run_slot_recommendation skips step 5 entirely when a decision is supplied, so
+    this holds by construction -- pinned across all four flag combinations so a
+    future change to the decision layer can't quietly reintroduce a second call
+    (and, with grounded reasoning on, a second LLM round-trip) per turn."""
+    import smart_assignment.webapp.llm_chat as llm_chat_module
+
+    calls = _counting_decider(monkeypatch)
+    monkeypatch.setattr(
+        llm_chat_module,
+        "DEFAULT_CONFIG",
+        Config(
+            use_grounded_route_slot_pick=pick,
+            use_grounded_route_slot_escalation=escalation,
+        ),
+    )
+    cached = SlotRecommendation(
+        customer_name="Test Prospect",
+        decision=Decision.RECOMMENDED,
+        total_score=0.79,
+        reasoning="Cached decision from the agent's own turn.",
+        recommended_route_id="RTE-4100",
+        recommended_window="07:20-10:20",
+    )
+    service = LlmChatService(
+        runner=_FakeRunner([[]]),
+        session_service=_FakeSessionService(_decision_state(cached)),
+        geocoder=MockGeocoder(),
+    )
+    payload = await service._visualization_from_state("s1")
+
+    assert payload is not None
+    assert not calls, f"step 5 ran again with pick={pick}, escalation={escalation}"
+    assert payload["_decision"]["outcome"] == "recommend"

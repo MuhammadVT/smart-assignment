@@ -1,10 +1,12 @@
 """
-Route-slot scoring & decision (Config.use_route_slot_scoring).
+Route-slot scoring & decision.
 
 Makes the decision unit the (route, slot) PAIR: slot availability (tier-weighted
 openness) influences which route wins, not just which slot within an
-already-chosen route. Supersedes the two-stage judge+slotpick flow when on; the
-prior route-only path is untouched and remains the rollback (flag off).
+already-chosen route. This is the single decision layer for step 5: the options
+are always enumerated deterministically, and the grounded flags only control
+whether an LLM reasons over that set, with the threshold decision as the
+fallback.
 """
 
 from __future__ import annotations

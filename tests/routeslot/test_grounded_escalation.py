@@ -17,7 +17,7 @@ from .conftest import AFTERNOON, MORNING, choice_dict, customer, scored_eval, sc
 
 
 def _cfg(**kw):
-    base = dict(use_route_slot_scoring=True, use_grounded_route_slot_escalation=True)
+    base = dict(use_grounded_route_slot_escalation=True)
     base.update(kw)
     return Config(**base)
 
@@ -224,3 +224,36 @@ def test_no_feasible_route_always_escalates_without_the_llm():
     rec = decide_route_slot(customer(), [infeasible], _cfg(), choice_fn=boom)
     assert rec.decision is Decision.ESCALATED_NO_FEASIBLE_SLOT
     assert rec.recommended_route_id is None
+
+
+# --- infeasible candidates never reach the model -----------------------------
+
+
+def test_infeasible_route_slots_are_never_selectable_options():
+    """Infeasible routes now carry `scored_slots` too (so every route can report
+    the window it would have offered), so the guarantee has to be pinned: none of
+    that reaches the model as something it could pick. Hard constraints stay
+    absolute -- an infeasible route appears only as a rejection reason."""
+    feasible = scored_eval("RTE-A", "Alpha", [scored_slot(MORNING, avail=0.9, total=0.80)])
+    # A rejected route whose slots score HIGHER than the feasible one.
+    rejected = scored_eval(
+        "RTE-BAD", "Rejected", [scored_slot(AFTERNOON, avail=1.0, total=0.99)], feasible=False
+    )
+    evals = [feasible, rejected]
+
+    packet = build_route_slot_packet(customer(), evals, Config())
+    # Only the feasible route is a selectable option, so `chosen_index` can never
+    # land on the rejected one (the verifier bounds it to this list).
+    assert [o["route_id"] for o in packet.options] == ["RTE-A"]
+    # The rejected route carries ONLY its id, day and failed constraints -- no
+    # window, no slots, no score. Its scored_slots stay entirely internal.
+    assert [c["route_id"] for c in packet.infeasible] == ["RTE-BAD"]
+    rejected_entry = packet.infeasible[0]
+    assert set(rejected_entry) == {"route_id", "day", "failed_constraints"}
+    assert "0.99" not in str(rejected_entry)
+
+    def _spy(config, prompt):
+        return choice_dict(0, runner_up_index=None)
+
+    rec = decide_route_slot(customer(), evals, _cfg(), choice_fn=_spy)
+    assert rec.recommended_route_id == "RTE-A"

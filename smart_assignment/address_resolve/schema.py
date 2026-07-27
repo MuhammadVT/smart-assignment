@@ -11,7 +11,7 @@ The address-choice output contract. The model returns::
 
 `parse_address_choice` is strict about SHAPE only; whether the chosen index is
 valid and the cited values are correct is the verifier's job (`verifier.py`).
-Deliberately mirrors slotpick/schema.py so the grounded-decision layers stay
+Deliberately mirrors routeslot/schema.py so the grounded-decision layers stay
 uniform and easy to reason about.
 """
 

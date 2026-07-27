@@ -114,16 +114,20 @@ def config_for_path(path: str, base=None):
     from smart_assignment.shared.config import Config
 
     base = base or Config.from_env()
-    if path == PATH_LLM:
-        return replace(base, use_grounded_judgment=True)
-    # Deterministic: the weighted-sum decision, grounded off -- fully offline.
-    return replace(base, use_grounded_judgment=False)
+    grounded = path == PATH_LLM
+    # Both grounded knobs move together so each path is unambiguous: "llm" lets the
+    # model pick AND make the recommend-vs-escalate call; "deterministic" turns both
+    # off, so the run is the pure threshold decision -- fully offline, no backend.
+    return replace(
+        base,
+        use_grounded_route_slot_pick=grounded,
+        use_grounded_route_slot_escalation=grounded,
+    )
 
 
 def _score_case(case_dict, config) -> CaseScore:
     from eval.case_source import SkippedCase, candidate_to_case
     from smart_assignment.pipeline import run_slot_recommendation
-    from smart_assignment.reasoning import DeterministicReasoner
     from smart_assignment.shared.models import Decision
 
     eval_id = str(case_dict.get("eval_id", "?"))
@@ -138,7 +142,7 @@ def _score_case(case_dict, config) -> CaseScore:
 
     # Deterministic reasoner keeps the run offline; the decision strategy (weighted
     # vs grounded) is what `config` selects.
-    result = run_slot_recommendation(case.customer, config=config, reasoner=DeterministicReasoner())
+    result = run_slot_recommendation(case.customer, config=config)
     rec = result.recommendation
     got_outcome = "recommend" if rec.decision == Decision.RECOMMENDED else "escalate"
     got_route = rec.recommended_route_id

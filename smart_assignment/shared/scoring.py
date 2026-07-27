@@ -1,24 +1,31 @@
 """
-Weighted multi-factor scoring & ranking (spec step 4).
+Weighted multi-factor scoring of (route, slot) pairs (spec step 4).
+
+The decision UNIT is the (route, slot) pair: every candidate slot on every
+feasible route is scored separately, so slot availability influences which
+ROUTE wins -- not just which slot within an already-chosen route.
 
 Like `constraints.py`, this is deliberately modular: each factor is a small
-pure function registered in `SCORING_FACTORS`, each returns a normalized
-0.0-1.0 value plus a human-readable `detail`. The final score is the
-weight-dot-value across factors, with weights (and thus priorities) living in
-`Config.factor_weights`. Add a factor by writing one function and giving it a
-weight — nothing else changes.
+pure function returning a normalized 0.0-1.0 value plus a human-readable
+`detail`. The pair's total is the weighted average over whichever factors are
+active, with weights living in `Config.rs_weight_*`.
 
-Factors, in priority order (per spec):
+Factors:
   1. geographic_clustering — tightness of fit with existing stops on the route
+                             (route-level, shared across that route's slots)
   2. capacity_buffer       — stays flat once safely under the capacity
                              ceiling; only decays as utilization approaches it
-  3. window_match          — how well the route's day and time fit the
-                             customer's preferred slot
+                             (route-level)
+  3. window_match          — how much THIS candidate window covers the
+                             customer's preferred slot (slot-level; omitted
+                             entirely when no preference was stated)
+  4. slot_availability     — how OPEN this candidate window is, tier-weighted
+                             by who already holds it (slot-level)
 """
 
 from __future__ import annotations
 
-from typing import Callable, Optional
+from typing import Optional
 
 from smart_assignment.shared.config import (
     FACTOR_CAPACITY_BUFFER,
@@ -30,8 +37,6 @@ from smart_assignment.shared.config import (
 from smart_assignment.shared.constraints import EvalContext
 from smart_assignment.shared.models import CustomerProfile, FactorScore, Route, SlotOption
 from smart_assignment.shared.timeutils import day_label, duration_minutes, overlap_minutes
-
-FactorFn = Callable[[CustomerProfile, Route, EvalContext, Config], FactorScore]
 
 
 def _clamp01(x: float) -> float:
@@ -45,7 +50,7 @@ def geographic_clustering(
     value = _clamp01(1.0 - ctx.avg_stop_distance_miles / config.cluster_reference_miles)
     return FactorScore(
         name=FACTOR_GEO_CLUSTERING,
-        weight=config.factor_weights[FACTOR_GEO_CLUSTERING],
+        weight=config.rs_weight_geo,
         value=value,
         detail=f"avg {ctx.avg_stop_distance_miles:.1f} mi to existing stops",
     )
@@ -77,7 +82,7 @@ def capacity_buffer(
         value = _clamp01((ceiling - ctx.utilization_after) / margin)
     return FactorScore(
         name=FACTOR_CAPACITY_BUFFER,
-        weight=config.factor_weights[FACTOR_CAPACITY_BUFFER],
+        weight=config.rs_weight_capacity,
         value=value,
         detail=(
             f"{ctx.remaining_capacity_after} cases of headroom left, putting the truck at "
@@ -85,83 +90,6 @@ def capacity_buffer(
             f"to {safe_utilization:.0%})"
         ),
     )
-
-
-def window_match(
-    customer: CustomerProfile, route: Route, ctx: EvalContext, config: Config
-) -> FactorScore:
-    """
-    How well the route matches the customer's preferred **slot** (day + time).
-
-    The day of week is a gate, not a source of partial credit: a route only
-    earns any slot-match score once it lands on the customer's preferred day.
-    From there, the score is simply how much of the preferred window the
-    route actually covers:
-
-        0.0                                   if route.day != preferred.day
-        0.0                                   if the day matches but there is no time overlap at all
-        overlap_minutes / preferred_minutes    otherwise
-
-    A route on the wrong day, or on the right day with zero time overlap, is
-    not a real match and scores 0 -- it shouldn't collect credit just for
-    getting half of the slot right. With no stated preference, a neutral
-    score is used.
-    """
-    slot = customer.preferred_slot
-    weight = config.factor_weights[FACTOR_WINDOW_MATCH]
-    if slot is None:
-        return FactorScore(
-            name=FACTOR_WINDOW_MATCH,
-            weight=weight,
-            value=config.window_neutral_score,
-            detail="no stated preference (neutral score)",
-        )
-    day_ok = route.day == slot.day
-    pref_minutes = max(1, duration_minutes(slot.window))
-    time_frac = _clamp01(ctx.window_overlap_minutes / pref_minutes)
-    value = time_frac if (day_ok and time_frac > 0) else 0.0
-    if day_ok and time_frac > 0:
-        detail = (
-            f"the route runs on {day_label(route.day)}, matching the customer's preference, "
-            f"and covers {ctx.window_overlap_minutes} of the {pref_minutes} minutes of their "
-            f"preferred time"
-        )
-    elif day_ok:
-        detail = (
-            f"the route runs on {day_label(route.day)}, matching the customer's preference, "
-            f"but its time window doesn't overlap their preferred hours at all, so this "
-            f"doesn't count as a real match"
-        )
-    else:
-        detail = (
-            f"the route runs on {day_label(route.day)} rather than the "
-            f"{day_label(slot.day)} the customer asked for, so this doesn't count as a "
-            f"match regardless of the time overlap"
-        )
-    return FactorScore(
-        name=FACTOR_WINDOW_MATCH,
-        weight=weight,
-        value=value,
-        detail=detail,
-    )
-
-
-# Registry — the ordered set of scoring factors.
-SCORING_FACTORS: list[FactorFn] = [
-    geographic_clustering,
-    capacity_buffer,
-    window_match,
-]
-
-
-# ---------------------------------------------------------------------------
-# Route-slot scoring (Config.use_route_slot_scoring)
-#
-# The decision unit becomes the (route, slot) PAIR. geo and capacity are
-# route-level (shared across a route's slots and reused from the factors above);
-# window_match and slot_availability are slot-level. This lets slot openness
-# influence which ROUTE wins, not just which slot within an already-picked route.
-# ---------------------------------------------------------------------------
 
 
 def tier_weighted_contention(window, route: Route, config: Config) -> float:
@@ -180,7 +108,8 @@ def tier_weighted_contention(window, route: Route, config: Config) -> float:
 def slot_openness(window, route: Route, config: Config) -> float:
     """Openness of a candidate window in (0, 1]: 1 / (1 + tier-weighted
     contention). A window no committed stop shares is 1.0 (fully open); one
-    shared by valued incumbents decays toward 0."""
+    shared by valued incumbents decays toward 0. The single definition of
+    openness -- `slot_availability` wraps this as a weighted factor."""
     return 1.0 / (1.0 + tier_weighted_contention(window, route, config))
 
 
@@ -189,7 +118,7 @@ def slot_availability(route: Route, slot: SlotOption, config: Config) -> FactorS
     committed stops already in it), tier-weighted so we avoid harming the most
     valued customers."""
     harm = tier_weighted_contention(slot.window, route, config)
-    value = 1.0 / (1.0 + harm)
+    value = slot_openness(slot.window, route, config)
     return FactorScore(
         name=FACTOR_SLOT_AVAILABILITY,
         weight=config.rs_weight_availability,
@@ -235,37 +164,20 @@ def score_route_slot(
     slot: SlotOption,
     config: Config,
 ) -> tuple[list[FactorScore], float]:
-    """Score one (route, slot) pair. Route-level factors (geo, capacity) reuse
-    the same value math as the route-only path but carry the route-slot weights;
-    window_match and slot_availability are computed for THIS specific slot.
-    window_match is present only when the customer stated a preference. The total
-    is the weighted average over whichever factors are active."""
-    geo = geographic_clustering(customer, route, ctx, config)
-    cap = capacity_buffer(customer, route, ctx, config)
+    """Score one (route, slot) pair. Route-level factors (geo, capacity) are
+    shared across that route's slots; window_match and slot_availability are
+    computed for THIS specific slot. window_match is present only when the
+    customer stated a preference. The total is the weighted average over
+    whichever factors are active."""
     breakdown: list[FactorScore] = [
-        FactorScore(geo.name, config.rs_weight_geo, geo.value, geo.detail),
-        FactorScore(cap.name, config.rs_weight_capacity, cap.value, cap.detail),
+        geographic_clustering(customer, route, ctx, config),
+        capacity_buffer(customer, route, ctx, config),
     ]
     wm = _slot_window_match(customer, route, slot, config)
     if wm is not None:
         breakdown.append(wm)
     breakdown.append(slot_availability(route, slot, config))
 
-    total_weight = sum(fs.weight for fs in breakdown) or 1.0
-    total = sum(fs.weighted for fs in breakdown) / total_weight
-    return breakdown, round(total, 4)
-
-
-def score_candidate(
-    customer: CustomerProfile,
-    route: Route,
-    ctx: EvalContext,
-    config: Config,
-    factors: Optional[list[FactorFn]] = None,
-) -> tuple[list[FactorScore], float]:
-    """Return (per-factor breakdown, total weighted score in 0.0-1.0)."""
-    fns = factors if factors is not None else SCORING_FACTORS
-    breakdown = [fn(customer, route, ctx, config) for fn in fns]
     total_weight = sum(fs.weight for fs in breakdown) or 1.0
     total = sum(fs.weighted for fs in breakdown) / total_weight
     return breakdown, round(total, 4)

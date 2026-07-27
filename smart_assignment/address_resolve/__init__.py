@@ -3,7 +3,7 @@ Grounded address resolution: turn an address that wouldn't geocode into a
 *confirmable suggestion*, instead of a dead-end -- without inventing an address.
 
 This is the "constrained-option, grounded reasoning" pattern (as in `judgment/`,
-`slotpick/`, `routeslot/`) applied to address correction:
+`routeslot/`, `triage/`) applied to address correction:
 
   - the valid options are fixed upstream -- the geocoder's own candidate matches
     (`Geocoder.suggest`, a provider-agnostic capability; see shared/geo.py);

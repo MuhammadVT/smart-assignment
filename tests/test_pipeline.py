@@ -1,7 +1,7 @@
 """
 Tests for the slot_recommendation pipeline's end-to-end decisions and the
-total-score gating math. All deterministic -- the LLM reasoning layer is
-bypassed via the DeterministicReasoner so no API key/network is used.
+total-score gating math. All deterministic -- the grounded LLM layer is off
+by default, so no API key/network is used.
 """
 
 from __future__ import annotations
@@ -9,15 +9,12 @@ from __future__ import annotations
 from datetime import time
 
 from smart_assignment.pipeline import run_slot_recommendation
-from smart_assignment.reasoning import DeterministicReasoner, compute_total_score
 from smart_assignment.shared.config import Config
 from smart_assignment.shared.models import CustomerProfile, DayOfWeek, Decision, PreferredSlot
 
-_DETERMINISTIC = DeterministicReasoner()
-
 
 def _run(customer, config=None):
-    return run_slot_recommendation(customer, config=config or Config(), reasoner=_DETERMINISTIC)
+    return run_slot_recommendation(customer, config=config or Config())
 
 
 def test_clear_case_is_recommended():
@@ -37,7 +34,7 @@ def test_clear_case_is_recommended():
     # prospect), not snapped to a historical window's start -- and it's tagged
     # with an auditable basis.
     assert rec.recommended_window == "07:20-10:20"
-    assert rec.recommended_window_basis in {"between_adjacent_stops", "preference_accommodated"}
+    assert rec.recommended_window_basis in {"between_adjacent_stops", "least_contended"}
 
 
 def test_unserviceable_customer_escalates_no_feasible_slot():
@@ -110,22 +107,34 @@ def test_large_order_escalates_low_total_score():
     )
     rec = _run(customer).recommendation
     assert rec.decision == Decision.ESCALATED_LOW_SCORE
-    assert rec.total_score < Config().total_score_threshold
+    assert rec.total_score < Config().route_slot_score_threshold
     assert rec.recommended_route_id is not None  # a slot IS proposed for the human
 
 
 # --- total-score gating math -------------------------------------------------
 
 
-def test_total_score_is_the_winners_own_score_untouched_by_the_runner_up():
-    class _Cand:
-        def __init__(self, score):
-            self.total_score = score
+# --- what an infeasible candidate reports ------------------------------------
 
-    # A tie between two GOOD options is not penalized -- the winner's own
-    # score stands on its own, regardless of how close the runner-up scored.
-    assert compute_total_score([_Cand(0.75), _Cand(0.74)]) == 0.75
-    # A tie between two MEDIOCRE options stays mediocre -- correctly still low.
-    assert compute_total_score([_Cand(0.55), _Cand(0.54)]) == 0.55
-    # No feasible candidates at all.
-    assert compute_total_score([]) == 0.0
+
+def test_infeasible_candidate_reports_a_window_but_never_a_score():
+    """Every candidate reports the window it would have offered -- the diagnostic
+    a specialist reads on a rejected route -- but MERIT is promoted only for a
+    feasible one. A rejected route must never carry a score: hard constraints are
+    absolute, and a score beside a rejection invites "why wasn't it used?"."""
+    customer = CustomerProfile(
+        name="Katy Prairie Steakhouse",
+        address="5000 Katy Mills Cir, Katy, TX 77494",
+        order_quantity_cases=260,
+        preferred_slot=PreferredSlot(DayOfWeek.TUE, (time(6, 0), time(8, 0))),
+    )
+    result = _run(customer)
+    infeasible = [e for e in result.candidates_considered if not e.feasible]
+    assert infeasible, "this prospect should have at least one rejected route"
+
+    for ev in infeasible:
+        assert ev.total_score == 0.0        # no merit on a rejected candidate
+        assert ev.factor_scores == []
+        if ev.available_slots:              # a route that could offer a window
+            assert ev.chosen_window is not None
+            assert ev.window_basis in {"between_adjacent_stops", "least_contended"}

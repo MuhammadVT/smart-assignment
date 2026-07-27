@@ -11,7 +11,6 @@ from unittest.mock import patch
 from smart_assignment.shared.config import (
     ROLE_JUDGMENT,
     ROLE_QUALITY_JUDGE,
-    ROLE_REASONING,
     ROLE_ROOT_AGENT,
     ROLE_TRIAGE,
     Config,
@@ -64,7 +63,6 @@ def test_each_role_resolves_independently():
     assert c.resolved_model(ROLE_ROOT_AGENT) == "base"  # default
     assert c.resolved_model(ROLE_TRIAGE) == "lite"
     assert c.resolved_model(ROLE_JUDGMENT) == "pro"
-    assert c.resolved_model(ROLE_REASONING) == "base"  # default
 
 
 def test_role_models_read_from_env():
@@ -72,14 +70,12 @@ def test_role_models_read_from_env():
         "SMART_ASSIGNMENT_MODEL_ROOT_AGENT": "m-root",
         "SMART_ASSIGNMENT_MODEL_TRIAGE": "m-triage",
         "SMART_ASSIGNMENT_MODEL_JUDGMENT": "m-judge",
-        "SMART_ASSIGNMENT_MODEL_REASONING": "m-reason",
     }
     with patch.dict(os.environ, env):
         c = Config.from_env()
     assert c.role_models[ROLE_ROOT_AGENT] == "m-root"
     assert c.role_models[ROLE_TRIAGE] == "m-triage"
     assert c.role_models[ROLE_JUDGMENT] == "m-judge"
-    assert c.role_models[ROLE_REASONING] == "m-reason"
 
 
 def test_quality_judge_role_model_read_from_env():
@@ -98,7 +94,7 @@ def test_unset_role_env_yields_no_override():
         "SMART_ASSIGNMENT_MODEL_ROOT_AGENT",
         "SMART_ASSIGNMENT_MODEL_TRIAGE",
         "SMART_ASSIGNMENT_MODEL_JUDGMENT",
-        "SMART_ASSIGNMENT_MODEL_REASONING",
+        "SMART_ASSIGNMENT_MODEL_ADDRESS_RESOLVE",
     ]
     with patch.dict(os.environ, {k: "" for k in keys}):
         c = Config.from_env()
@@ -126,41 +122,18 @@ def test_root_agent_and_triage_build_with_distinct_models(monkeypatch):
     assert triage_tool.agent.model == "gemini-2.5-flash-lite"  # triage role -> lite
 
 
-def test_generate_judgment_uses_the_judgment_role_model(monkeypatch):
+def test_route_slot_choice_uses_the_judgment_role_model(monkeypatch):
     import smart_assignment.shared.llm as llm_module
-    from smart_assignment.judgment.llm import generate_judgment
+    from smart_assignment.routeslot.llm import generate_route_slot_choice
 
     captured = {}
 
     def fake_generate_text(config, prompt):
         captured["model"] = config.model
-        return '{"decision":"RECOMMEND","confidence":"HIGH",' \
-               '"recommended_route_id":"X","rationale":"ok","citations":[]}'
+        return '{"chosen_index":0,"decision_summary":"ok",' \
+               '"primary_reasons":["r"],"citations":[]}'
 
     monkeypatch.setattr(llm_module, "generate_text", fake_generate_text)
     cfg = Config(llm_backend="standard", model="base", role_models={ROLE_JUDGMENT: "judge-model"})
-    generate_judgment(cfg, "prompt")
+    generate_route_slot_choice(cfg, "prompt")
     assert captured["model"] == "judge-model"
-
-
-def test_llm_reasoner_uses_the_reasoning_role_model(monkeypatch):
-    import smart_assignment.shared.llm as llm_module
-    from smart_assignment.reasoning import LLMReasoner
-
-    captured = {}
-
-    def fake_generate_text(config, prompt):
-        captured["model"] = config.model
-        return "narrative"
-
-    monkeypatch.setattr(llm_module, "generate_text", fake_generate_text)
-    cfg = Config(llm_backend="standard", model="base", role_models={ROLE_REASONING: "reason-model"})
-    reasoner = LLMReasoner(cfg)
-    # No feasible candidates -> a short deterministic trace is passed to the LLM.
-    reasoner.explain(customer=_Cust(), ranked=[], infeasible=[], total_score=0.0, config=cfg)
-    assert captured["model"] == "reason-model"
-
-
-class _Cust:
-    name = "Test Co"
-    address = "1 Main St"

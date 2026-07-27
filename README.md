@@ -97,8 +97,8 @@ there's no separate "confidence" computed from how close a runner-up scored.
 A route's own merit shouldn't be discounted just because another candidate
 happened to score nearly as well: two routes tied at a high score both clear
 the bar, and either is a safe pick; a route only gets flagged when *its own*
-score is mediocre. Below `SMART_ASSIGNMENT_TOTAL_SCORE_THRESHOLD` (default
-0.60) it escalates for a human sanity-check (a slot is still proposed, so the
+score is mediocre. Below `SMART_ASSIGNMENT_ROUTE_SLOT_SCORE_THRESHOLD` (default
+0.55) it escalates for a human sanity-check (a slot is still proposed, so the
 reviewer has something to approve/override).
 
 ## Repo structure
@@ -110,8 +110,6 @@ smart-assignment/
 │   ├── agent.py                        # ADK entry point: root_agent = LlmAgent(...)
 │   ├── prompts.py                      # root_agent's system instruction
 │   ├── pipeline.py                     # the 5-step orchestration (source of truth)
-│   ├── reasoning.py                    # total-score gating + pluggable reasoner (LLM default)
-│   ├── reasoning_prompts.py            # prompt for the *optional* LLM reasoning trace
 │   ├── mock_customers.py               # [MOCK] sample Sysco new-customer intakes
 │   ├── tools/                          # ADK FunctionTools exposed to root_agent
 │   │   └── slot_recommendation.py      # one tool per pipeline step, state-keyed
@@ -175,12 +173,14 @@ The four bundled customers exercise a different branch each:
 
 ### Reasoning: deterministic vs. LLM
 
-Reasoning defaults to the **LLM layer** (`LLMReasoner`). When no
-`GOOGLE_API_KEY` / Vertex credentials are present it transparently falls back
-to a deterministic trace, so the demo always runs offline. To get real Gemini
-narratives, `cp .env.example .env`, set `GOOGLE_API_KEY`, and re-run. To force
-the deterministic reasoner in code, pass
-`run_slot_recommendation(customer, reasoner=DeterministicReasoner())`.
+The recommendation's explanation has a deterministic structured floor (summary,
+per-factor reasons, runner-up, key trade-off) built from the score breakdown
+alone. With grounding enabled and a backend configured, the model's own reasoned
+prose replaces that floor; when no credentials are present it transparently falls
+back, so the demo always runs offline. To get real Gemini narratives,
+`cp .env.example .env`, set `GOOGLE_API_KEY`, and re-run. To keep the run purely
+deterministic, leave `SMART_ASSIGNMENT_USE_GROUNDED_ROUTE_SLOT_PICK` and
+`SMART_ASSIGNMENT_USE_GROUNDED_ROUTE_SLOT_ESCALATION` off.
 
 ## Talking to it conversationally with `adk run` / `adk web`
 

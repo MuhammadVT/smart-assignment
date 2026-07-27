@@ -28,7 +28,6 @@ from typing import Optional
 
 from smart_assignment.mock_customers import SAMPLE_CUSTOMERS
 from smart_assignment.pipeline import run_slot_recommendation
-from smart_assignment.reasoning import DeterministicReasoner
 from smart_assignment.shared.config import (
     DEFAULT_CONFIG,
     FACTOR_CAPACITY_BUFFER,
@@ -37,7 +36,7 @@ from smart_assignment.shared.config import (
     FACTOR_WINDOW_MATCH,
     Config,
 )
-from smart_assignment.shared.constraints import CONSTRAINT_LABEL, build_context
+from smart_assignment.shared.constraints import CONSTRAINT_LABEL
 from smart_assignment.shared.models import (
     CandidateEvaluation,
     Decision,
@@ -46,7 +45,6 @@ from smart_assignment.shared.models import (
 )
 from smart_assignment.shared.slot_selection import nearest_neighbors
 from smart_assignment.shared.timeutils import (
-    duration_minutes,
     fmt_time,
     fmt_window,
     overlap_minutes,
@@ -841,7 +839,7 @@ _EVAL_TAB_BODY = f"""
           <h4>Response match v2 — LLM-as-judge</h4>
           <div class="where">final_response_match_v2 · ADK's judge, routed via sage_judge_llm.py</div>
           <p>An LLM judge reads intent, not just wording — scored side by side with ROUGE, not as a replacement — and routed through the org's approved model gateway (<span class="where">sage_judge_llm.py → LLMRegistry</span>) rather than a public API.</p>
-          <div class="guard"><b>Still an open gap:</b> unlike judgment/, triage/, and slotpick/, this judge doesn't cite an evidence packet or get verified in code — it scores free text directly. The grounded pattern is used elsewhere (see rationale_faithfulness, right) for a real decision; it hasn't been applied here yet.</div>
+          <div class="guard"><b>Still an open gap:</b> unlike routeslot/, triage/, and address_resolve/, this judge doesn't cite an evidence packet or get verified in code — it scores free text directly. The grounded pattern is used elsewhere (see rationale_faithfulness, right) for a real decision; it hasn't been applied here yet.</div>
           <div class="tpmeta"><span class="flag">sage_judge_llm.py</span><span class="state advisory">measurement only, not required</span></div>
         </div>
         <div class="card tpcard">
@@ -874,11 +872,11 @@ _EVAL_TAB_BODY = f"""
           <h4>Curator promotion</h4>
           <div class="where">eval/curator.py (sketched) · not started — Phase 5, documented only</div>
           <p>The design on paper: when a reviewer's annotation clears a promotion bar, a candidate golden case is drafted from that trace's real inputs and outputs — never hand-typed — and opened as a PR against <span class="where">eval/golden_cases.py</span>.</p>
-          <div class="guard"><b>Not built yet:</b> the READMEs describe this loop in prose; there's no code today. If built, it should follow the same recipe as judgment/, triage/, and slotpick/ — cite the real trace, verify the citation in code, and never write to main without a human merging the PR.</div>
+          <div class="guard"><b>Not built yet:</b> the READMEs describe this loop in prose; there's no code today. If built, it should follow the same recipe as routeslot/, triage/, and address_resolve/ — cite the real trace, verify the citation in code, and never write to main without a human merging the PR.</div>
           <div class="tpmeta"><span class="flag">eval/golden_cases.py</span><span class="state planned">Documented, not automated</span></div>
         </div>
       </div>
-      <div class="guarantee">🛡️ <b>What's real vs. planned, stated plainly.</b> Trajectory eval, the ROUGE + LLM-judge response scoring, the DeepEval quality metrics (brief_quality, response_clarity, rationale_faithfulness), response capture, and OpenTelemetry tracing into Phoenix or Langfuse are all real, running code today — though every CI check here (agent-eval, quality-eval) is advisory, not a required gate. Curator promotion is the one piece still on paper. If it's built, this repo's own recipe already says how: enumerate candidates deterministically, cite the evidence, verify in code, fall back safely, and gate behind a flag — the same discipline as judgment/, triage/, and slotpick/, and the discipline rationale_faithfulness above already partially follows.</div>
+      <div class="guarantee">🛡️ <b>What's real vs. planned, stated plainly.</b> Trajectory eval, the ROUGE + LLM-judge response scoring, the DeepEval quality metrics (brief_quality, response_clarity, rationale_faithfulness), response capture, and OpenTelemetry tracing into Phoenix or Langfuse are all real, running code today — though every CI check here (agent-eval, quality-eval) is advisory, not a required gate. Curator promotion is the one piece still on paper. If it's built, this repo's own recipe already says how: enumerate candidates deterministically, cite the evidence, verify in code, fall back safely, and gate behind a flag — the same discipline as routeslot/, triage/, and address_resolve/, and the discipline rationale_faithfulness above already partially follows.</div>
     </div>
   </section>
 
@@ -1299,14 +1297,14 @@ def _route_cards(result: RecommendationResult, config: Config) -> str:
     route_slot_mode = any(e.scored_slots for e in feasible)
 
     cards = []
+    threshold = config.route_slot_score_threshold
     if route_slot_mode:
-        threshold = config.route_slot_score_threshold
         has_pref = result.customer.preferred_slot is not None
         cards.extend(
             _route_slot_group_card(e, winner_id, threshold, has_pref) for e in feasible
         )
     else:
-        threshold = config.total_score_threshold
+        # A feasible route that produced no candidate slot: reportable, not assignable.
         cards.extend(_feasible_route_card(e, winner_id, threshold) for e in feasible)
     cards.extend(_infeasible_card(e) for e in infeasible)
     n = len(result.candidates_considered)
@@ -1556,13 +1554,6 @@ def _sim_steps(result: RecommendationResult, config: Config) -> list[dict]:
     feasible = [e for e in cands if e.feasible]
     slot = c.preferred_slot
     pref = f"{slot.day.value} {_win(fmt_window(slot.window))}" if slot else "any"
-    gw = config.factor_weights[FACTOR_GEO_CLUSTERING]
-    cw = config.factor_weights[FACTOR_CAPACITY_BUFFER]
-    ww = config.factor_weights[FACTOR_WINDOW_MATCH]
-    cref = config.cluster_reference_miles
-    ceiling = config.max_utilization_after_assignment
-    margin = config.capacity_buffer_safety_margin
-    safe = ceiling - margin
 
     if c.customer_number:
         id_line = f'Customer number <b>{_esc(c.customer_number)}</b> <span class="ok">✓ valid</span>'
@@ -1593,69 +1584,15 @@ def _sim_steps(result: RecommendationResult, config: Config) -> list[dict]:
                 f'• {_esc(e.route.route_id)}: <span class="no">INFEASIBLE</span> — failed {_esc(failed)}'
             )
 
-    if result.ranked_feasible and config.use_route_slot_scoring:
+    if result.ranked_feasible:
         score = _route_slot_score_lines(result.ranked_feasible, config, rec)
-    elif result.ranked_feasible:
-        score = ["Each dimension is normalized to 0–1, then combined by weight:"]
-        for e in result.ranked_feasible:
-            ctx = build_context(c, e.route, config)
-            g = _factor_value(e, FACTOR_GEO_CLUSTERING)
-            b = _factor_value(e, FACTOR_CAPACITY_BUFFER)
-            w = _factor_value(e, FACTOR_WINDOW_MATCH)
-            score.append(
-                f"• <b>{_esc(e.route.route_id)} · {_esc(e.route.name)}</b> "
-                f"→ weighted score <b>{e.total_score:.2f}</b>"
-            )
-            score.append(
-                f'<span class="calc">↳ clustering = clamp(1 − {ctx.avg_stop_distance_miles:.1f} ÷ '
-                f"{cref:.0f} mi) = <b>{g:.2f}</b> · weight {gw:.2f}</span>"
-            )
-            if ctx.utilization_after <= safe:
-                score.append(
-                    f'<span class="calc">↳ capacity buffer = 1.00 flat '
-                    f"({ctx.utilization_after:.0%} full is under the {safe:.0%} safe line) = "
-                    f"<b>{b:.2f}</b> · weight {cw:.2f}</span>"
-                )
-            else:
-                score.append(
-                    f'<span class="calc">↳ capacity buffer = clamp(({ceiling:.0%} − '
-                    f"{ctx.utilization_after:.0%}) ÷ {margin:.0%}) = <b>{b:.2f}</b> · "
-                    f"weight {cw:.2f}</span>"
-                )
-            if slot is None:
-                score.append(
-                    f'<span class="calc">↳ slot match = neutral (no preferred slot) = '
-                    f"<b>{w:.2f}</b> · weight {ww:.2f}</span>"
-                )
-            else:
-                pd = max(1, duration_minutes(slot.window))
-                day_ok = e.route.day == slot.day
-                day_sym = "✓" if day_ok else "✗"
-                if day_ok:
-                    score.append(
-                        f'<span class="calc">↳ slot match = day({e.route.day.value}{day_sym}'
-                        f"pref {slot.day.value}) → time({ctx.window_overlap_minutes}÷{pd} min) = "
-                        f"<b>{w:.2f}</b> · weight {ww:.2f}</span>"
-                    )
-                else:
-                    score.append(
-                        f'<span class="calc">↳ slot match = day({e.route.day.value}{day_sym}'
-                        f"pref {slot.day.value}) → wrong day, no credit = "
-                        f"<b>{w:.2f}</b> · weight {ww:.2f}</span>"
-                    )
-            score.append(
-                f'<span class="calc">↳ total = {gw:.2f}×{g:.2f} + {cw:.2f}×{b:.2f} + '
-                f"{ww:.2f}×{w:.2f} = <b>{e.total_score:.2f}</b></span>"
-            )
     else:
         score = ["No feasible routes survived the hard rules — nothing to score."]
 
-    rs = config.use_route_slot_scoring
-    bar = config.route_slot_score_threshold if rs else config.total_score_threshold
-    winner_label = "winning route-slot" if rs else "winning route"
+    bar = config.route_slot_score_threshold
     decide = [
         f"Decision: <b>{DECISION_SHORT[rec.decision]}</b>",
-        f"Total score for the {winner_label}: <b>{rec.total_score:.0%}</b> "
+        f"Total score for the winning route-slot: <b>{rec.total_score:.0%}</b> "
         f"(auto-assign bar {bar:.0%})",
     ]
     if rec.recommended_route_id:
@@ -1687,9 +1624,6 @@ def _sim_steps(result: RecommendationResult, config: Config) -> list[dict]:
             "action": (
                 "The agent scores each feasible (route, slot) pair on the weighted factors "
                 "— including slot availability — and ranks them."
-                if config.use_route_slot_scoring
-                else "The agent scores each feasible route on the weighted factors (with the math) "
-                "and ranks them."
             ),
             "lines": score,
         },
@@ -1698,19 +1632,16 @@ def _sim_steps(result: RecommendationResult, config: Config) -> list[dict]:
             "action": (
                 "The agent picks the best route-slot, checks its total against the auto-assign "
                 "bar, and decides."
-                if config.use_route_slot_scoring
-                else "The agent picks the best slot, checks its total score against the auto-assign "
-                "bar, and decides."
             ),
             "lines": decide,
         },
     ]
 
 
-def _scoring_section_route_slot(config: Config) -> str:
-    """The 'how the agent scores' explainer for the route-slot path: the unit is
-    a (route, slot) pair, geo/capacity are route-level, window_match and slot
-    availability are slot-level, and window_match is dropped without a preference."""
+def _scoring_section(config: Config) -> str:
+    """The 'how the agent scores' explainer: the unit is a (route, slot) pair,
+    geo/capacity are route-level, window_match and slot availability are
+    slot-level, and window_match is dropped without a preference."""
     gw = config.rs_weight_geo
     cw = config.rs_weight_capacity
     ww = config.rs_weight_window
@@ -1772,75 +1703,8 @@ def _scoring_section_route_slot(config: Config) -> str:
     </div>"""
 
 
-def _scoring_section(config: Config) -> str:
-    if config.use_route_slot_scoring:
-        return _scoring_section_route_slot(config)
-    gw = config.factor_weights[FACTOR_GEO_CLUSTERING]
-    cw = config.factor_weights[FACTOR_CAPACITY_BUFFER]
-    ww = config.factor_weights[FACTOR_WINDOW_MATCH]
-    total_w = gw + cw + ww
-    cref = config.cluster_reference_miles
-    neutral = config.window_neutral_score
-    thr = config.total_score_threshold
-    ceiling = config.max_utilization_after_assignment
-    margin = config.capacity_buffer_safety_margin
-    safe = ceiling - margin
-    return f"""
-    <span class="eyebrow">How the agent scores &amp; ranks</span>
-    <h2>Exactly how each dimension is scored</h2>
-    <p class="sub">Only routes that pass every hard rule reach this stage. The agent scores each on three
-      dimensions, normalizes each to 0–1 (<span style="font-family:var(--mono)">clamp</span> keeps it in
-      range), and combines them by weight. This is deterministic Python — the same inputs always give the
-      same score.</p>
-    <div class="grid-3">
-      <div class="card"><div class="icon">🧭</div><h3>Geographic clustering · weight {gw:.2f}</h3>
-        <p>How tightly the customer sits within the route's existing cluster of stops. Closer = higher.</p>
-        <div class="formula">score = clamp( 1 − <b>avg_miles_to_stops</b> ÷ {cref:.0f} , 0, 1 )</div>
-        <p style="margin-top:8px;font-size:12.5px">Distance is the average great-circle miles to the route's
-          committed stops; at {cref:.0f} mi the score reaches 0.</p></div>
-      <div class="card"><div class="icon">🛡️</div><h3>Capacity buffer · weight {cw:.2f}</h3>
-        <p>How safely under the capacity ceiling the truck stays once this order is added. Flat while
-          comfortably safe; only decays as the truck approaches its limit.</p>
-        <div class="formula">score = 1.0                                     if utilization ≤ {safe:.0%}
-<br/>score = clamp( ({ceiling:.0%} − utilization) ÷ {margin:.0%} , 0, 1 )   otherwise</div>
-        <p style="margin-top:8px;font-size:12.5px">Utilization stays flat at 1.0 up to {safe:.0%} full (the
-          {margin:.0%}-point safety margin below the {ceiling:.0%} ceiling); past that it falls straight to 0
-          exactly at the ceiling. Two routes that are both comfortably safe score the same — only a route
-          that is genuinely getting full is marked down.</p></div>
-      <div class="card"><div class="icon">🎯</div><h3>Slot match (day + time) · weight {ww:.2f}</h3>
-        <p>How well the route matches the customer's preferred <b>slot</b> — which always includes a
-          <b>day of week</b> plus a time-of-day window. A <b>soft preference</b>: it shapes the score but
-          never eliminates a route.</p>
-        <div class="formula">score = 0                                                     if <b>route_day</b> ≠ <b>preferred_day</b>, or zero time overlap
-<br/>score = clamp( <b>overlap_minutes</b> ÷ <b>preferred_window_minutes</b> , 0, 1 )        otherwise</div>
-        <p style="margin-top:8px;font-size:12.5px">The day is a gate, not partial credit: a route only earns any
-          score once it lands on the customer's preferred day, and then only for however much of the preferred
-          window it actually covers. Wrong day, or right day with no time overlap, scores 0 — half-right isn't a
-          match. If the customer states no slot, a neutral {neutral:.2f} is used instead.</p></div>
-    </div>
-
-    <div style="height:16px"></div>
-    <div class="card">
-      <h3 style="margin-top:0">Final score, then the auto-assign decision</h3>
-      <p>The overall score is the weighted average of the three dimensions:</p>
-      <div class="formula">total_score = ( {gw:.2f}·clustering + {cw:.2f}·capacity + {ww:.2f}·window ) ÷ {total_w:.2f}</div>
-      <p style="margin-top:14px">The agent ranks feasible routes by <em>total_score</em> and recommends the winner.
-        That same number is what gates the decision<span style="font-size:11px;color:var(--muted)"> — there's
-        no separate "confidence" formula on top of it</span>. The agent <b>auto-assigns</b> when the winner's
-        own total score is ≥ {thr:.0%}; otherwise it <b>escalates</b> for a specialist to review.</p>
-      <p style="margin-top:12px;font-size:12.5px;color:var(--muted)">By design, a route's own score is never
-        discounted just because another candidate scored nearly as well — two routes tied at a high score
-        both clear the bar, and either is a safe pick. A route only gets flagged when <em>its own</em> score
-        is mediocre, not because it happens to have close competition.</p>
-    </div>"""
-
-
 def _config_sources(config: Config, results: list[RecommendationResult]) -> str:
     """A 'where do these numbers come from' section, sourced from config + mock data."""
-    gw = config.factor_weights[FACTOR_GEO_CLUSTERING]
-    cw = config.factor_weights[FACTOR_CAPACITY_BUFFER]
-    ww = config.factor_weights[FACTOR_WINDOW_MATCH]
-
     routes = {}
     for r in results:
         for e in r.candidates_considered:
@@ -1854,36 +1718,25 @@ def _config_sources(config: Config, results: list[RecommendationResult]) -> str:
         return f'<li><span class="k">{k} <span class="src">— {src}</span></span><span class="v">{v}</span></li>'
 
     safe_utilization = config.max_utilization_after_assignment - config.capacity_buffer_safety_margin
-    if config.use_route_slot_scoring:
-        scoring_rows = [
-            row(
-                "Route-slot weights (geo/cap/win/avail)",
-                f"{config.rs_weight_geo:.2f} / {config.rs_weight_capacity:.2f} / "
-                f"{config.rs_weight_window:.2f} / {config.rs_weight_availability:.2f}",
-                "rs_weight_*",
-            ),
-            row(
-                "Slot-openness harm (5·Perks/4/Other/unknown)",
-                f"{config.slot_tier_harm_high:.1f} / {config.slot_tier_harm_mid:.1f} / "
-                f"{config.slot_tier_harm_low:.1f} / {config.slot_tier_harm_unknown:.1f}",
-                "slot_tier_harm_*",
-            ),
-            row(
-                "Route-slot auto-assign bar",
-                f"{config.route_slot_score_threshold:.0%}",
-                "route_slot_score_threshold",
-            ),
-        ]
-    else:
-        scoring_rows = [
-            row("No-window neutral score", f"{config.window_neutral_score:.2f}", "window_neutral_score"),
-            row("Scoring weights (geo/cap/win)", f"{gw:.2f} / {cw:.2f} / {ww:.2f}", "factor_weights"),
-            row(
-                "Total score threshold (auto-assign bar)",
-                f"{config.total_score_threshold:.0%}",
-                "total_score_threshold",
-            ),
-        ]
+    scoring_rows = [
+        row(
+            "Route-slot weights (geo/cap/win/avail)",
+            f"{config.rs_weight_geo:.2f} / {config.rs_weight_capacity:.2f} / "
+            f"{config.rs_weight_window:.2f} / {config.rs_weight_availability:.2f}",
+            "rs_weight_*",
+        ),
+        row(
+            "Slot-openness harm (5·Perks/4/Other/unknown)",
+            f"{config.slot_tier_harm_high:.1f} / {config.slot_tier_harm_mid:.1f} / "
+            f"{config.slot_tier_harm_low:.1f} / {config.slot_tier_harm_unknown:.1f}",
+            "slot_tier_harm_*",
+        ),
+        row(
+            "Route-slot auto-assign bar",
+            f"{config.route_slot_score_threshold:.0%}",
+            "route_slot_score_threshold",
+        ),
+    ]
     cfg_rows = "".join(
         [
             row("Route capacity ceiling", f"{config.max_utilization_after_assignment:.0%}", "max_utilization_after_assignment"),
@@ -2135,10 +1988,10 @@ def _llm_touchpoints_section(config: Config) -> str:
     live ``Config``."""
     k = config.judgment_sample_count
     rs_bar = f"{config.route_slot_score_threshold:.0%}"
-    ro_bar = f"{config.total_score_threshold:.0%}"
     triage_on = config.use_escalation_triage
     addr_on = config.use_address_resolution
     rse_on = config.use_grounded_route_slot_escalation
+    pick_on = config.use_grounded_route_slot_pick
 
     cards = [
         _touchpoint_card(
@@ -2194,72 +2047,25 @@ def _llm_touchpoints_section(config: Config) -> str:
         _touchpoint_card(
             "call",
             "LLM call",
-            "Grounded recommend-vs-escalate judgment",
-            "judgment/ · role judgment",
-            "When enabled, an LLM makes the <b>recommend-or-escalate call itself</b> — reasoning over a "
-            f"structured evidence packet of the raw per-candidate facts — instead of the fixed weighted-sum "
-            f"+ {ro_bar} threshold gate.",
-            "Hard constraints still run first and are the only thing that can drop a candidate, so the LLM "
-            "<b>chooses only among already-feasible routes</b>. Structured citations are verified in code "
-            "(<span class=\"where\">judgment/verifier.py</span>), with one corrective retry; escalation-side "
-            f"cases resample up to k={k} and require consensus. Any failure falls back to the deterministic "
-            "weighted pick — never worse than today.",
-            "SMART_ASSIGNMENT_USE_GROUNDED_JUDGMENT",
-            "off",
-            "Off in code · on in .env.example",
-        ),
-        _touchpoint_card(
-            "call",
-            "LLM call",
             "Grounded route-slot decision",
             "routeslot/ · role judgment",
-            "When route-slot scoring is on, the decision unit is the <b>(route, slot) pair</b>, and an LLM "
-            "<b>makes the recommend-vs-escalate call itself</b> over all feasible route-slots — not a fixed "
-            "threshold. A confident recommend ships on one verified call; an escalate (or low-confidence "
-            f"recommend) is resampled up to k={k} and combined by consensus before it may auto-assign. It "
-            "picks the winning route-slot by index and returns a structured trade-off explanation (summary, "
-            "reasons, key trade-off, runner-up, agree/diverge vs. the weighted default).",
-            "The LLM chooses only among deterministically feasible, scored route-slots; its pick and every "
-            "cited figure are verified in code (<span class=\"where\">routeslot/verifier.py</span>), with one "
-            f"corrective retry. On any failure it falls back to the deterministic {rs_bar}-threshold decision "
-            "— the reproducible floor. Whether the LLM decides escalation is itself gated by "
-            "<span class=\"where\">USE_GROUNDED_ROUTE_SLOT_ESCALATION</span> "
-            f"({'on' if rse_on else 'off'} by default). Absorbs the slot-pick pass.",
-            "SMART_ASSIGNMENT_USE_ROUTE_SLOT_SCORING",
-            "off",
-            "Off in code · on in .env.example",
-        ),
-        _touchpoint_card(
-            "call",
-            "LLM call",
-            "Grounded delivery-slot selection",
-            "slotpick/ · role slotpick",
-            "After a route is chosen, an LLM <b>picks the final delivery window</b> from that route's "
-            "deterministically enumerated candidate menu — by index only, reasoning over each candidate's "
-            "facts. It reasons and selects; it never generates a window. (The route-slot decision above "
-            "folds this pick into its own grounded call when it runs.)",
-            "Constrained to the enumerated candidates and verified against the packet "
-            "(<span class=\"where\">slotpick/verifier.py</span>); it <b>only re-orders that route's slots</b>, "
-            "never the route, score, or decision. The hand-tuned deterministic blend is demoted to reference "
-            "+ fallback — the auditable floor.",
-            "SMART_ASSIGNMENT_USE_GROUNDED_SLOT_SELECTION",
-            "off",
-            "Off in code · on in .env.example",
-        ),
-        _touchpoint_card(
-            "narr",
-            "LLM narration",
-            "Reasoning narration",
-            "reasoning.py · LLMReasoner · role reasoning",
-            "An optional reasoner that rewrites the deterministic reasoning trace into more fluent prose for "
-            "callers of the pipeline directly (e.g. <span class=\"where\">scripts/run_local.py</span>). The "
-            "conversational agent instead narrates the recommendation in its own words.",
-            "Narration only — it <b>never changes a number, a route, or the decision</b>. The deterministic "
-            "trace (<span class=\"where\">DeterministicReasoner</span>) is the fallback and is exactly what "
-            "generated this page — so these examples are reproducible offline.",
-            "SMART_ASSIGNMENT_MODEL_REASONING",
-            "off",
-            "Deterministic by default",
+            "The decision unit is the <b>(route, slot) pair</b>. When enabled, an LLM reasons over the "
+            "deterministically enumerated feasible route-slots and picks the winner <b>by index</b> — "
+            "and, with escalation grounding on, makes the <b>recommend-vs-escalate call itself</b> rather "
+            "than leaning on a fixed threshold. A confident recommend ships on one verified call; an "
+            f"escalate (or low-confidence recommend) is resampled up to k={k} and combined by consensus "
+            "before it may auto-assign. It returns a structured trade-off explanation (summary, reasons, "
+            "key trade-off, runner-up, agree/diverge vs. the weighted default).",
+            "Hard constraints still run first and are the only thing that can drop a candidate, so the LLM "
+            "<b>chooses only among already-feasible, scored route-slots</b>. Its pick and every cited "
+            "figure are verified in code (<span class=\"where\">routeslot/verifier.py</span>), with one "
+            f"corrective retry. On any failure it falls back to the deterministic {rs_bar}-threshold "
+            "decision — the reproducible floor. Whether the LLM also decides escalation is gated "
+            "separately by <span class=\"where\">USE_GROUNDED_ROUTE_SLOT_ESCALATION</span> "
+            f"({'on' if rse_on else 'off'} by default).",
+            "SMART_ASSIGNMENT_USE_GROUNDED_ROUTE_SLOT_PICK",
+            "on" if pick_on else "off",
+            "On by default" if pick_on else "Off by default",
         ),
     ]
 
@@ -2794,11 +2600,7 @@ def _frontend_panel_html(result: RecommendationResult, config: Config) -> str:
     """The full SC-facing 'Choose a delivery slot' view for one prospect."""
     c = result.customer
     rec = result.recommendation
-    bar = (
-        config.route_slot_score_threshold
-        if config.use_route_slot_scoring
-        else config.total_score_threshold
-    )
+    bar = config.route_slot_score_threshold
     options, _infeasible = _fe_options(result)
 
     # --- left: prospect ---
@@ -2984,7 +2786,7 @@ def _feedback_widget_js() -> str:
 
 def build_page(results: list[RecommendationResult], config: Config) -> str:
     """Render the full three-tab overview HTML from live workflow results."""
-    threshold = f"{config.total_score_threshold:.0%}"
+    threshold = f"{config.route_slot_score_threshold:.0%}"
     top_n = config.top_n_candidate_routes
     cards = "".join(_example_card(r) for r in results)
     payload = {r.customer.lookup_key: build_workflow_payload(r, config) for r in results}
@@ -3262,9 +3064,8 @@ def build_page(results: list[RecommendationResult], config: Config) -> str:
 def generate(output_path: Optional[Path] = None, config: Optional[Config] = None) -> Path:
     """Run the workflow over the sample customers and write ``docs/index.html``."""
     config = config or DEFAULT_CONFIG
-    reasoner = DeterministicReasoner()  # reproducible, no API key/network
     results = [
-        run_slot_recommendation(customer, config=config, reasoner=reasoner)
+        run_slot_recommendation(customer, config=config)
         for customer in SAMPLE_CUSTOMERS
     ]
     out = output_path or DEFAULT_OUTPUT
