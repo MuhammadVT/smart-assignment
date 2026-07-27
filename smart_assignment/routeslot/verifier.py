@@ -196,9 +196,13 @@ def _scan_prose(choice: RouteSlotChoice, packet: RouteSlotPacket) -> list[str]:
     load-bearing number, route-id, day name, and HH:MM time stated anywhere the
     ops manager reads it must be grounded in the packet."""
     reasons: list[str] = []
-    # Drop near-zero facts: matching a stated figure against ~0 is meaningless and
-    # (with the percent tolerance) would ground almost anything small.
-    numbers = [g for g in _packet_numbers(packet) if abs(g) > _TOL]
+    # Near-zero facts stay OUT of the general grounding set: with the percent
+    # tolerance a stored ~0 would let almost any small figure ground. But a stated
+    # ~0 that a genuine ~0 fact backs (`has_zero_fact`) is grounded explicitly
+    # below -- so the model isn't flagged for faithfully quoting a 0.0 factor.
+    all_numbers = _packet_numbers(packet)
+    numbers = [g for g in all_numbers if abs(g) > _TOL]
+    has_zero_fact = len(numbers) != len(all_numbers)
     labels = _packet_labels(packet)
     route_ids = _allowed_route_ids(packet)
     allowed_days = _allowed_days(packet)
@@ -231,6 +235,13 @@ def _scan_prose(choice: RouteSlotChoice, packet: RouteSlotPacket) -> list[str]:
         if "." not in token and "," not in token and val < 10 and not is_percent and not has_unit:
             continue  # generic small count (e.g. "2 stops")
         if not _number_grounded(val, numbers, is_percent, has_unit):
+            # A stated ~zero is legitimate when the packet genuinely carries a ~zero
+            # fact -- window_match 0.0 when the slot misses the stated preference,
+            # geographic_clustering 0.0 for a far route. The citation check already
+            # accepts a 0.0 citation; keep the prose scan consistent rather than
+            # flagging a faithfully-quoted zero.
+            if abs(val) <= _TOL and has_zero_fact:
+                continue
             reasons.append(f"prose states figure {token!r} not found in the evidence")
 
     for m in _DAY_NAME_RE.finditer(scrubbed):

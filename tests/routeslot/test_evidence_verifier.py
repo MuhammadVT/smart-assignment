@@ -125,6 +125,45 @@ def test_verifier_rejects_ungrounded_number_in_prose():
     assert "42.7" in result.as_feedback()
 
 
+def test_faithfully_quoted_zero_factor_is_grounded():
+    # Regression: a factor is genuinely 0.0 (e.g. window_match 0.0 when the slot
+    # misses the stated preference, or slot_availability 0.0 for a fully-contended
+    # slot). The model faithfully quotes "0.0" -- the prose scan used to strip all
+    # near-zero facts and then flag it ("prose states figure '0.0' not found in the
+    # evidence"), forcing a needless deterministic fallback.
+    evals = [
+        scored_eval("RTE-A", "Alpha", [scored_slot(MORNING, avail=0.0, total=0.80)]),
+        scored_eval("RTE-B", "Bravo", [scored_slot(AFTERNOON, avail=0.90, total=0.66)]),
+    ]
+    packet = build_route_slot_packet(customer(), evals, Config())
+    assert packet.options[0]["facts"]["slot_availability"] == 0.0
+    choice = parse_route_slot_choice(choice_dict(
+        0,  # == deterministic best -> AGREE
+        runner_up_index=1,
+        primary_reasons=["Slot is fully contended -- slot_availability 0.0."],
+        citations=[{"index": 0, "field": "slot_availability", "value": 0.0}],
+    ))
+    assert verify_choice(choice, packet).ok
+
+
+def test_zero_allowance_does_not_excuse_a_fabricated_nonzero():
+    # The zero-grounding relaxation is narrow: a real 0.0 quoted alongside a
+    # fabricated non-zero is still rejected for the fabricated figure.
+    evals = [
+        scored_eval("RTE-A", "Alpha", [scored_slot(MORNING, avail=0.0, total=0.80)]),
+        scored_eval("RTE-B", "Bravo", [scored_slot(AFTERNOON, avail=0.90, total=0.66)]),
+    ]
+    packet = build_route_slot_packet(customer(), evals, Config())
+    choice = parse_route_slot_choice(choice_dict(
+        0, runner_up_index=1,
+        primary_reasons=["slot_availability 0.0, and fits within 42.7 miles of every stop."],
+        citations=[{"index": 0, "field": "slot_availability", "value": 0.0}],
+    ))
+    result = verify_choice(choice, packet)
+    assert not result.ok
+    assert "42.7" in result.as_feedback()
+
+
 def test_verifier_allows_single_option_without_runner_up():
     # One eligible route-slot: no runner-up is possible, and that's fine.
     evals = [scored_eval("RTE-A", "Alpha", [scored_slot(MORNING, avail=0.7, total=0.80)])]
