@@ -229,3 +229,55 @@ def test_hallucinated_route_mentions_are_flagged():
     ))
     result = verify_choice(bare, packet)
     assert not result.ok and "'90'" in result.as_feedback()
+
+
+# --- a genuine zero is a quotable fact ---------------------------------------
+#
+# `window_match: 0.0` on an option that misses the customer's preferred day is
+# real, and saying so is the most useful line in a trade-off: it names what the
+# alternative lacks. The prose scan used to drop near-zero packet values, so that
+# sentence could never be grounded and every pick resting on it was rejected and
+# fell back to the deterministic choice -- discarding the model's reasoning for
+# being accurate.
+
+
+def _evals_with_a_zero_window_match():
+    """RTE-A scores a real window match; RTE-B misses the preferred day entirely."""
+    strong = scored_slot(MORNING, avail=0.33, total=0.80)
+    missed = scored_slot(MORNING, avail=0.90, total=0.55)
+    for factor in missed.factor_scores:
+        if factor.name == "window_match":
+            factor.value = 0.0
+    return [
+        scored_eval("RTE-A", "Alpha", [strong]),
+        scored_eval("RTE-B", "Bravo", [missed]),
+    ]
+
+
+def _verify_prose(tradeoff, evals=None):
+    evals = evals or _evals_with_a_zero_window_match()
+    packet = build_route_slot_packet(customer(), evals, Config())
+    choice = parse_route_slot_choice(choice_dict(0, key_tradeoff=tradeoff))
+    return verify_choice(choice, packet)
+
+
+def test_prose_may_quote_a_genuine_zero_fact():
+    result = _verify_prose(
+        "The runner-up offers a window_match of 0.0, missing the preference entirely."
+    )
+    assert result.ok, result.reasons
+
+
+def test_a_fabricated_figure_is_still_rejected():
+    """Admitting zeros must not admit everything else."""
+    result = _verify_prose("The runner-up offers a window_match of 0.47, which is weaker.")
+    assert not result.ok
+    assert any("0.47" in r for r in result.reasons)
+
+
+def test_a_zero_cannot_launder_a_percent_phrasing():
+    """The percent path only fires above 1.5, so nothing can normalize onto a
+    stored 0.0 by dividing by 100 -- the property that makes admitting zeros safe."""
+    result = _verify_prose("Slot openness runs at 44% on the runner-up.")
+    assert not result.ok
+    assert any("44" in r for r in result.reasons)

@@ -196,9 +196,24 @@ def _scan_prose(choice: RouteSlotChoice, packet: RouteSlotPacket) -> list[str]:
     load-bearing number, route-id, day name, and HH:MM time stated anywhere the
     ops manager reads it must be grounded in the packet."""
     reasons: list[str] = []
-    # Drop near-zero facts: matching a stated figure against ~0 is meaningless and
-    # (with the percent tolerance) would ground almost anything small.
-    numbers = [g for g in _packet_numbers(packet) if abs(g) > _TOL]
+    # Every number the model was shown, INCLUDING genuine zeros.
+    #
+    # Zeros used to be dropped here, on the reasoning that matching a stated
+    # figure against ~0 is meaningless and would ground anything small. In
+    # practice it did the opposite of protecting the reader: a zero is a real,
+    # load-bearing fact -- `window_match: 0.0` on a route-slot that misses the
+    # customer's preferred day entirely -- and saying so is the single most
+    # useful sentence in a trade-off, because it names what the alternative
+    # lacks. Dropping zeros made that sentence unverifiable, so every pick whose
+    # trade-off rested on one was rejected and fell back to the deterministic
+    # choice, discarding the model's reasoning for being accurate.
+    #
+    # Keeping zeros cannot launder a fabricated figure. The percent path in
+    # `_number_grounded` only fires for tokens > 1.5, so nothing can normalize
+    # onto 0 by dividing by 100; and a bare "0" is already skipped as a generic
+    # small count. A zero therefore grounds only a token within _TOL of zero --
+    # which is exactly the quote it should ground.
+    numbers = _packet_numbers(packet)
     labels = _packet_labels(packet)
     route_ids = _allowed_route_ids(packet)
     allowed_days = _allowed_days(packet)
