@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Our Apps</title>
+<meta name="theme-color" content="#12123a" />
+<style>
+  /* ---------------------------------------------------------------
+     One file, no external requests: safe to open from disk, instant
+     to load on a tablet, and nothing to break if the wifi is slow.
+     --------------------------------------------------------------- */
+  *, *::before, *::after { box-sizing: border-box; }
+  :root {
+    --bg: #f4f1ff;
+    --bg-2: #ffffff;
+    --ink: #1d1b3a;
+    --ink-soft: #5b5880;
+    --card: #ffffff;
+    --shadow: 0 10px 30px rgba(29, 27, 58, .10);
+    --shadow-lift: 0 18px 44px rgba(29, 27, 58, .18);
+    --ring: rgba(29, 27, 58, .16);
+    --radius: 26px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12123a; --bg-2: #191a4a; --ink: #f6f4ff; --ink-soft: #b6b2dd;
+      --card: #22245c; --shadow: 0 10px 30px rgba(0,0,0,.35);
+      --shadow-lift: 0 18px 44px rgba(0,0,0,.5); --ring: rgba(255,255,255,.22);
+    }
+  }
+  html, body { margin: 0; padding: 0; }
+  body {
+    min-height: 100dvh;
+    font-family: ui-rounded, "SF Pro Rounded", "Nunito", "Baloo 2",
+                 system-ui, -apple-system, "Segoe UI", sans-serif;
+    color: var(--ink);
+    background:
+      radial-gradient(1100px 700px at 12% -8%, color-mix(in srgb, var(--kid, #6c5ce7) 26%, transparent), transparent 62%),
+      radial-gradient(900px 600px at 92% 4%, color-mix(in srgb, var(--kid, #6c5ce7) 16%, transparent), transparent 60%),
+      var(--bg);
+    transition: background .5s ease;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: clamp(20px, 4vw, 44px) clamp(16px, 4vw, 32px) 64px; }
+
+  /* ---- header ---- */
+  header { text-align: center; margin-bottom: clamp(22px, 4vw, 38px); }
+  h1 {
+    margin: 0 0 6px; font-size: clamp(28px, 6vw, 46px); font-weight: 900;
+    letter-spacing: -.02em;
+  }
+  .sub { margin: 0; color: var(--ink-soft); font-size: clamp(15px, 2.4vw, 18px); font-weight: 600; }
+
+  /* ---- who's playing: the profile picker ---- */
+  .pickers {
+    display: flex; flex-wrap: wrap; justify-content: center;
+    gap: clamp(12px, 3vw, 26px); margin: clamp(22px, 4vw, 36px) 0;
+  }
+  .picker {
+    appearance: none; border: 0; background: transparent; cursor: pointer;
+    display: flex; flex-direction: column; align-items: center; gap: 10px;
+    padding: 10px; border-radius: 24px; font: inherit; color: inherit;
+    transition: transform .18s ease;
+  }
+  .picker:hover  { transform: translateY(-4px) scale(1.03); }
+  .picker:active { transform: translateY(0) scale(.97); }
+  .picker:focus-visible { outline: 4px solid var(--ring); outline-offset: 4px; }
+  .avatar {
+    width: clamp(84px, 19vw, 128px); aspect-ratio: 1; border-radius: 50%;
+    display: grid; place-items: center;
+    font-size: clamp(38px, 9vw, 58px); line-height: 1;
+    background: linear-gradient(150deg, var(--c1), var(--c2));
+    box-shadow: var(--shadow);
+    border: 5px solid transparent;
+    transition: box-shadow .2s ease, border-color .2s ease;
+  }
+  .picker[aria-pressed="true"] .avatar {
+    border-color: var(--c1);
+    box-shadow: var(--shadow-lift), 0 0 0 6px color-mix(in srgb, var(--c1) 24%, transparent);
+  }
+  .picker .who { font-weight: 800; font-size: clamp(15px, 2.6vw, 19px); }
+  .picker .who small { display: block; font-weight: 600; font-size: .78em; color: var(--ink-soft); }
+
+  /* ---- app grid ---- */
+  .stage { margin-top: 8px; }
+  .stage-head {
+    display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+    margin: 0 4px 16px;
+  }
+  .stage-head h2 { margin: 0; font-size: clamp(21px, 4vw, 30px); font-weight: 900; }
+  .stage-head .count { color: var(--ink-soft); font-weight: 700; font-size: 15px; }
+
+  .grid {
+    display: grid; gap: clamp(12px, 2.4vw, 20px);
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 230px), 1fr));
+  }
+  .app {
+    display: flex; align-items: center; gap: 16px;
+    padding: clamp(16px, 2.6vw, 22px);
+    background: var(--card); border-radius: var(--radius);
+    box-shadow: var(--shadow); text-decoration: none; color: inherit;
+    border: 3px solid transparent;
+    transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+    min-height: 96px;
+  }
+  .app:hover { transform: translateY(-5px); box-shadow: var(--shadow-lift); border-color: var(--c1); }
+  .app:active { transform: translateY(-1px); }
+  .app:focus-visible { outline: 4px solid var(--ring); outline-offset: 3px; }
+  .app .icon {
+    flex: 0 0 auto; width: 60px; aspect-ratio: 1; border-radius: 20px;
+    display: grid; place-items: center; font-size: 32px; line-height: 1;
+    background: linear-gradient(150deg, var(--c1), var(--c2));
+  }
+  .app .meta { min-width: 0; }
+  .app .name { font-weight: 800; font-size: 18px; margin-bottom: 3px; }
+  .app .desc { color: var(--ink-soft); font-size: 14px; font-weight: 600; line-height: 1.35; }
+  .app .owner {
+    display: inline-block; margin-top: 6px; font-size: 12px; font-weight: 800;
+    padding: 3px 10px; border-radius: 999px;
+    background: color-mix(in srgb, var(--c1) 20%, transparent);
+  }
+
+  .empty {
+    padding: 40px 24px; text-align: center; border-radius: var(--radius);
+    background: var(--card); box-shadow: var(--shadow); color: var(--ink-soft);
+    font-weight: 700;
+  }
+  footer { margin-top: 44px; text-align: center; color: var(--ink-soft); font-size: 13px; font-weight: 600; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1 id="title">Our Apps</h1>
+    <p class="sub" id="subtitle">Tap your picture to see your apps</p>
+  </header>
+
+  <!-- ================================================================
+       EDIT EVERYTHING BELOW THIS LINE IN ONE PLACE: the KIDS array.
+       Add an app by adding { name, desc, url, icon } to a kid's apps[].
+       ================================================================ -->
+  <script>
+    const KIDS = [
+      {
+        id: "ibrahim",
+        name: "Ibrahim",
+        full: "Ibrahim Muhammad",
+        emoji: "🦖",
+        colors: ["#2f8fff", "#00d1c1"],
+        apps: [
+          { name: "My First App", desc: "Change this in index.html", url: "#", icon: "🚀" },
+        ],
+      },
+      {
+        id: "fatimah",
+        name: "Fatimah",
+        full: "Fatimah Muhammad",
+        emoji: "🦋",
+        colors: ["#a55bff", "#ff5fa2"],
+        apps: [
+          { name: "My First App", desc: "Change this in index.html", url: "#", icon: "🎨" },
+        ],
+      },
+      {
+        id: "yusuf",
+        name: "Yusuf",
+        full: "Yusuf Muhammad",
+        emoji: "🦁",
+        colors: ["#ff9f1c", "#ffd166"],
+        apps: [
+          { name: "My First App", desc: "Change this in index.html", url: "#", icon: "🧩" },
+        ],
+      },
+    ];
+  </script>
+  <!-- ================================================================ -->
+
+  <div class="pickers" id="pickers" role="group" aria-label="Choose whose apps to show"></div>
+
+  <main class="stage">
+    <div class="stage-head">
+      <h2 id="stageTitle">Everyone's apps</h2>
+      <span class="count" id="stageCount"></span>
+    </div>
+    <div class="grid" id="grid"></div>
+  </main>
+
+  <footer>Made with love 💛</footer>
+</div>
+
+<script>
+  const pickersEl = document.getElementById("pickers");
+  const gridEl = document.getElementById("grid");
+  const stageTitle = document.getElementById("stageTitle");
+  const stageCount = document.getElementById("stageCount");
+
+  const ALL = "everyone";
+  const STORAGE_KEY = "kids-hub:last";
+
+  // "Everyone" first, then each kid — so a shared tablet always has a way back
+  // to the full list without needing to know a name.
+  const PROFILES = [
+    { id: ALL, name: "Everyone", full: "All the apps", emoji: "🏡", colors: ["#6c5ce7", "#00b894"] },
+    ...KIDS,
+  ];
+
+  function appsFor(id) {
+    if (id === ALL) {
+      return KIDS.flatMap((kid) => kid.apps.map((app) => ({ ...app, kid })));
+    }
+    const kid = KIDS.find((k) => k.id === id);
+    return kid ? kid.apps.map((app) => ({ ...app, kid })) : [];
+  }
+
+  function renderPickers(active) {
+    pickersEl.innerHTML = "";
+    for (const p of PROFILES) {
+      const btn = document.createElement("button");
+      btn.className = "picker";
+      btn.type = "button";
+      btn.style.setProperty("--c1", p.colors[0]);
+      btn.style.setProperty("--c2", p.colors[1]);
+      btn.setAttribute("aria-pressed", String(p.id === active));
+      btn.innerHTML =
+        '<span class="avatar" aria-hidden="true">' + p.emoji + "</span>" +
+        '<span class="who">' + p.name + "<small>" + p.full + "</small></span>";
+      btn.addEventListener("click", () => select(p.id));
+      pickersEl.appendChild(btn);
+    }
+  }
+
+  function renderApps(active) {
+    const profile = PROFILES.find((p) => p.id === active) || PROFILES[0];
+    const apps = appsFor(active);
+
+    stageTitle.textContent =
+      active === ALL ? "Everyone's apps" : profile.name + "'s apps";
+    stageCount.textContent = apps.length === 1 ? "1 app" : apps.length + " apps";
+
+    // Tint the whole page to whoever is picked, so a kid can tell at a glance
+    // that they're in "their" space.
+    document.body.style.setProperty("--kid", profile.colors[0]);
+
+    gridEl.innerHTML = "";
+    if (!apps.length) {
+      const empty = document.createElement("div");
+      empty.className = "empty";
+      empty.textContent = "No apps here yet — add one in index.html!";
+      gridEl.appendChild(empty);
+      return;
+    }
+
+    for (const app of apps) {
+      const card = document.createElement("a");
+      card.className = "app";
+      card.href = app.url;
+      // Kid's apps open in a new tab so this hub is always one tab away.
+      if (app.url && app.url !== "#") {
+        card.target = "_blank";
+        card.rel = "noopener";
+      }
+      card.style.setProperty("--c1", app.kid.colors[0]);
+      card.style.setProperty("--c2", app.kid.colors[1]);
+      card.innerHTML =
+        '<span class="icon" aria-hidden="true">' + (app.icon || "⭐") + "</span>" +
+        '<span class="meta">' +
+          '<span class="name">' + app.name + "</span>" +
+          '<span class="desc">' + (app.desc || "") + "</span>" +
+          // Only badge the owner in the combined view, where it's the thing
+          // that tells the apps apart.
+          (active === ALL ? '<span class="owner">' + app.kid.name + "</span>" : "") +
+        "</span>";
+      gridEl.appendChild(card);
+    }
+  }
+
+  function select(id) {
+    renderPickers(id);
+    renderApps(id);
+    try { localStorage.setItem(STORAGE_KEY, id); } catch (e) { /* private mode */ }
+  }
+
+  let initial = ALL;
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved && PROFILES.some((p) => p.id === saved)) initial = saved;
+  } catch (e) { /* private mode */ }
+  select(initial);
+</script>
+</body>
+</html>
