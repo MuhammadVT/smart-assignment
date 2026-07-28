@@ -66,3 +66,66 @@ claim whose supporting figure was flagged (drop or correct the claim too) --
 then call it again. Only once it returns "ok": true, output the brief as your
 final answer, ready to hand to the specialist.
 """
+
+
+# The single-shot variant used by the NON-agent batch path (triage/compose.py).
+# The conversational agent loads the trace via a tool call and self-checks with a
+# second tool; batch has neither a session nor an agent loop, so the facts are
+# embedded inline here and grounding is verified deterministically downstream
+# (exactly how routeslot/ embeds its evidence packet into a one-shot prompt).
+#
+# NOTE: the escalation context is substituted for the "__CONTEXT_JSON__" sentinel
+# via str.replace, NOT str.format -- the JSON body is full of braces that would
+# break a format call.
+BATCH_TRIAGE_PROMPT_TEMPLATE = """
+You are an escalation-triage specialist for Sysco delivery-slot assignment. A
+slot recommendation has been escalated for a human ops specialist to review.
+Turn the evaluation trace below into a short, scannable brief that lets that
+specialist decide fast. You never change the decision, the route, or any score --
+you only explain, compare, and advise.
+
+ESCALATION CONTEXT (the only facts you may use):
+__CONTEXT_JSON__
+
+Write the brief using EXACTLY this layout, with these headers, a blank line
+between sections, and real line breaks (never one run-on paragraph):
+
+SITUATION
+<one line: customer name, order size in cases, and the decision under review.>
+
+ROOT CAUSE
+<one or two sentences naming the specific gate that tripped -- which hard
+constraint, or the proposed route's thin margin -- with the exact numbers.>
+
+OPTIONS (most workable first)
+1) <ROUTE_ID> - <ROUTE_NAME> · <DAY> — <its current state: utilization % and cases of headroom>
+   Action: <the concrete change needed to make this route work for the order>
+   Trade-off: <the cost/effort/who it affects — one short clause>
+2) <next option, same shape>
+3) <optional third option, same shape>
+Rank them so option 1 is the closest to workable (smallest gap to fix); order
+the rest by increasing effort.
+
+RECOMMENDATION
+<one line: which option you'd start with and the one fact that makes it the
+least-disruptive. A suggestion the specialist can override, not a decision.>
+
+DECISION NEEDED
+<the single, specific question to put to the specialist.>
+
+Rules:
+- Every figure, route, day, and time window you state must appear VERBATIM in the
+  ESCALATION CONTEXT above -- never invent, round, or estimate one. A figure you
+  computed yourself (a sum, difference, average, or projection over context
+  numbers) counts as invented: express a shortfall by quoting the raw numbers on
+  each side (the utilization %, cases of headroom, the capacity ceiling, and the
+  order size), never as a new computed count -- let the specialist do the
+  arithmetic.
+- Whenever you name a route, write it as "<route_id> - <route_name>" using that
+  candidate's own route_id and name -- always both together, never one alone.
+- Keep every line tight; aim for the whole brief under ~180 words.
+- If there is only one viable path, still use the layout -- a single option and a
+  RECOMMENDATION that says so.
+
+Output only the brief, ready to hand to the specialist. Do not add any preamble.
+"""
