@@ -22,6 +22,80 @@ a score itself -- every number comes back from the tool call. See
 `smart_assignment/tools/slot_recommendation.py` for the tool implementations
 and `smart_assignment/prompts.py` for the instruction that enforces this.
 
+## Batch (non-conversational) mode (`batch/` package)
+
+The conversational agent above is one way to run the workflow; **batch mode** is
+the other. In production a prospect flows Salesforce -> Smart Assignment -> the
+sales-consultant *Customer View* with **no human in the loop**: addresses come
+from the CRM (there is nobody to confirm one), and the result is a recommendation
+or an escalation the SC reviews later. Batch serves that, and is lower-latency
+because it skips the conversational agent entirely.
+
+**It is a new orchestration seam AROUND the pipeline, not a fork of it.** The
+decision logic is byte-identical -- batch drives the same
+`pipeline.run_slot_recommendation` (one deterministic pass: intake -> geo ->
+evaluate -> score -> decide) the web app's `/api/recommend` already uses, then the
+same `reporting.page.build_workflow_payload` that produces the Customer View's
+`frontendHtml`. So a batch result renders in the Customer View with **no frontend
+change**.
+
+```
+ProspectSource            run_slot_recommendation(profile)   build_workflow_payload   ResultSink
+ (Salesforce / mock)  ->   (unchanged pipeline)          ->  (unchanged renderer)  ->  (JSONL / API)
+     |                                                                                    |
+     +-------------------------- one BatchRecord per prospect ----------------------------+
+```
+
+**The mode is an entry point, not a global config switch.** `scripts/run_batch.py`
+sits beside `scripts/run_local.py` and `scripts/run_web.py`; there is no
+`run_mode` flag threaded through the decision code, so the conversational paths are
+untouched and flag-off equivalence is automatic (none of their code is on this
+path). Collaborators are injected exactly as the pipeline's are -- a
+`ProspectSource` (mock/JSON now, a `SalesforceProspectSource` behind the same
+one-method protocol later), a `ResultSink` (`JsonlResultSink` now, an API/DB sink
+later), plus the geocoder, routes, and config.
+
+**Only the two human-in-the-loop steps differ, each replaced by a deterministic
+policy** that preserves the repo's guarantees:
+
+| Human step in chat | Batch substitute | How the guarantee holds |
+|---|---|---|
+| Address confirm (`resolve_address` -> user confirms) | **Trust Salesforce as-is.** A geocode miss (or an intake reject) becomes a `needs_attention` record for a human to fix the source data -- batch attempts **no** address resolution | Never fabricates an address: batch never resolves one, so the "no fabricated actionable value" guarantee holds trivially |
+| Escalation handoff (triage brief -> `request_input` pause) | **A record, not a pause.** The same triage brief is composed *without* the agent (`triage.compose_brief`) and attached to the escalation record the SC reviews in the Customer View | Deterministic decision unchanged; triage stays advisory/read-only; the SC is the human, just asynchronous |
+
+**The one new piece is the non-agent brief.** The chat brief is authored by an ADK
+`LlmAgent` bound to session state (`triage/agent.py`); batch has no agent and no
+session, so `triage/compose.py` composes the *same* brief with a single grounded
+`generate_text` call -- the `routeslot` pattern -- reusing the exact deterministic
+finalization (`normalize_brief` + `verify_brief`) and falling back to a
+deterministic-floor brief (assembled from the escalation context's raw, grounded
+facts) on any failure. The pure `build_escalation_context` /
+`escalation_context_from_recommendation` builders were extracted from the
+`get_escalation_context` tool so both the agent and batch build an identical
+context (the tool now delegates to them, so chat output is unchanged).
+
+**The output contract (`BatchRecord`, `batch/sink.py`)** is the batch's own,
+carrying the envelope (`prospect_id`, `generated_at`, `outcome`) plus the pieces
+each outcome needs:
+
+```
+outcome = recommend       -> payload (build_workflow_payload: frontendHtml, resultHtml, map, ...)
+outcome = escalate        -> payload + review_reason + triage_brief
+outcome = needs_attention -> error (no payload; the address wouldn't geocode / intake rejected it)
+```
+
+**Grounded reasoning is config-gated, same as chat.** Batch honors
+`use_grounded_route_slot_*` and `use_escalation_triage`; the only LLM calls are the
+route-slot decision (+ any resampling) and the escalation brief, and both fall back
+to the deterministic result when the backend/credentials are unavailable -- so a
+batch run works fully offline. Execution is **sequential** (simplest and correct);
+a per-prospect failure degrades to `needs_attention` and **never aborts the batch**
+(the runner also wraps each prospect so an unexpected error can't take the run
+down). Parallelism is a later, isolated change inside `BatchRunner.run`.
+
+Run it: `python3 scripts/run_batch.py --mock-geocoder` (built-in demo prospects,
+fully offline) or `--source prospects.json --out results.jsonl`.
+
 ## Delivery-slot selection (`shared/slot_selection.py`)
 
 The prospect should be delivered *when the truck is already in their
@@ -294,6 +368,19 @@ bare `request_input`.
 Built lazily inside `root_agent`'s construction (`agent.py`), so importing the
 package stays credential-free; the sub-agent resolves the LLM backend only when
 `root_agent` itself is built.
+
+**A non-agent sibling for batch (`triage/compose.py`).** The `AgentTool` above is
+the *conversational* path -- it reads session state and owns the `request_input`
+pause. Batch mode (above) has neither a session nor an agent loop, so
+`compose_brief` composes the same brief with a single grounded `generate_text`
+call (the `routeslot` pattern) instead: it reuses the identical deterministic
+finalization (`normalize_brief` layout + `verify_brief` grounding scan, with one
+corrective retry then an advisory caveat), and falls back to a deterministic-floor
+brief built from the escalation context's raw facts on any failure. The pure
+`build_escalation_context` / `escalation_context_from_recommendation` builders are
+extracted from `get_escalation_context` so the agent (via the tool) and batch (via
+`compose_brief`) reason over an identical context; the tool now delegates to them,
+so the conversational brief is unchanged.
 
 ## Grounded address resolution (`address_resolve/` package)
 
