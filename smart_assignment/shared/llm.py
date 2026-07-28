@@ -40,9 +40,7 @@ import asyncio
 import contextvars
 import logging
 import os
-import sys
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional, TypeVar
 
 from smart_assignment.shared import tracing
@@ -100,37 +98,14 @@ _SAGE_REGISTRY: Any = None
 _SAGE_GATEWAY_LLM_CLS: Any = None
 
 
-def _ensure_sage_sdk_on_syspath() -> None:
-    """Add the vendored Sage SDK's src/ dirs to sys.path, for the local
-    source-tree layout used in Sysco workshops when the SDK is not installed
-    as a wheel -- mirrors the pattern from tmp.py. Idempotent no-op once the
-    paths are already present (or if no local vendor tree is found, in which
-    case the caller's own ModuleNotFoundError propagates unchanged).
-
-    Local workshop layouts supported:
-      1) <repo>/smart_assignment/sage-ai-sdk-python-sage-adk_1.0.0
-      2) <repo>/sage-ai-sdk-python-sage-adk_1.0.0
-    From this file (smart_assignment/shared/llm.py), parents[2] is the
-    repository root.
-    """
-    repo_root = Path(__file__).resolve().parents[2]
-    sdk_roots = [
-        repo_root / "smart_assignment" / "sage-ai-sdk-python-sage-adk_1.0.0",
-        repo_root / "sage-ai-sdk-python-sage-adk_1.0.0",
-    ]
-    sdk_root = next((root for root in sdk_roots if root.exists()), None)
-    if sdk_root is None:
-        return
-
-    for src_path in (
-        sdk_root / "sage_adk" / "src",
-        sdk_root / "sage_core" / "src",
-        sdk_root / "sage_client" / "src",
-    ):
-        if src_path.exists():
-            src_path_str = str(src_path)
-            if src_path_str not in sys.path:
-                sys.path.insert(0, src_path_str)
+# The sage backend needs the Sage SDK, installed via the `sage` optional extra
+# (``pip install -e ".[sage]"`` / ``uv sync --extra sage``). It is imported lazily
+# -- only inside these loaders, only when ``llm_backend == "sage"`` -- so importing
+# this module never requires the SDK, and the standard/offline paths run without it.
+_SAGE_INSTALL_HINT = (
+    "The Sage SDK is not installed. Install the sage extra: "
+    'uv sync --extra sage   (or: pip install -e ".[sage]")'
+)
 
 
 def _load_sage_registry() -> Any:
@@ -145,10 +120,8 @@ def _load_sage_registry() -> Any:
 
     try:
         from sage_adk import SageLlmRegistry  # type: ignore[import-untyped]
-    except ModuleNotFoundError:
-        _ensure_sage_sdk_on_syspath()
-        # Re-raises ModuleNotFoundError if the vendored SDK still isn't found.
-        from sage_adk import SageLlmRegistry  # type: ignore[import-untyped]
+    except ModuleNotFoundError as exc:
+        raise ModuleNotFoundError(_SAGE_INSTALL_HINT) from exc
 
     import truststore  # type: ignore[import-untyped]
 
@@ -161,8 +134,8 @@ def _load_sage_gateway_llm_cls() -> Any:
     """
     Import GatewayLlm -- the Sage SDK's ADK `LiteLlm` subclass that routes a
     model through Sysco's enterprise LLM Gateway (see Config.use_sage_gateway)
-    -- and inject enterprise TLS. Same lazy/cached/local-workshop-fallback
-    shape as _load_sage_registry, just a different class off the same SDK.
+    -- and inject enterprise TLS. Same lazy/cached shape as _load_sage_registry,
+    just a different class off the same SDK.
     """
     global _SAGE_GATEWAY_LLM_CLS
     if _SAGE_GATEWAY_LLM_CLS is not None:
@@ -170,9 +143,8 @@ def _load_sage_gateway_llm_cls() -> Any:
 
     try:
         from sage_adk import GatewayLlm  # type: ignore[import-untyped]
-    except ModuleNotFoundError:
-        _ensure_sage_sdk_on_syspath()
-        from sage_adk import GatewayLlm  # type: ignore[import-untyped]
+    except ModuleNotFoundError as exc:
+        raise ModuleNotFoundError(_SAGE_INSTALL_HINT) from exc
 
     import truststore  # type: ignore[import-untyped]
 
