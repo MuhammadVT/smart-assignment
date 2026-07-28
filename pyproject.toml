@@ -7,7 +7,10 @@ name = "smart-assignment"
 version = "0.1.0"
 description = "Agentic workflows for automated delivery slot/day assignment for new customers, built on Google ADK."
 readme = "README.md"
-requires-python = ">=3.10"
+# The Sage SDK (installed via the `sage` extra) and all three of its workspace
+# packages declare requires-python >=3.13; uv refuses `--extra sage` if the
+# project floor is lower. The dev env runs on 3.14 (see .python-version).
+requires-python = ">=3.13"
 license = { text = "Apache-2.0" }
 dependencies = [
     "google-adk>=2.3.0",
@@ -17,11 +20,16 @@ dependencies = [
     "pandas>=2.0",
     "ds-utils-lite",
     "python-dotenv>=1.0",
-    # Transitive deps for the vendored Sage SDK (loaded via sys.path in shared/llm.py)
+    # Used directly by project code (NOT only the Sage SDK), so they stay in the
+    # base install even when the `sage` extra is absent:
+    #   json-repair     -> routeslot/llm.py JSON salvage on the standard backend
+    #   litellm         -> standard backend + deepeval (sage-core pins this exact
+    #                      version too)
+    #   httpx           -> broadly used
+    #   python-dateutil -> ds_utils date math (also a transitive pandas dep)
     "json-repair>=0.52.3",
     "litellm==1.83.7",
     "httpx>=0.27",
-    "aiohttp>=3.8.0",
     "python-dateutil>=2.8.0",
 ]
 
@@ -104,6 +112,20 @@ observability = [
     "opentelemetry-sdk>=1.24",
     "opentelemetry-exporter-otlp-proto-http>=1.24",
     "openinference-instrumentation-google-adk>=0.1",
+]
+# The Sysco Sage LLM backend (SMART_ASSIGNMENT_LLM_BACKEND=sage). The SDK is a uv
+# workspace of three packages (sage-adk -> sage-core -> sage-client), none of
+# which is published to public PyPI, so all three are pinned as direct git URLs:
+# a direct-URL requirement for sage-core/sage-client also satisfies sage-adk's
+# transitive references to them under both pip and uv (neither honors a git
+# dependency's own [tool.uv.sources]). Requires git access to the private Sysco
+# repo (PAT/SSO). Without this extra the sage backend raises an actionable
+# ModuleNotFoundError at runtime; all other backends and the fully-offline
+# deterministic run are unaffected.
+sage = [
+    "sage-client @ git+https://github.com/SyscoCorporation/sage-ai-sdk-python.git@sage-adk_1.0.0#subdirectory=sage_client",
+    "sage-core @ git+https://github.com/SyscoCorporation/sage-ai-sdk-python.git@sage-adk_1.0.0#subdirectory=sage_core",
+    "sage-adk @ git+https://github.com/SyscoCorporation/sage-ai-sdk-python.git@sage-adk_1.0.0#subdirectory=sage_adk",
 ]
 
 [tool.setuptools.packages.find]
