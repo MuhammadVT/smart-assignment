@@ -144,9 +144,13 @@ def _deterministic_brief(context: dict) -> str:
         else "1) No candidate route is available for this prospect."
     )
 
+    # Deliberately avoids the section-header keywords (SITUATION / ROOT CAUSE /
+    # OPTIONS / RECOMMENDATION / DECISION) in the body prose: normalize_brief matches
+    # those case-insensitively and would reflow e.g. a bare "options" onto its own
+    # line, corrupting the layout.
     recommendation = (
-        "Review the options above; no route-slot cleared the auto-assign bar, so "
-        "none was assigned automatically."
+        "Review the routes above; none cleared the auto-assign bar, so nothing was "
+        "assigned automatically."
     )
     decision_needed = (
         "Which route-slot (if any) should take this prospect, or should it stay "

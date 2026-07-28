@@ -84,6 +84,11 @@ def test_flag_off_returns_deterministic_brief():
     # A route is named with the "<id> - <name>" convention, and no LLM was called.
     assert "RTE-" in brief
     assert brief.startswith("SITUATION")
+    # The body prose must not collide with a section-header keyword: each header
+    # appears exactly once (a stray "options"/"recommendation" in the text would be
+    # reflowed into a second header line by normalize_brief).
+    for header in _HEADERS:
+        assert brief.count(header) == 1
 
 
 # --- grounded path (flag on, fake model) ------------------------------------
