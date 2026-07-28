@@ -7,7 +7,7 @@ This is deliberately a *curation* step, not an auto-promotion. It reads the
 durable feedback log and produces candidate eval cases in a review-ready JSON
 artifact; a human then inspects them and promotes the good ones into the
 code-defined golden set (``eval/golden_cases.py``). That boundary is the point:
-per CLAUDE.md, human feedback must feed an offline, human-driven loop -- never a
+per AGENTS.md, human feedback must feed an offline, human-driven loop -- never a
 live one that silently mutates what the system does. Nothing here runs in the
 request path, and nothing it writes changes a decision.
 

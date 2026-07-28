@@ -3,7 +3,7 @@ Human (and automated) feedback capture for production decisions.
 
 A small, vendor-neutral layer that records quality judgments about decisions the
 pipeline already made -- a thumbs-up/down, an optional score, a note -- and holds
-the repo's standard guarantees (see CLAUDE.md):
+the repo's standard guarantees (see AGENTS.md):
 
 * **Opt-in, default off.** Everything is gated by ``Config.use_human_feedback``.
   Flag-off is a no-op that persists nothing and imports nothing further.

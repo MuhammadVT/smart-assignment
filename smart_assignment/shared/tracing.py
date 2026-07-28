@@ -6,7 +6,7 @@ one-time, global-provider setup called from an agent-serving entry point) and
 ``llm_span`` (a context manager that wraps a unit of LLM work in an
 OpenTelemetry span when tracing is enabled, and is a complete no-op otherwise).
 It follows the same guarantees the rest of this repo holds itself to (see
-CLAUDE.md):
+AGENTS.md):
 
 * **Opt-in, default off.** Nothing happens unless ``Config.use_tracing`` is on
   (env ``SMART_ASSIGNMENT_USE_TRACING``). Flag-off reproduces prior behavior

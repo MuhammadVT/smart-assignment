@@ -4,7 +4,7 @@ of truth and the input to curation.
 
 Feedback is written here *first*, before any observability emit, precisely
 because the trace backend is best-effort and swappable while auditability is a
-hard guarantee (see CLAUDE.md): a human must be able to reconstruct what feedback
+hard guarantee (see AGENTS.md): a human must be able to reconstruct what feedback
 was given even if Phoenix/Langfuse/whatever was down at the time. The format is
 append-only JSON Lines -- one self-describing record per line -- so it is trivial
 to tail, grep, ship, and re-read for curation, with no database and no vendor.
