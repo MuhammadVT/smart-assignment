@@ -559,8 +559,9 @@ The Sage SDK ships two distinct ways to reach a model under `llm_backend =
   wraps it as `"openai/{model}"` itself.
 
 Both classes are lazily imported the same way (`shared/llm.py`'s
-`_load_sage_registry` / `_load_sage_gateway_llm_cls`, sharing the
-`_ensure_sage_sdk_on_syspath` local-workshop fallback), and because
+`_load_sage_registry` / `_load_sage_gateway_llm_cls`, which import the SDK
+installed via the `sage` optional extra — `uv sync --extra sage` — and raise an
+actionable `ModuleNotFoundError` if it is absent), and because
 `GatewayLlm` is a plain ADK `LiteLlm`, it needs no new content-generation
 logic — `get_llm()` and `generate_text()` dispatch to whichever sibling
 `Config.use_sage_gateway` selects (`get_sage_llm()` vs.
