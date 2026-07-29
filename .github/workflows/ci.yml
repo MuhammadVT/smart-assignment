@@ -74,21 +74,34 @@ jobs:
 
   # Agent-level evaluation (ADK AgentEvaluator): replays scripted intake
   # conversations against the real root_agent and scores tool trajectory. Unlike
-  # the hermetic `test` job it needs a live LLM backend, so it runs separately and
-  # is ADVISORY for now -- it reports regressions but never blocks a PR while the
-  # thresholds are being calibrated (Phase 2a). Flip to a required check (drop
-  # continue-on-error) once trajectory scores prove stable over a few real PRs.
+  # the hermetic `test` job it needs a live LLM backend, so it runs separately.
   #
-  # NOTE: configured for the Sage backend (sage-gemini-2.5-flash). That backend
-  # needs the Sage SDK and enterprise network access, so this job is meant to run
-  # on a runner that has them (e.g. a self-hosted runner); on a stock runner
-  # without SAGE_* secrets it skips cleanly and never fails the PR. To run it
-  # against a public model instead, swap the env below for
-  # SMART_ASSIGNMENT_LLM_BACKEND=standard + a GOOGLE_API_KEY secret.
+  # RED vs. NON-BLOCKING are decided separately, on purpose:
+  #  - This job is NOT advisory-green. `continue-on-error` is intentionally unset
+  #    (default false), so a genuine failure -- the Sage SDK can't be installed
+  #    while SAGE_* creds ARE present (e.g. no git access to the private SDK repo),
+  #    or a step below errors -- surfaces as a RED check instead of a buried
+  #    warning that reads as a pass.
+  #  - It stays NON-BLOCKING by NOT being listed as a required status check in the
+  #    branch-protection rule (Settings -> Branches). A red check that isn't
+  #    required shows red but leaves the merge button enabled. (Blocking is a
+  #    branch-protection setting, never continue-on-error.) Make it a required
+  #    check once trajectory scores prove stable over a few real PRs (Phase 2a).
+  #  - The NON-DETERMINISTIC eval steps themselves (grounded LLM reasoning varies
+  #    run to run) keep step-level `continue-on-error: true` so an expected score
+  #    divergence stays advisory; only a hard failure (can't run at all) goes red.
+  #  - A run with NO SAGE_* secrets (forks, external PRs) skips cleanly and stays
+  #    green -- there is nothing to run, which is not a failure.
+  #
+  # NOTE: configured for the Sage backend (sage-gemini-2.5-flash), whose SDK lives
+  # in a PRIVATE Sysco git repo. GitHub-hosted runners -- including org larger
+  # runners (e.g. LG-RUNNER-GENERAL-1) -- have NO git access to that repo, so the
+  # SDK install fails there and this job goes red. To make it pass, either give the
+  # runner a read-only PAT/SSO for the SDK repo, or switch this job to
+  # SMART_ASSIGNMENT_LLM_BACKEND=standard + a GOOGLE_API_KEY secret (no private SDK).
   agent-eval:
     # See the note on the `test` job above; CI_RUNNER is shared repo-wide.
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
-    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -107,7 +120,7 @@ jobs:
         # raises ModuleNotFoundError without it. `.[dev]` alone is not enough.
         run: pip install -e ".[dev,eval]"
 
-      - name: Install the Sage SDK when it can be cloned
+      - name: Install the Sage SDK when credentials are present
         id: sage_sdk
         # The eval steps below run against the `sage` backend, which imports the
         # Sage SDK (sage_adk) -- provided only by the `sage` extra. That extra
@@ -116,30 +129,34 @@ jobs:
         # from the SAGE_* runtime secrets: actions/checkout's GITHUB_TOKEN only
         # authenticates THIS repo, not a different private repo in the org, so a
         # runner can hold the SAGE_* secrets yet still be unable to clone the SDK
-        # (the clone fails with "could not read Username for github.com"). There
-        # is no env var that reliably means "this runner can clone it", so we
-        # ATTEMPT the install and tolerate failure: on success the eval steps run
-        # (gated on the `installed` output below); on failure -- no SAGE_* secrets
-        # or no git access -- they skip cleanly instead of crashing later with a
-        # ModuleNotFoundError. The intended self-hosted Sysco runner has native
-        # git access, so this installs and the eval runs there as before.
+        # (the clone fails with "could not read Username for github.com").
+        #
+        # Two outcomes, deliberately different:
+        #  - NO SAGE_* creds (forks, stock runners): nothing is expected to run;
+        #    exit 0 and mark installed=false so the eval steps skip -> green skip.
+        #  - Creds ARE present: the eval is EXPECTED to run, so a failed install is
+        #    a real failure. Do NOT swallow it -- let `pip install` fail the step
+        #    (the default `bash -e` shell exits non-zero) so the job goes RED. That
+        #    replaces the old warning-and-continue, which made a broken run look
+        #    like a pass. installed=true is recorded only on a successful install.
         env:
           SAGE_CLIENT_ID: ${{ secrets.SAGE_CLIENT_ID }}
         run: |
           if [ -z "$SAGE_CLIENT_ID" ]; then
-            echo "No SAGE_* credentials configured; skipping Sage SDK install (advisory)."
+            echo "No SAGE_* credentials configured; skipping Sage-backed eval (clean skip)."
             echo "installed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if pip install -e ".[sage]"; then
-            echo "installed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "::warning::Sage SDK install failed (no git access to the private SDK repo on this runner); skipping Sage-backed eval (advisory)."
-            echo "installed=false" >> "$GITHUB_OUTPUT"
-          fi
+          pip install -e ".[sage]"
+          echo "installed=true" >> "$GITHUB_OUTPUT"
 
       - name: Run agent trajectory eval (only when the Sage SDK installed)
         if: steps.sage_sdk.outputs.installed == 'true'
+        # Grounded LLM reasoning is non-deterministic, so a score divergence stays
+        # advisory (step-level continue-on-error) even though the job overall is no
+        # longer advisory-green. A hard failure to run at all still shows via the
+        # install step above going red.
+        continue-on-error: true
         env:
           SMART_ASSIGNMENT_LLM_BACKEND: sage
           SMART_ASSIGNMENT_SAGE_MODEL: sage-gemini-2.5-flash
@@ -150,11 +167,12 @@ jobs:
 
       - name: Score curated snapshot datasets (LLM path, advisory)
         # The same snapshot gate as the `test` job, but with the grounded LLM
-        # decision in the loop (SMART_ASSIGNMENT_EVAL_MODEL_PATH=llm). Advisory:
-        # needs the Sage SDK + credentials and grounded reasoning is
-        # non-deterministic, so it reports divergences without blocking. Runs only
-        # when the Sage SDK installed above.
+        # decision in the loop (SMART_ASSIGNMENT_EVAL_MODEL_PATH=llm). Grounded
+        # reasoning is non-deterministic, so this step stays advisory via its own
+        # step-level continue-on-error; it reports divergences without reddening
+        # the job. Runs only when the Sage SDK installed above.
         if: steps.sage_sdk.outputs.installed == 'true'
+        continue-on-error: true
         env:
           SMART_ASSIGNMENT_LLM_BACKEND: sage
           SMART_ASSIGNMENT_SAGE_MODEL: sage-gemini-2.5-flash
@@ -177,8 +195,11 @@ jobs:
   # both; see that file's module docstring.
   quality-eval:
     # See the note on the `test` job above; CI_RUNNER is shared repo-wide.
+    # Same red-vs-non-blocking model as agent-eval: continue-on-error is unset so a
+    # can't-run failure (Sage SDK install with creds present) goes RED; the metrics
+    # step stays advisory via its own step-level continue-on-error; a no-creds run
+    # skips green; non-blocking is enforced by NOT making this a required check.
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
-    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -195,7 +216,7 @@ jobs:
       - name: Install package with dev + quality-eval dependencies
         run: pip install -e ".[dev,eval-quality]"
 
-      - name: Install the Sage SDK when it can be cloned
+      - name: Install the Sage SDK when credentials are present
         id: sage_sdk
         # The metrics below run against the `sage` backend, which imports the Sage
         # SDK (sage_adk) -- provided only by the `sage` extra. That extra installs
@@ -203,28 +224,28 @@ jobs:
         # (PAT/SSO) to github.com -- a SEPARATE credential from the SAGE_* runtime
         # secrets: actions/checkout's GITHUB_TOKEN only authenticates THIS repo,
         # so a runner can hold the SAGE_* secrets yet still be unable to clone the
-        # SDK. There is no env var that reliably means "this runner can clone it",
-        # so we ATTEMPT the install and tolerate failure: on success the metrics
-        # step runs (gated on the `installed` output); on failure -- no SAGE_*
-        # secrets or no git access -- it skips cleanly instead of crashing with a
-        # ModuleNotFoundError. See the fuller note in the agent-eval job above.
+        # SDK. No creds -> exit 0 and installed=false (the metrics step skips, green
+        # skip). Creds present -> the eval is expected to run, so a failed install
+        # is a real failure: let `pip install` fail the step (default bash -e) so
+        # the job goes RED rather than a swallowed warning. See the fuller note in
+        # the agent-eval job above.
         env:
           SAGE_CLIENT_ID: ${{ secrets.SAGE_CLIENT_ID }}
         run: |
           if [ -z "$SAGE_CLIENT_ID" ]; then
-            echo "No SAGE_* credentials configured; skipping Sage SDK install (advisory)."
+            echo "No SAGE_* credentials configured; skipping Sage-backed eval (clean skip)."
             echo "installed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if pip install -e ".[sage]"; then
-            echo "installed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "::warning::Sage SDK install failed (no git access to the private SDK repo on this runner); skipping Sage-backed eval (advisory)."
-            echo "installed=false" >> "$GITHUB_OUTPUT"
-          fi
+          pip install -e ".[sage]"
+          echo "installed=true" >> "$GITHUB_OUTPUT"
 
       - name: Run quality metrics (only when the Sage SDK installed)
         if: steps.sage_sdk.outputs.installed == 'true'
+        # Non-deterministic G-Eval scores stay advisory (step-level
+        # continue-on-error); only a can't-run failure (install step above) reds
+        # the job.
+        continue-on-error: true
         env:
           SMART_ASSIGNMENT_LLM_BACKEND: sage
           SMART_ASSIGNMENT_SAGE_MODEL: sage-gemini-2.5-flash
