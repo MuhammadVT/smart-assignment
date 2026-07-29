@@ -1,9 +1,9 @@
 name: CI
 
-# Runs the full test suite on every merge (push) to main and the dev-eval
+# Runs the full test suite on every merge (push) to main and the qa
 # integration branch, and on pull requests targeting either, so changes are
 # validated before they land. Can also be run manually from the Actions tab.
-# (Only dev-eval is included among the dev branches -- it's where the eval
+# (Only qa is included among the dev branches -- it's where the eval
 # hardening integrates and where these jobs earn their green history before
 # any promotion to required checks.)
 #
@@ -15,9 +15,9 @@ name: CI
 # This lets GitHub-hosted runner IPs reach private org repositories.
 on:
   push:
-    branches: [main, dev-eval]
+    branches: [main, qa]
   pull_request:
-    branches: [main, dev-eval]
+    branches: [main, qa]
   workflow_dispatch:
 
 permissions:
@@ -107,6 +107,23 @@ jobs:
         # raises ModuleNotFoundError without it. `.[dev]` alone is not enough.
         run: pip install -e ".[dev,eval]"
 
+      - name: Install the Sage SDK when credentials are configured
+        # The eval below runs against the `sage` backend, which imports the Sage
+        # SDK (sage_adk) -- provided only by the `sage` extra. That extra installs
+        # three packages from a PRIVATE Sysco git repo, so it needs git access
+        # (PAT/SSO) that only credentialed runners have. Gate the install on the
+        # same SAGE_CLIENT_ID check the eval step uses, so a stock runner without
+        # access skips it cleanly instead of failing the private-repo clone. Kept
+        # OUT of the unconditional install above for exactly that reason.
+        env:
+          SAGE_CLIENT_ID: ${{ secrets.SAGE_CLIENT_ID }}
+        run: |
+          if [ -z "$SAGE_CLIENT_ID" ]; then
+            echo "No SAGE_* credentials configured; skipping Sage SDK install (advisory)."
+            exit 0
+          fi
+          pip install -e ".[sage]"
+
       - name: Run agent trajectory eval (skips cleanly without credentials)
         env:
           SMART_ASSIGNMENT_LLM_BACKEND: sage
@@ -170,6 +187,23 @@ jobs:
 
       - name: Install package with dev + quality-eval dependencies
         run: pip install -e ".[dev,eval-quality]"
+
+      - name: Install the Sage SDK when credentials are configured
+        # The metrics below run against the `sage` backend, which imports the Sage
+        # SDK (sage_adk) -- provided only by the `sage` extra. That extra installs
+        # three packages from a PRIVATE Sysco git repo, so it needs git access
+        # (PAT/SSO) that only credentialed runners have. Gate the install on the
+        # same SAGE_CLIENT_ID check the metrics step uses, so a stock runner
+        # without access skips it cleanly instead of failing the private-repo
+        # clone. Kept OUT of the unconditional install above for that reason.
+        env:
+          SAGE_CLIENT_ID: ${{ secrets.SAGE_CLIENT_ID }}
+        run: |
+          if [ -z "$SAGE_CLIENT_ID" ]; then
+            echo "No SAGE_* credentials configured; skipping Sage SDK install (advisory)."
+            exit 0
+          fi
+          pip install -e ".[sage]"
 
       - name: Run quality metrics (skips cleanly without credentials)
         env:
