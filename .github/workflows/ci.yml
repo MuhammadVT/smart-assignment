@@ -107,54 +107,61 @@ jobs:
         # raises ModuleNotFoundError without it. `.[dev]` alone is not enough.
         run: pip install -e ".[dev,eval]"
 
-      - name: Install the Sage SDK when credentials are configured
-        # The eval below runs against the `sage` backend, which imports the Sage
-        # SDK (sage_adk) -- provided only by the `sage` extra. That extra installs
-        # three packages from a PRIVATE Sysco git repo, so it needs git access
-        # (PAT/SSO) that only credentialed runners have. Gate the install on the
-        # same SAGE_CLIENT_ID check the eval step uses, so a stock runner without
-        # access skips it cleanly instead of failing the private-repo clone. Kept
-        # OUT of the unconditional install above for exactly that reason.
+      - name: Install the Sage SDK when it can be cloned
+        id: sage_sdk
+        # The eval steps below run against the `sage` backend, which imports the
+        # Sage SDK (sage_adk) -- provided only by the `sage` extra. That extra
+        # installs three packages from a PRIVATE Sysco git repo, which needs git
+        # access (PAT/SSO) to github.com. That access is a SEPARATE credential
+        # from the SAGE_* runtime secrets: actions/checkout's GITHUB_TOKEN only
+        # authenticates THIS repo, not a different private repo in the org, so a
+        # runner can hold the SAGE_* secrets yet still be unable to clone the SDK
+        # (the clone fails with "could not read Username for github.com"). There
+        # is no env var that reliably means "this runner can clone it", so we
+        # ATTEMPT the install and tolerate failure: on success the eval steps run
+        # (gated on the `installed` output below); on failure -- no SAGE_* secrets
+        # or no git access -- they skip cleanly instead of crashing later with a
+        # ModuleNotFoundError. The intended self-hosted Sysco runner has native
+        # git access, so this installs and the eval runs there as before.
         env:
           SAGE_CLIENT_ID: ${{ secrets.SAGE_CLIENT_ID }}
         run: |
           if [ -z "$SAGE_CLIENT_ID" ]; then
             echo "No SAGE_* credentials configured; skipping Sage SDK install (advisory)."
+            echo "installed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          pip install -e ".[sage]"
+          if pip install -e ".[sage]"; then
+            echo "installed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Sage SDK install failed (no git access to the private SDK repo on this runner); skipping Sage-backed eval (advisory)."
+            echo "installed=false" >> "$GITHUB_OUTPUT"
+          fi
 
-      - name: Run agent trajectory eval (skips cleanly without credentials)
+      - name: Run agent trajectory eval (only when the Sage SDK installed)
+        if: steps.sage_sdk.outputs.installed == 'true'
         env:
           SMART_ASSIGNMENT_LLM_BACKEND: sage
           SMART_ASSIGNMENT_SAGE_MODEL: sage-gemini-2.5-flash
           SAGE_CLIENT_ID: ${{ secrets.SAGE_CLIENT_ID }}
           SAGE_CLIENT_SECRET: ${{ secrets.SAGE_CLIENT_SECRET }}
           SAGE_ENVIRONMENT: ${{ secrets.SAGE_ENVIRONMENT }}
-        run: |
-          if [ -z "$SAGE_CLIENT_ID" ]; then
-            echo "No SAGE_* credentials configured; skipping agent eval (advisory)."
-            exit 0
-          fi
-          python3 -m pytest eval/test_eval.py -q
+        run: python3 -m pytest eval/test_eval.py -q
 
       - name: Score curated snapshot datasets (LLM path, advisory)
         # The same snapshot gate as the `test` job, but with the grounded LLM
         # decision in the loop (SMART_ASSIGNMENT_EVAL_MODEL_PATH=llm). Advisory:
-        # needs credentials and grounded reasoning is non-deterministic, so it
-        # reports divergences without blocking. Skips cleanly without SAGE_*.
+        # needs the Sage SDK + credentials and grounded reasoning is
+        # non-deterministic, so it reports divergences without blocking. Runs only
+        # when the Sage SDK installed above.
+        if: steps.sage_sdk.outputs.installed == 'true'
         env:
           SMART_ASSIGNMENT_LLM_BACKEND: sage
           SMART_ASSIGNMENT_SAGE_MODEL: sage-gemini-2.5-flash
           SAGE_CLIENT_ID: ${{ secrets.SAGE_CLIENT_ID }}
           SAGE_CLIENT_SECRET: ${{ secrets.SAGE_CLIENT_SECRET }}
           SAGE_ENVIRONMENT: ${{ secrets.SAGE_ENVIRONMENT }}
-        run: |
-          if [ -z "$SAGE_CLIENT_ID" ]; then
-            echo "No SAGE_* credentials configured; skipping LLM-path scoring (advisory)."
-            exit 0
-          fi
-          python3 -m eval.outcome_scoring --path llm
+        run: python3 -m eval.outcome_scoring --path llm
 
   # G-Eval quality metrics (DeepEval): brief_quality (escalate-outcome captures)
   # and response_clarity (recommend-outcome captures), scored directly against
@@ -188,24 +195,36 @@ jobs:
       - name: Install package with dev + quality-eval dependencies
         run: pip install -e ".[dev,eval-quality]"
 
-      - name: Install the Sage SDK when credentials are configured
+      - name: Install the Sage SDK when it can be cloned
+        id: sage_sdk
         # The metrics below run against the `sage` backend, which imports the Sage
         # SDK (sage_adk) -- provided only by the `sage` extra. That extra installs
-        # three packages from a PRIVATE Sysco git repo, so it needs git access
-        # (PAT/SSO) that only credentialed runners have. Gate the install on the
-        # same SAGE_CLIENT_ID check the metrics step uses, so a stock runner
-        # without access skips it cleanly instead of failing the private-repo
-        # clone. Kept OUT of the unconditional install above for that reason.
+        # three packages from a PRIVATE Sysco git repo, which needs git access
+        # (PAT/SSO) to github.com -- a SEPARATE credential from the SAGE_* runtime
+        # secrets: actions/checkout's GITHUB_TOKEN only authenticates THIS repo,
+        # so a runner can hold the SAGE_* secrets yet still be unable to clone the
+        # SDK. There is no env var that reliably means "this runner can clone it",
+        # so we ATTEMPT the install and tolerate failure: on success the metrics
+        # step runs (gated on the `installed` output); on failure -- no SAGE_*
+        # secrets or no git access -- it skips cleanly instead of crashing with a
+        # ModuleNotFoundError. See the fuller note in the agent-eval job above.
         env:
           SAGE_CLIENT_ID: ${{ secrets.SAGE_CLIENT_ID }}
         run: |
           if [ -z "$SAGE_CLIENT_ID" ]; then
             echo "No SAGE_* credentials configured; skipping Sage SDK install (advisory)."
+            echo "installed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          pip install -e ".[sage]"
+          if pip install -e ".[sage]"; then
+            echo "installed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Sage SDK install failed (no git access to the private SDK repo on this runner); skipping Sage-backed eval (advisory)."
+            echo "installed=false" >> "$GITHUB_OUTPUT"
+          fi
 
-      - name: Run quality metrics (skips cleanly without credentials)
+      - name: Run quality metrics (only when the Sage SDK installed)
+        if: steps.sage_sdk.outputs.installed == 'true'
         env:
           SMART_ASSIGNMENT_LLM_BACKEND: sage
           SMART_ASSIGNMENT_SAGE_MODEL: sage-gemini-2.5-flash
@@ -221,9 +240,4 @@ jobs:
           # in an environment where deepeval happens to be installed.
           DEEPEVAL_TELEMETRY_OPT_OUT: "YES"
           DEEPEVAL_UPDATE_WARNING_OPT_OUT: "YES"
-        run: |
-          if [ -z "$SAGE_CLIENT_ID" ]; then
-            echo "No SAGE_* credentials configured; skipping quality eval (advisory)."
-            exit 0
-          fi
-          python3 -m pytest eval/test_quality.py eval/test_rationale_faithfulness.py -q
+        run: python3 -m pytest eval/test_quality.py eval/test_rationale_faithfulness.py -q
