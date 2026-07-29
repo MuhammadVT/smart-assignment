@@ -139,13 +139,26 @@ jobs:
         #    (the default `bash -e` shell exits non-zero) so the job goes RED. That
         #    replaces the old warning-and-continue, which made a broken run look
         #    like a pass. installed=true is recorded only on a successful install.
+        #
+        # SAGE_SDK_TOKEN_CLASSIC grants pip's git clone read access to the private
+        # SDK repo (GitHub-hosted runners have no such access by default -- see the
+        # note above). Injected via git's insteadOf rewrite, scoped to the Sysco org
+        # prefix so no other github.com clone is affected. When absent (e.g. a
+        # runner with native git access) the rewrite is skipped and the clone runs
+        # as-is. GitHub auto-masks the secret in logs.
         env:
           SAGE_CLIENT_ID: ${{ secrets.SAGE_CLIENT_ID }}
+          SAGE_SDK_TOKEN_CLASSIC: ${{ secrets.SAGE_SDK_TOKEN_CLASSIC }}
         run: |
           if [ -z "$SAGE_CLIENT_ID" ]; then
             echo "No SAGE_* credentials configured; skipping Sage-backed eval (clean skip)."
             echo "installed=false" >> "$GITHUB_OUTPUT"
             exit 0
+          fi
+          if [ -n "$SAGE_SDK_TOKEN_CLASSIC" ]; then
+            git config --global \
+              url."https://x-access-token:${SAGE_SDK_TOKEN_CLASSIC}@github.com/SyscoCorporation/".insteadOf \
+              "https://github.com/SyscoCorporation/"
           fi
           pip install -e ".[sage]"
           echo "installed=true" >> "$GITHUB_OUTPUT"
@@ -227,15 +240,23 @@ jobs:
         # SDK. No creds -> exit 0 and installed=false (the metrics step skips, green
         # skip). Creds present -> the eval is expected to run, so a failed install
         # is a real failure: let `pip install` fail the step (default bash -e) so
-        # the job goes RED rather than a swallowed warning. See the fuller note in
-        # the agent-eval job above.
+        # the job goes RED rather than a swallowed warning. SAGE_SDK_TOKEN_CLASSIC
+        # grants the git clone read access to the private SDK repo (scoped to the
+        # Sysco org prefix; skipped when absent). See the fuller note in the
+        # agent-eval job above.
         env:
           SAGE_CLIENT_ID: ${{ secrets.SAGE_CLIENT_ID }}
+          SAGE_SDK_TOKEN_CLASSIC: ${{ secrets.SAGE_SDK_TOKEN_CLASSIC }}
         run: |
           if [ -z "$SAGE_CLIENT_ID" ]; then
             echo "No SAGE_* credentials configured; skipping Sage-backed eval (clean skip)."
             echo "installed=false" >> "$GITHUB_OUTPUT"
             exit 0
+          fi
+          if [ -n "$SAGE_SDK_TOKEN_CLASSIC" ]; then
+            git config --global \
+              url."https://x-access-token:${SAGE_SDK_TOKEN_CLASSIC}@github.com/SyscoCorporation/".insteadOf \
+              "https://github.com/SyscoCorporation/"
           fi
           pip install -e ".[sage]"
           echo "installed=true" >> "$GITHUB_OUTPUT"
