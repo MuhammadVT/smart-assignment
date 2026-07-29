@@ -43,7 +43,10 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          # 3.14 to match ci.yml and .python-version; the package floor is
+          # >=3.13 (pyproject.toml), so 3.11 fails `pip install -e .`.
+          python-version: "3.14"
+          cache: pip
 
       - name: Install the local ds-utils-lite dependency
         # ds-utils-lite is vendored under smart_assignment/ and resolved from a
