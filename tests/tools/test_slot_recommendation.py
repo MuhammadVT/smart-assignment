@@ -15,6 +15,8 @@ from smart_assignment.integrations.geocoding_client import MockGeocoder
 from smart_assignment.shared.geo import AddressNotFoundError, GeocodingServiceError
 from smart_assignment.tools import slot_recommendation as tools_module
 from smart_assignment.tools.slot_recommendation import (
+    _STATE_PROFILE_KEY,
+    assign_prospect,
     evaluate_and_score_routes,
     find_candidate_routes,
     intake_customer,
@@ -185,6 +187,115 @@ def test_revision_flows_through_to_a_new_recommendation():
     assert second["decision"] == "RECOMMENDED"
     assert second["total_score"] > first["total_score"]
     assert ctx.state["sa_profile"]["address"] == "5085 Westheimer Rd, Houston, TX 77056"
+
+
+# --- Consolidated one-shot tool: assign_prospect -----------------------------
+
+
+def test_assign_prospect_matches_the_step_by_step_flow():
+    """One assign_prospect call must yield the IDENTICAL decision the four-tool
+    sequence produces for the same prospect -- it changes no logic, only round
+    trips. Compared field-by-field against intake -> recommend_or_escalate."""
+    stepwise_ctx = _FakeToolContext()
+    intake_customer(
+        address="1200 McKinney St, Houston, TX 77010",
+        order_quantity_cases=90,
+        preferred_day="TUE",
+        preferred_window_start="07:00",
+        preferred_window_end="10:00",
+        tool_context=stepwise_ctx,
+    )
+    stepwise = recommend_or_escalate(tool_context=stepwise_ctx)
+
+    oneshot_ctx = _FakeToolContext()
+    oneshot = assign_prospect(
+        address="1200 McKinney St, Houston, TX 77010",
+        order_quantity_cases=90,
+        preferred_day="TUE",
+        preferred_window_start="07:00",
+        preferred_window_end="10:00",
+        tool_context=oneshot_ctx,
+    )
+
+    assert oneshot == stepwise
+    assert oneshot["decision"] == "RECOMMENDED"
+    assert oneshot["recommended_route_id"] == "RTE-4100"
+
+
+def test_assign_prospect_writes_the_same_state_as_recommend_or_escalate():
+    """It must populate BOTH the agent-facing summary and the per-turn decision
+    snapshot (bound to the profile), so a rendering surface reuses the decision
+    exactly as it does after recommend_or_escalate."""
+    ctx = _FakeToolContext()
+    assign_prospect(
+        address="1200 McKinney St, Houston, TX 77010",
+        order_quantity_cases=90,
+        tool_context=ctx,
+    )
+    assert ctx.state["sa_last_recommendation"]["decision"] == "RECOMMENDED"
+    snapshot = ctx.state["sa_last_decision"]
+    assert snapshot["profile"] == ctx.state[_STATE_PROFILE_KEY]
+    assert snapshot["recommendation"]  # a serialized SlotRecommendation
+
+
+def test_assign_prospect_decides_from_a_pre_seeded_profile_without_intake_fields():
+    """The batch path seeds the profile into session state, then calls
+    assign_prospect with NO intake fields -- it must decide from what's on file."""
+    ctx = _FakeToolContext()
+    ctx.state[_STATE_PROFILE_KEY] = {
+        "name": "Bayou City Bistro",
+        "address": "1200 McKinney St, Houston, TX 77010",
+        "order_quantity_cases": 90,
+        "customer_number": None,
+        "preferred_day": "TUE",
+        "preferred_window_start": "07:00",
+        "preferred_window_end": "10:00",
+    }
+    result = assign_prospect(tool_context=ctx)
+    assert result["ok"] is True
+    assert result["decision"] == "RECOMMENDED"
+    assert result["recommended_route_id"] == "RTE-4100"
+
+
+def test_assign_prospect_relays_intake_failure_without_deciding():
+    """An incomplete intake must come back as intake_customer's error, and no
+    decision may be written."""
+    ctx = _FakeToolContext()
+    result = assign_prospect(address="1200 McKinney St, Houston, TX 77010", tool_context=ctx)
+    assert result["ok"] is False
+    assert "order quantity" in result["error"]
+    assert "sa_last_recommendation" not in ctx.state
+    assert "sa_last_decision" not in ctx.state
+
+
+def test_assign_prospect_escalates_like_the_step_by_step_flow():
+    """Galleria's large order escalates; the one-shot tool must reach the same
+    escalation with requires_human_review set."""
+    ctx = _FakeToolContext()
+    result = assign_prospect(
+        address="5085 Westheimer Rd, Houston, TX 77056",
+        order_quantity_cases=400,
+        tool_context=ctx,
+    )
+    assert result["decision"] == "ESCALATED_LOW_SCORE"
+    assert result["requires_human_review"] is True
+
+
+def test_assign_prospect_relays_geocoding_failure_without_half_writing_state():
+    ctx = _FakeToolContext()
+    with patch.object(
+        tools_module._GEOCODER,
+        "geocode",
+        side_effect=GeocodingServiceError("1200 McKinney St, Houston, TX 77010", "boom"),
+    ):
+        result = assign_prospect(
+            address="1200 McKinney St, Houston, TX 77010",
+            order_quantity_cases=90,
+            tool_context=ctx,
+        )
+    assert result["ok"] is False
+    assert "temporarily unavailable" in result["error"]
+    assert "sa_last_recommendation" not in ctx.state
 
 
 # --- Geocoding failure handling ----------------------------------------------

@@ -8,6 +8,7 @@ without an LLM.
 """
 
 from smart_assignment.tools.slot_recommendation import (
+    assign_prospect,
     evaluate_and_score_routes,
     find_candidate_routes,
     intake_customer,
@@ -21,4 +22,5 @@ __all__ = [
     "resolve_address",
     "evaluate_and_score_routes",
     "recommend_or_escalate",
+    "assign_prospect",
 ]
