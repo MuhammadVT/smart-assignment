@@ -11,6 +11,7 @@ over MockGeocoder + mock routes, so every assertion is reproducible with no key.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from unittest.mock import patch
 
@@ -105,6 +106,28 @@ class _RaisingRunner:
     async def run_async(self, **kwargs):
         raise RuntimeError("model backend down")
         yield  # pragma: no cover - makes this an async generator
+
+
+class _ConcurrencyTrackingRunner:
+    """Records the peak number of turns in flight at once, holding each turn open
+    with a short sleep so overlap is observable."""
+
+    def __init__(self, events_by_session):
+        self._events = events_by_session
+        self.in_flight = 0
+        self.max_in_flight = 0
+        self.run_configs = []
+
+    async def run_async(self, *, user_id, session_id, new_message, run_config=None):
+        self.run_configs.append(run_config)
+        self.in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        try:
+            await asyncio.sleep(0.02)  # hold the slot so concurrent turns overlap
+            for event in self._events.get(session_id, []):
+                yield event
+        finally:
+            self.in_flight -= 1
 
 
 # --- helpers ----------------------------------------------------------------
@@ -369,3 +392,67 @@ async def test_fresh_session_is_seeded_per_prospect():
     await _run(runner)
     # A session named for the prospect was created (seeded with its profile).
     assert runner._session_service.created == ["P1"]
+
+
+# --- concurrency -------------------------------------------------------------
+
+
+def _many_recommend(n):
+    """n independent recommend prospects, with the state each agent turn would have
+    written and a two-event (assign + narrate) script."""
+    prospects, events, states = [], {}, {}
+    for i in range(n):
+        pid = f"P{i}"
+        prospects.append(Prospect(pid, CustomerProfile(
+            name="Test Prospect", address=_BAYOU_ADDR,
+            order_quantity_cases=90, preferred_slot=None)))
+        events[pid] = [_FakeEvent(calls=[_FakeCall("assign_prospect")]), _FakeEvent(text="ok")]
+        states[pid] = _state_with_decision(_profile_dict(_BAYOU_ADDR), _recommend_rec())
+    return prospects, events, states
+
+
+def _concurrency_runner(prospects, events, states, concurrency, fake_runner):
+    return AgentBatchRunner(
+        MockProspectSource(prospects),
+        ListResultSink(),
+        config=_config(),
+        geocoder=MockGeocoder(),
+        routes=fetch_candidate_routes(),
+        clock=lambda: "t0",
+        concurrency=concurrency,
+        runner=fake_runner,
+        session_service=_FakeSessionService(states),
+    )
+
+
+async def test_concurrency_bounds_the_number_of_in_flight_turns():
+    prospects, events, states = _many_recommend(6)
+    tracker = _ConcurrencyTrackingRunner(events)
+    runner = _concurrency_runner(prospects, events, states, concurrency=2, fake_runner=tracker)
+    summary, by_id = await _run(runner)
+
+    assert summary.total == 6 and summary.recommend == 6  # all processed
+    # The semaphore held it to at most 2 at once -- and with 6 prospects overlapping
+    # on the held slot, it actually reached the cap (proving real concurrency).
+    assert tracker.max_in_flight == 2
+
+
+async def test_sequential_by_default_runs_one_turn_at_a_time():
+    prospects, events, states = _many_recommend(4)
+    tracker = _ConcurrencyTrackingRunner(events)
+    # No concurrency argument -> default 1 -> exact prior sequential behavior.
+    runner = _concurrency_runner(prospects, events, states, concurrency=1, fake_runner=tracker)
+    summary, _ = await _run(runner)
+
+    assert summary.recommend == 4
+    assert tracker.max_in_flight == 1
+
+
+async def test_concurrency_is_clamped_to_at_least_one():
+    prospects, events, states = _many_recommend(2)
+    tracker = _ConcurrencyTrackingRunner(events)
+    runner = _concurrency_runner(prospects, events, states, concurrency=0, fake_runner=tracker)
+    summary, _ = await _run(runner)
+
+    assert summary.recommend == 2
+    assert tracker.max_in_flight == 1  # clamped, not a deadlock on a 0-permit semaphore

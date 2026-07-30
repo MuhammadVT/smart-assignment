@@ -99,10 +99,12 @@ outcome = needs_attention -> error (no payload; the address wouldn't geocode / i
 **Grounded reasoning is config-gated, same as chat.** Batch honors
 `use_grounded_route_slot_*` and `use_escalation_triage`, and every LLM call falls
 back to the deterministic result when the backend/credentials are unavailable.
-Execution is **sequential** (simplest and correct); a per-prospect failure degrades
-to `needs_attention` and never aborts the batch. Parallelism is a later, isolated
-change inside `AgentBatchRunner.run` (each prospect is an independent session;
-routes and the geocoder are resolved once and read-only).
+A per-prospect failure degrades to `needs_attention` and never aborts the batch.
+Execution defaults to **sequential** (`concurrency=1`, the simplest, exact prior
+behavior); because each prospect is fully independent (its own ADK session; routes
+and the geocoder resolved once and read-only), raising `AgentBatchRunner`'s
+`concurrency` (CLI `--concurrency`) fans the agent turns out for throughput,
+bounded by a semaphore to at most that many in flight.
 
 Run it: `python3 scripts/run_batch.py --mock-geocoder` (built-in demo prospects,
 fully offline) or `--source prospects.json --out results.jsonl`.

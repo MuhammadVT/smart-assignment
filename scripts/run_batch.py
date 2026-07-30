@@ -29,8 +29,10 @@ from smart_assignment.batch import AgentBatchRunner, JsonlResultSink, MockProspe
 from smart_assignment.integrations.geocoding_client import MockGeocoder
 
 
-async def _run(source, sink, geocoder):
-    return await AgentBatchRunner(source, sink, geocoder=geocoder).run()
+async def _run(source, sink, geocoder, concurrency):
+    return await AgentBatchRunner(
+        source, sink, geocoder=geocoder, concurrency=concurrency
+    ).run()
 
 
 def main() -> None:
@@ -55,6 +57,13 @@ def main() -> None:
         action="store_true",
         help="Force the offline MockGeocoder (deterministic, no network) for a demo run.",
     )
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=1,
+        help="How many prospects to process at once (default 1 = sequential). Raise it "
+        "to fan the independent agent turns out for throughput.",
+    )
     args = parser.parse_args()
 
     source = (
@@ -65,7 +74,7 @@ def main() -> None:
     geocoder = MockGeocoder() if args.mock_geocoder else None
 
     with JsonlResultSink(args.out) as sink:
-        summary = asyncio.run(_run(source, sink, geocoder))
+        summary = asyncio.run(_run(source, sink, geocoder, args.concurrency))
 
     print(f"Batch complete: {summary.total} prospects -> {args.out}")
     print(

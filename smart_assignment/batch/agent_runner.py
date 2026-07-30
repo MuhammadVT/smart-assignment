@@ -29,6 +29,7 @@ swaps the per-prospect engine, so a result still renders with no frontend change
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Callable, Optional
 
@@ -86,6 +87,7 @@ class AgentBatchRunner:
         geocoder: Optional[Geocoder] = None,
         routes: Optional[list[Route]] = None,
         clock: Optional[Callable[[], str]] = None,
+        concurrency: int = 1,
         runner=None,
         session_service=None,
     ) -> None:
@@ -95,6 +97,11 @@ class AgentBatchRunner:
         self._geocoder = geocoder
         self._routes = routes
         self._clock = clock or _utc_now_iso
+        # How many prospects may be in flight at once. 1 (default) is sequential --
+        # exact prior behavior. Prospects are independent (each its own ADK session;
+        # routes/geocoder resolved once and read-only), so raising this fans agent
+        # turns out concurrently for throughput, bounded by a semaphore.
+        self._concurrency = max(1, concurrency)
         self._runner = runner
         self._session_service = session_service
         # Guard so a failed one-time agent build isn't retried per prospect.
@@ -143,11 +150,32 @@ class AgentBatchRunner:
         routes = self._routes if self._routes is not None else fetch_candidate_routes()
         runner = self._get_runner()
 
+        prospects = list(self._source.prospects())
+        # Bound how many prospects are processed at once. With concurrency=1 this
+        # awaits each in turn (sequential); higher values fan the independent turns
+        # out, at most `_concurrency` in flight. Each prospect is fully isolated
+        # (its own session), so a shared Runner/geocoder/routes is safe.
+        semaphore = asyncio.Semaphore(self._concurrency)
+        outcomes = await asyncio.gather(
+            *(self._process_one(p, runner, geocoder, routes, semaphore) for p in prospects)
+        )
+
         counts = {OUTCOME_RECOMMEND: 0, OUTCOME_ESCALATE: 0, OUTCOME_NEEDS_ATTENTION: 0}
-        total = 0
-        for prospect in self._source.prospects():
-            total += 1
-            generated_at = self._clock()
+        for outcome in outcomes:
+            counts[outcome] += 1
+        return BatchSummary(
+            total=len(prospects),
+            recommend=counts[OUTCOME_RECOMMEND],
+            escalate=counts[OUTCOME_ESCALATE],
+            needs_attention=counts[OUTCOME_NEEDS_ATTENTION],
+        )
+
+    async def _process_one(self, prospect, runner, geocoder, routes, semaphore) -> str:
+        """Produce and emit one prospect's record, holding a concurrency slot only
+        for the decision work. Returns the outcome for the summary tally. A failure
+        here becomes ``needs_attention`` -- one prospect must never abort the batch."""
+        generated_at = self._clock()
+        async with semaphore:
             try:
                 if runner is None:
                     # No agent this run -> the deterministic floor for every prospect.
@@ -162,15 +190,11 @@ class AgentBatchRunner:
                     prospect.prospect_id,
                 )
                 record = _needs_attention(prospect, generated_at, f"unexpected error: {exc}")
-            self._sink.emit(record)
-            counts[record.outcome] += 1
-
-        return BatchSummary(
-            total=total,
-            recommend=counts[OUTCOME_RECOMMEND],
-            escalate=counts[OUTCOME_ESCALATE],
-            needs_attention=counts[OUTCOME_NEEDS_ATTENTION],
-        )
+        # Emit outside the slot: the write is trivial and freeing the slot sooner
+        # lets the next agent turn start. emit() is synchronous, so concurrent
+        # coroutines never interleave a partial record on the one event loop.
+        self._sink.emit(record)
+        return record.outcome
 
     # -- per-prospect: the agent turn, then map its outcome --
 
