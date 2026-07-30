@@ -1,7 +1,9 @@
 """
-End-to-end tests for the batch runner (batch/runner.py), fully offline.
+Tests for the deterministic per-prospect batch engine (batch/runner.run_one),
+fully offline.
 
-Uses MockGeocoder, the mock routes source, and a deterministic config (grounded
+``run_one`` is the deterministic floor the agent batch runner falls back to. Uses
+MockGeocoder, the mock routes source, and a deterministic config (grounded
 reasoning + triage off) so every outcome is reproducible with no LLM call. The
 grounded triage brief is covered separately in tests/triage/test_compose_brief.py.
 """
@@ -10,12 +12,11 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from smart_assignment.batch.runner import BatchRunner, run_one
+from smart_assignment.batch.runner import run_one
 from smart_assignment.batch.sink import (
     OUTCOME_ESCALATE,
     OUTCOME_NEEDS_ATTENTION,
     OUTCOME_RECOMMEND,
-    ListResultSink,
 )
 from smart_assignment.batch.source import MockProspectSource, Prospect
 from smart_assignment.integrations.geocoding_client import MockGeocoder
@@ -35,34 +36,29 @@ def _config():
     )
 
 
-def _run(source):
-    sink = ListResultSink()
-    summary = BatchRunner(
-        source,
-        sink,
-        config=_config(),
-        geocoder=MockGeocoder(),
-        routes=fetch_candidate_routes(),
-        clock=lambda: "t0",
-    ).run()
-    return summary, {r.prospect_id: r for r in sink.records}
+def _run(prospects):
+    """Drive run_one over a list of prospects (the deterministic floor), the way
+    the agent runner falls back to it -- returning the per-id records."""
+    config = _config()
+    geocoder = MockGeocoder()
+    routes = fetch_candidate_routes()
+    return {p.prospect_id: run_one(p, config, geocoder, routes, "t0") for p in prospects}
 
 
 def test_runs_every_sample_and_classifies_outcomes():
-    summary, by_id = _run(MockProspectSource.from_samples())
+    by_id = _run(list(MockProspectSource.from_samples().prospects()))
 
-    assert summary.total == 4
+    assert len(by_id) == 4
     # SAMPLE_CUSTOMERS order: Bayou (recommend), Galleria (escalate),
     # Katy (escalate), Woodlands (recommend).
     assert by_id["MOCK-001"].outcome == OUTCOME_RECOMMEND
     assert by_id["MOCK-002"].outcome == OUTCOME_ESCALATE
     assert by_id["MOCK-003"].outcome == OUTCOME_ESCALATE
     assert by_id["MOCK-004"].outcome == OUTCOME_RECOMMEND
-    assert summary.recommend == 2 and summary.escalate == 2 and summary.needs_attention == 0
 
 
 def test_recommend_records_carry_the_customer_view_payload():
-    _, by_id = _run(MockProspectSource.from_samples())
+    by_id = _run(list(MockProspectSource.from_samples().prospects()))
     rec = by_id["MOCK-001"]
     assert rec.payload is not None
     assert rec.payload.get("frontendHtml")  # Customer View renders this unchanged
@@ -70,14 +66,14 @@ def test_recommend_records_carry_the_customer_view_payload():
 
 
 def test_escalate_records_carry_a_brief_and_reason():
-    _, by_id = _run(MockProspectSource.from_samples())
+    by_id = _run(list(MockProspectSource.from_samples().prospects()))
     esc = by_id["MOCK-002"]
     assert esc.payload is not None
     assert esc.review_reason  # why it escalated
     assert esc.triage_brief and "SITUATION" in esc.triage_brief  # deterministic floor brief
 
 
-def test_invalid_intake_becomes_needs_attention_without_aborting_the_batch():
+def test_invalid_intake_becomes_needs_attention():
     bad = Prospect(
         prospect_id="BAD-1",
         profile=CustomerProfile(
@@ -86,14 +82,11 @@ def test_invalid_intake_becomes_needs_attention_without_aborting_the_batch():
         ),
     )
     good = list(MockProspectSource.from_samples().prospects())[0]  # a clean recommend
-    source = MockProspectSource([bad, good])
+    by_id = _run([bad, good])
 
-    summary, by_id = _run(source)
-
-    assert summary.total == 2
     assert by_id["BAD-1"].outcome == OUTCOME_NEEDS_ATTENTION
     assert by_id["BAD-1"].error and by_id["BAD-1"].payload is None
-    # The batch continued past the bad record.
+    # An independent per-prospect call: the bad record never affects the good one.
     assert by_id[good.prospect_id].outcome == OUTCOME_RECOMMEND
 
 

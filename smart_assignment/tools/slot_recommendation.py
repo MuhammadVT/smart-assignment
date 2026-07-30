@@ -431,30 +431,17 @@ def evaluate_and_score_routes(tool_context: ToolContext) -> dict:
 # --- Step 5: recommend or escalate ------------------------------------------
 
 
-def recommend_or_escalate(tool_context: ToolContext) -> dict:
-    """
-    Rank the feasible routes and produce the final recommendation or
-    escalation, with a full reasoning trace (step 5, the last step).
+def _decide_and_store(tool_context: ToolContext, profile: dict) -> dict:
+    """Run the geo -> evaluate -> decide core for a profile already on file and
+    store the result, returning the agent-facing decision dict.
 
-    Call this only after intake_customer has returned {"ok": true}; it
-    re-derives candidates and scores internally. If the result's
-    "requires_human_review" is true, you MUST call request_input to loop in
-    a specialist before treating this prospect as done -- never present a
-    low-score or no-feasible-slot result as final on your own.
-
-    Returns:
-      {"ok": true, "decision", "requires_human_review", "total_score",
-       "recommended_route_id", "recommended_route_name", "recommended_day",
-       "recommended_window", "recommended_window_basis" (why that slot was
-       chosen), "reasoning", "rejected_alternatives", "review_reason", and -- on a
-       route-slot RECOMMENDED pick -- the structured explanation the agent should
-       present: "decision_summary", "primary_reasons", "key_tradeoff",
-       "runner_up", "default_comparison"}
-      or {"ok": false, "error": "..."}.
-    """
-    profile = tool_context.state.get(_STATE_PROFILE_KEY)
-    if not profile:
-        return _error("Call intake_customer first -- there's no address on file yet.")
+    This is the shared body of `recommend_or_escalate` (called as its own final
+    step) and `assign_prospect` (the consolidated one-shot tool). Both MUST return
+    the identical shape and write the SAME state keys, so the decision -- and the
+    per-turn decision snapshot every rendering surface reuses -- lives here exactly
+    once. Steps 2-4 are re-derived from the profile as before: cheap and stateless
+    (see the module docstring), and geocoding is cached, so re-deriving here costs
+    no extra network call."""
     customer = _profile_from_state_dict(profile)
     try:
         candidates = _find_candidates(customer)
@@ -504,6 +491,90 @@ def recommend_or_escalate(tool_context: ToolContext) -> dict:
         "recommendation": rec.to_state_dict(),
     }
     return result
+
+
+def recommend_or_escalate(tool_context: ToolContext) -> dict:
+    """
+    Rank the feasible routes and produce the final recommendation or
+    escalation, with a full reasoning trace (step 5, the last step).
+
+    Call this only after intake_customer has returned {"ok": true}; it
+    re-derives candidates and scores internally. If the result's
+    "requires_human_review" is true, you MUST call request_input to loop in
+    a specialist before treating this prospect as done -- never present a
+    low-score or no-feasible-slot result as final on your own.
+
+    Returns:
+      {"ok": true, "decision", "requires_human_review", "total_score",
+       "recommended_route_id", "recommended_route_name", "recommended_day",
+       "recommended_window", "recommended_window_basis" (why that slot was
+       chosen), "reasoning", "rejected_alternatives", "review_reason", and -- on a
+       route-slot RECOMMENDED pick -- the structured explanation the agent should
+       present: "decision_summary", "primary_reasons", "key_tradeoff",
+       "runner_up", "default_comparison"}
+      or {"ok": false, "error": "..."}.
+    """
+    profile = tool_context.state.get(_STATE_PROFILE_KEY)
+    if not profile:
+        return _error("Call intake_customer first -- there's no address on file yet.")
+    return _decide_and_store(tool_context, profile)
+
+
+# --- Consolidated one-shot: intake + decide in a single tool call -----------
+
+
+def assign_prospect(
+    tool_context: ToolContext,
+    address: Optional[str] = None,
+    order_quantity_cases: Optional[int] = None,
+    preferred_day: Optional[str] = None,
+    preferred_window_start: Optional[str] = None,
+    preferred_window_end: Optional[str] = None,
+    customer_number: Optional[str] = None,
+    name: Optional[str] = None,
+    clear_preferred_slot: bool = False,
+) -> dict:
+    """
+    Assign a prospect end-to-end in ONE call: record/merge intake, then geocode,
+    score, and produce the final recommendation or escalation.
+
+    This is the consolidated equivalent of calling intake_customer ->
+    find_candidate_routes -> evaluate_and_score_routes -> recommend_or_escalate in
+    sequence, collapsed into a single tool call. It exists for non-interactive
+    surfaces (a prospect pulled from Salesforce with a complete profile) where the
+    step-by-step narration is not needed and fewer model round-trips matter. It
+    changes NO decision logic -- it reuses intake_customer and the exact same
+    geo/evaluate/decide core (`_decide_and_store`) the step-by-step tools use, and
+    writes the identical state, including the per-turn decision snapshot.
+
+    Intake fields are optional: pass them to record the prospect in this same call,
+    or omit them when the profile is already on file (e.g. seeded into session
+    state before the turn). Anything already on file is kept and merged, exactly
+    like intake_customer.
+
+    Returns:
+      The same shape as recommend_or_escalate on success; or, when intake is
+      incomplete/invalid, intake_customer's {"ok": false, "error": "..."}; or a
+      geocoding {"ok": false, "error": "..."} if the address can't be resolved.
+    """
+    intake_result = intake_customer(
+        tool_context,
+        address=address,
+        order_quantity_cases=order_quantity_cases,
+        preferred_day=preferred_day,
+        preferred_window_start=preferred_window_start,
+        preferred_window_end=preferred_window_end,
+        customer_number=customer_number,
+        name=name,
+        clear_preferred_slot=clear_preferred_slot,
+    )
+    if not intake_result.get("ok"):
+        # Intake couldn't complete (missing/invalid field) -- relay it unchanged,
+        # exactly as if intake_customer had been called on its own.
+        return intake_result
+    # intake_customer just normalized and stored the profile; decide from it.
+    profile = tool_context.state.get(_STATE_PROFILE_KEY)
+    return _decide_and_store(tool_context, profile)
 
 
 def cached_decision_for(state: dict, profile: dict) -> Optional[SlotRecommendation]:
