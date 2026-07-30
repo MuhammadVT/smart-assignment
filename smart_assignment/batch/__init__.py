@@ -13,6 +13,7 @@ paths are untouched.
 
 from __future__ import annotations
 
+from smart_assignment.batch.agent_runner import AgentBatchRunner
 from smart_assignment.batch.runner import BatchRunner, BatchSummary, run_one
 from smart_assignment.batch.sink import (
     OUTCOME_ESCALATE,
@@ -31,6 +32,7 @@ from smart_assignment.batch.source import (
 
 __all__ = [
     "BatchRunner",
+    "AgentBatchRunner",
     "BatchSummary",
     "run_one",
     "BatchRecord",
