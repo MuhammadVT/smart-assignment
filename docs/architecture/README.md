@@ -22,61 +22,73 @@ a score itself -- every number comes back from the tool call. See
 `smart_assignment/tools/slot_recommendation.py` for the tool implementations
 and `smart_assignment/prompts.py` for the instruction that enforces this.
 
-## Batch (non-conversational) mode (`batch/` package)
+## Batch (non-interactive) mode (`batch/` package)
 
-The conversational agent above is one way to run the workflow; **batch mode** is
-the other. In production a prospect flows Salesforce -> Smart Assignment -> the
+The conversational chat is one way to run the workflow; **batch mode** is the
+other. In production a prospect flows Salesforce -> Smart Assignment -> the
 sales-consultant *Customer View* with **no human in the loop**: addresses come
 from the CRM (there is nobody to confirm one), and the result is a recommendation
-or an escalation the SC reviews later. Batch serves that, and is lower-latency
-because it skips the conversational agent entirely.
+or an escalation the SC reviews later.
 
-**It is a new orchestration seam AROUND the pipeline, not a fork of it.** The
-decision logic is byte-identical -- batch drives the same
-`pipeline.run_slot_recommendation` (one deterministic pass: intake -> geo ->
-evaluate -> score -> decide) the web app's `/api/recommend` already uses, then the
-same `reporting.page.build_workflow_payload` that produces the Customer View's
-`frontendHtml`. So a batch result renders in the Customer View with **no frontend
-change**.
+**Batch drives the SAME agent, non-interactively -- not a second decision brain.**
+It runs the real agent architecture via `agent.build_batch_agent`: the same
+`LlmAgent`, model role, and `escalation_triage` AgentTool as `root_agent`, so the
+batch inherits the agent's natural-language reasoning and its triage brief. What
+changes is the *shape* of the turn, tuned for one CRM-sourced prospect at a time
+with no human present:
+
+- **One consolidated tool, fewer round-trips.** Instead of the chat agent's four
+  step-by-step tools (`intake` -> `find` -> `evaluate` -> `recommend`), the batch
+  agent is given a single `assign_prospect` tool
+  (`tools/slot_recommendation.py`) that runs intake -> geo -> evaluate -> score ->
+  decide in one call and writes the same session state. With intake seeded from the
+  CRM (below), a prospect resolves in ~2 model round-trips instead of ~5. The tool
+  invents no decision logic -- it composes the exact same pipeline functions
+  `recommend_or_escalate` already runs, so the decision is byte-identical.
+- **A batch instruction** (`prompts.build_batch_instruction`) tells the agent to
+  call `assign_prospect` once and present the result, with no conversational
+  narration between steps.
+
+`AgentBatchRunner` (`batch/agent_runner.py`) is the orchestrator. Per prospect it
+seeds the CRM profile into a fresh ADK session, runs one non-interactive turn, and
+maps the outcome to a `BatchRecord` -- reusing the same
+`reporting.page.build_workflow_payload` the Customer View renders, so a batch
+result renders with **no frontend change**. The decision the agent's tool made is
+reused from the session snapshot (never re-sampled), exactly as the web app does.
 
 ```
-ProspectSource            run_slot_recommendation(profile)   build_workflow_payload   ResultSink
- (Salesforce / mock)  ->   (unchanged pipeline)          ->  (unchanged renderer)  ->  (JSONL / API)
-     |                                                                                    |
-     +-------------------------- one BatchRecord per prospect ----------------------------+
+ProspectSource        build_batch_agent (one turn/prospect)     build_workflow_payload   ResultSink
+ (Salesforce / mock) -> assign_prospect: intake->geo->..->decide -> (unchanged renderer) -> (JSONL / API)
+     |                    └ fallback: run_one (deterministic floor)                            |
+     +----------------------------- one BatchRecord per prospect ------------------------------+
 ```
+
+**Never worse than the deterministic baseline.** The deterministic pipeline
+(`runner.run_one`) is the **floor**, not a separate mode: if the agent can't be
+built (no credentials/backend) the whole run uses `run_one`; if a single agent turn
+fails or produces no decision, *that* prospect degrades to `run_one`. So batch
+still runs fully offline and a broken backend can never make it worse than the
+deterministic result. A per-prospect failure becomes `needs_attention` and **never
+aborts the batch**.
 
 **The mode is an entry point, not a global config switch.** `scripts/run_batch.py`
-sits beside `scripts/run_local.py` and `scripts/run_web.py`; there is no
-`run_mode` flag threaded through the decision code, so the conversational paths are
-untouched and flag-off equivalence is automatic (none of their code is on this
-path). Collaborators are injected exactly as the pipeline's are -- a
-`ProspectSource` (mock/JSON now, a `SalesforceProspectSource` behind the same
-one-method protocol later), a `ResultSink` (`JsonlResultSink` now, an API/DB sink
-later), plus the geocoder, routes, and config.
+sits beside `scripts/run_local.py` and `scripts/run_web.py`; nothing on the
+interactive path builds the batch agent, so the conversational `root_agent` is
+untouched with no flag to thread. Collaborators are injected exactly as the
+pipeline's are -- a `ProspectSource` (mock/JSON now, a `SalesforceProspectSource`
+behind the same one-method protocol later), a `ResultSink` (`JsonlResultSink` now,
+an API/DB sink later), plus the geocoder, routes, and config.
 
-**Only the two human-in-the-loop steps differ, each replaced by a deterministic
-policy** that preserves the repo's guarantees:
+**The two human-in-the-loop steps are replaced, each preserving the guarantees:**
 
 | Human step in chat | Batch substitute | How the guarantee holds |
 |---|---|---|
-| Address confirm (`resolve_address` -> user confirms) | **Trust Salesforce as-is.** A geocode miss (or an intake reject) becomes a `needs_attention` record for a human to fix the source data -- batch attempts **no** address resolution | Never fabricates an address: batch never resolves one, so the "no fabricated actionable value" guarantee holds trivially |
-| Escalation handoff (triage brief -> `request_input` pause) | **A record, not a pause.** The same triage brief is composed *without* the agent (`triage.compose_brief`) and attached to the escalation record the SC reviews in the Customer View | Deterministic decision unchanged; triage stays advisory/read-only; the SC is the human, just asynchronous |
+| Intake conversation (multi-turn Q&A) | **Seeded, not asked.** The CRM profile is written into the ADK session state before the turn, so the agent goes straight to `assign_prospect` | Same intake validation runs inside the tool; a bad profile still fails to a `needs_attention` |
+| Address confirm (`resolve_address` -> user confirms) | **Trust Salesforce as-is.** A geocode miss (or intake reject) becomes a `needs_attention` record for a human to fix the source data -- the batch agent has no `resolve_address` tool | Never fabricates an address: batch never resolves one, so the "no fabricated actionable value" guarantee holds trivially |
+| Escalation handoff (triage brief -> `request_input` pause) | **Captured, not paused.** The agent still composes its `escalation_triage` brief and calls `request_input`; the runner INTERCEPTS that call, captures the brief, and terminates the turn (no human reply) | Deterministic decision unchanged; triage stays advisory/read-only; the SC is the human, just asynchronous. On the deterministic floor the brief is `triage.compose_brief` instead |
 
-**The one new piece is the non-agent brief.** The chat brief is authored by an ADK
-`LlmAgent` bound to session state (`triage/agent.py`); batch has no agent and no
-session, so `triage/compose.py` composes the *same* brief with a single grounded
-`generate_text` call -- the `routeslot` pattern -- reusing the exact deterministic
-finalization (`normalize_brief` + `verify_brief`) and falling back to a
-deterministic-floor brief (assembled from the escalation context's raw, grounded
-facts) on any failure. The pure `build_escalation_context` /
-`escalation_context_from_recommendation` builders were extracted from the
-`get_escalation_context` tool so both the agent and batch build an identical
-context (the tool now delegates to them, so chat output is unchanged).
-
-**The output contract (`BatchRecord`, `batch/sink.py`)** is the batch's own,
-carrying the envelope (`prospect_id`, `generated_at`, `outcome`) plus the pieces
-each outcome needs:
+**The output contract (`BatchRecord`, `batch/sink.py`)** carries the envelope
+(`prospect_id`, `generated_at`, `outcome`) plus the pieces each outcome needs:
 
 ```
 outcome = recommend       -> payload (build_workflow_payload: frontendHtml, resultHtml, map, ...)
@@ -85,13 +97,12 @@ outcome = needs_attention -> error (no payload; the address wouldn't geocode / i
 ```
 
 **Grounded reasoning is config-gated, same as chat.** Batch honors
-`use_grounded_route_slot_*` and `use_escalation_triage`; the only LLM calls are the
-route-slot decision (+ any resampling) and the escalation brief, and both fall back
-to the deterministic result when the backend/credentials are unavailable -- so a
-batch run works fully offline. Execution is **sequential** (simplest and correct);
-a per-prospect failure degrades to `needs_attention` and **never aborts the batch**
-(the runner also wraps each prospect so an unexpected error can't take the run
-down). Parallelism is a later, isolated change inside `BatchRunner.run`.
+`use_grounded_route_slot_*` and `use_escalation_triage`, and every LLM call falls
+back to the deterministic result when the backend/credentials are unavailable.
+Execution is **sequential** (simplest and correct); a per-prospect failure degrades
+to `needs_attention` and never aborts the batch. Parallelism is a later, isolated
+change inside `AgentBatchRunner.run` (each prospect is an independent session;
+routes and the geocoder are resolved once and read-only).
 
 Run it: `python3 scripts/run_batch.py --mock-geocoder` (built-in demo prospects,
 fully offline) or `--source prospects.json --out results.jsonl`.

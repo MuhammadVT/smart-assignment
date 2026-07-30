@@ -2,11 +2,12 @@
 The AGENT batch runner: drive the real conversational ``root_agent`` architecture
 over a source of prospects, unattended, one prospect per turn.
 
-This is the agent-based sibling of ``runner.py``. Where ``BatchRunner`` calls the
-deterministic ``run_slot_recommendation`` directly, ``AgentBatchRunner`` runs the
-actual ADK agent (``agent.build_batch_agent``) so the batch inherits everything
+``AgentBatchRunner`` is the batch orchestrator: it runs the actual ADK agent
+(``agent.build_batch_agent``) once per prospect so the batch inherits everything
 the agent adds -- its natural-language reasoning, the ``escalation_triage``
-AgentTool brief, and any future agent behavior -- while staying non-interactive:
+AgentTool brief, and any future agent behavior -- while staying non-interactive.
+The deterministic per-prospect engine (``runner.run_one``) is its floor, not a
+separate mode:
 
   * **Intake is seeded, not asked.** The Salesforce profile is written into the
     ADK session state before the turn, so the agent goes straight to the decision
@@ -70,7 +71,8 @@ class AgentBatchRunner:
 
     Collaborators are injected (source, sink, config, geocoder, routes, clock) so
     the runner is testable offline and points at real systems by argument, not by
-    edit -- the same seam ``BatchRunner`` uses. ``runner``/``session_service`` are
+    edit -- the same injection seam the deterministic engine uses.
+    ``runner``/``session_service`` are
     additionally injectable so tests can drive the turn logic with a fake ADK
     runner (no credentials); in production they default to a real ADK ``Runner``
     over ``build_batch_agent``. The routes list, the geocoder, and the agent are

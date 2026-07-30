@@ -81,7 +81,7 @@ class JsonlResultSink:
     manager so the file is flushed and closed even if the run raises::
 
         with JsonlResultSink("out.jsonl") as sink:
-            BatchRunner(source, sink).run()
+            asyncio.run(AgentBatchRunner(source, sink).run())
     """
 
     def __init__(self, path: Union[str, Path]) -> None:

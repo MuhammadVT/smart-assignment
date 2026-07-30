@@ -316,7 +316,7 @@ async def test_no_agent_available_runs_the_whole_batch_deterministically():
     ):
         summary, by_id = await _run(runner)
 
-    # Same classification the deterministic BatchRunner produces for SAMPLE_CUSTOMERS.
+    # Same classification the deterministic pipeline produces for SAMPLE_CUSTOMERS.
     assert summary.total == 4
     assert by_id["MOCK-001"].outcome == OUTCOME_RECOMMEND
     assert by_id["MOCK-002"].outcome == OUTCOME_ESCALATE
