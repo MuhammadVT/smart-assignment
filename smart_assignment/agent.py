@@ -38,11 +38,12 @@ import functools
 from google.adk.agents import LlmAgent
 from google.adk.tools import FunctionTool, request_input
 
-from smart_assignment.prompts import build_instruction
+from smart_assignment.prompts import build_batch_instruction, build_instruction
 from smart_assignment.shared import tracing
-from smart_assignment.shared.config import DEFAULT_CONFIG, ROLE_ROOT_AGENT
+from smart_assignment.shared.config import DEFAULT_CONFIG, ROLE_ROOT_AGENT, Config
 from smart_assignment.shared.llm import get_llm, offload_to_worker_thread
 from smart_assignment.tools import (
+    assign_prospect,
     evaluate_and_score_routes,
     find_candidate_routes,
     intake_customer,
@@ -141,6 +142,69 @@ def _build_root_agent() -> LlmAgent:
             include_address_resolution=address_resolution_enabled,
         ),
         tools=tools,
+    )
+
+
+# --- Batch (non-interactive) agent ------------------------------------------
+#
+# The SAME conversational architecture, adapted for unattended runs over
+# CRM-sourced prospects: one prospect per turn, driven to a final
+# recommendation/escalation with no human in the loop (see the batch driver and
+# build_batch_instruction). It is a distinct ENTRY POINT, not a global config
+# switch -- like scripts/run_batch.py, nothing on the interactive path builds it,
+# so root_agent's behavior is untouched with no flag to thread. The batch agent
+# is built explicitly by its driver, never lazily at import, so importing this
+# module stays credential-free.
+
+
+def _batch_agent_tools(config: Config) -> list:
+    """Assemble the batch agent's tool list: the consolidated one-shot decision
+    tool, the human-handoff record, and -- when Config.use_escalation_triage is on
+    -- the escalation_triage AgentTool. Kept separate from build_batch_agent so the
+    tool wiring can be asserted offline without resolving the LLM backend.
+
+    Every pipeline tool is offloaded to a worker thread (see _offloaded_tool): its
+    body is synchronous and may make a grounded LLM call that needs the running
+    event loop free, so it must not run inline on that loop (the batch driver runs
+    the agent on an asyncio loop, same constraint as the web app's)."""
+    tools = [
+        FunctionTool(_offloaded_tool(assign_prospect)),
+        request_input,
+    ]
+    if config.use_escalation_triage:
+        # Imported lazily so the package import stays credential-free -- this runs
+        # only while the batch agent is being built, which already resolves the
+        # backend via get_llm in build_batch_agent.
+        from smart_assignment.triage import build_triage_tool
+
+        tools.append(build_triage_tool(config))
+    return tools
+
+
+def build_batch_agent(config: Config = DEFAULT_CONFIG) -> LlmAgent:
+    """Construct the BATCH variant of the agent: same architecture, model role, and
+    (when enabled) escalation-triage AgentTool as root_agent, but a consolidated
+    single-tool flow (`assign_prospect`) and a non-interactive instruction for
+    one-prospect-per-turn runs. Resolves the LLM backend (get_llm), so this needs
+    credentials for the configured backend -- build it only from the batch entry
+    point (its driver/script), never at import.
+
+    ``config`` is injectable so a caller/test can, e.g., turn triage off; it
+    defaults to DEFAULT_CONFIG so the batch entry point needs no wiring."""
+    # Install tracing before the agent runs, exactly as _build_root_agent does, so
+    # batch turns and tool calls are captured too. A no-op when tracing is off.
+    tracing.configure_tracing(config)
+    triage_enabled = config.use_escalation_triage
+
+    return LlmAgent(
+        name="smart_assignment_batch_agent",
+        model=get_llm(config.for_role(ROLE_ROOT_AGENT)),
+        description=(
+            "Assigns one CRM-sourced prospect customer to a delivery route and slot "
+            "non-interactively, in a single consolidated step."
+        ),
+        instruction=build_batch_instruction(include_triage=triage_enabled),
+        tools=_batch_agent_tools(config),
     )
 
 
