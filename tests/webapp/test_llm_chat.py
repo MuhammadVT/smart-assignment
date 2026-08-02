@@ -193,6 +193,52 @@ async def test_stream_turn_maps_tools_and_renders_visualization():
     assert frames[-1] == {"type": "done"}
 
 
+async def test_breadcrumbs_track_pipeline_steps_not_tool_calls():
+    """The optimized default flow makes only TWO tool calls (intake ->
+    recommend_or_escalate), but the live stepper must still show ALL four pipeline
+    steps: recommend_or_escalate runs geo + score + decide internally, so its one
+    call lights up Geo-Lookup, Score & Rank, and Recommend/Decide."""
+    events = [
+        _FakeEvent(calls=[_FakeCall("intake_customer")]),
+        _FakeEvent(calls=[_FakeCall("recommend_or_escalate")]),
+        _FakeEvent(text="Here is my recommendation."),
+    ]
+    service = LlmChatService(
+        runner=_FakeRunner([events]),
+        session_service=_FakeSessionService(_SAMPLE_STATE),
+        geocoder=MockGeocoder(),
+    )
+    frames = await _collect(service.stream_turn("s1", "New prospect at 1200 McKinney St, 90 cases"))
+
+    tool_labels = [f["label"] for f in frames if f["type"] == "tool"]
+    # All four steps, in order, from just two tool calls.
+    assert tool_labels == ["Intake", "Geo-Lookup", "Score & Rank", "Recommend / Decide"]
+    # And the full 5-step visualization still renders (state-derived, unchanged).
+    viz = [f for f in frames if f["type"] == "visualization"]
+    assert len(viz) == 1 and len(viz[0]["payload"]["steps"]) == 5
+
+
+async def test_breadcrumbs_are_not_duplicated_across_tool_calls():
+    """If the user asks for an on-demand find_candidate_routes before the decision,
+    the Geo-Lookup step must not appear twice when recommend_or_escalate (which also
+    covers geo) runs -- each step is shown at most once per turn."""
+    events = [
+        _FakeEvent(calls=[_FakeCall("intake_customer")]),
+        _FakeEvent(calls=[_FakeCall("find_candidate_routes")]),
+        _FakeEvent(calls=[_FakeCall("recommend_or_escalate")]),
+        _FakeEvent(text="Here is my recommendation."),
+    ]
+    service = LlmChatService(
+        runner=_FakeRunner([events]),
+        session_service=_FakeSessionService(_SAMPLE_STATE),
+        geocoder=MockGeocoder(),
+    )
+    frames = await _collect(service.stream_turn("s1", "show me the routes then decide"))
+
+    tool_labels = [f["label"] for f in frames if f["type"] == "tool"]
+    assert tool_labels == ["Intake", "Geo-Lookup", "Score & Rank", "Recommend / Decide"]
+
+
 async def test_stream_turn_tool_frames_carry_plain_language_detail():
     """Each tool frame carries a ``detail`` breadcrumb for the UI stepper, and
     Intake echoes the customer's own inputs back (grounded, not invented)."""

@@ -42,9 +42,47 @@ _STEP_DETAIL = {
     "recommend_or_escalate": "Checking the top slot against the auto-assign bar and deciding.",
 }
 
+# Each pipeline tool -> the ordered pipeline STEPS it executes internally, where
+# each step is named by the tool that canonically represents it (so it maps through
+# STEP_LABELS / step_detail above with no new label copy). The live breadcrumbs
+# reflect these steps -- what the workflow is *doing* -- decoupled from how many
+# tools the agent actually called: recommend_or_escalate re-derives candidates,
+# scores, and decides internally, so it lights up Geo-Lookup + Score & Rank +
+# Recommend/Decide even as a single tool call. Callers dedupe across a turn, so a
+# step already shown (e.g. Geo-Lookup from an on-demand find_candidate_routes) is
+# not repeated.
+TOOL_STEPS = {
+    "intake_customer": ["intake_customer"],
+    "find_candidate_routes": ["find_candidate_routes"],
+    "evaluate_and_score_routes": ["find_candidate_routes", "evaluate_and_score_routes"],
+    "recommend_or_escalate": [
+        "find_candidate_routes",
+        "evaluate_and_score_routes",
+        "recommend_or_escalate",
+    ],
+    # The consolidated batch tool runs the whole pipeline in one call.
+    "assign_prospect": [
+        "intake_customer",
+        "find_candidate_routes",
+        "evaluate_and_score_routes",
+        "recommend_or_escalate",
+    ],
+}
+
+
+def tool_steps(tool_name: str) -> list[str]:
+    """The ordered pipeline steps a tool executes internally (each named by the tool
+    that canonically represents it -- pass each to step_label / step_detail). Empty
+    for a tool that isn't a pipeline step.
+
+    The live stepper emits one breadcrumb per step, so a single consolidated call
+    (recommend_or_escalate, assign_prospect) still shows every underlying step --
+    the breadcrumbs track the logic, not the tool count."""
+    return TOOL_STEPS.get(tool_name, [])
+
 
 def step_label(tool_name: str) -> Optional[str]:
-    """The breadcrumb heading for a pipeline tool, or None if it isn't a step."""
+    """The breadcrumb heading for a pipeline step, or None if it isn't a step."""
     return STEP_LABELS.get(tool_name)
 
 

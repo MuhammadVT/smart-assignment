@@ -40,7 +40,7 @@ from smart_assignment.tools.slot_recommendation import (
     _profile_from_state_dict,
     cached_decision_for,
 )
-from smart_assignment.webapp.narration import step_detail, step_label
+from smart_assignment.webapp.narration import step_detail, step_label, tool_steps
 from smart_assignment.webapp.parse import parse_intake
 
 _APP_NAME = "smart_assignment_webapp"
@@ -353,6 +353,12 @@ class LlmChatService:
         from google.adk.agents.run_config import RunConfig, StreamingMode
 
         saw_recommendation = False
+        # Pipeline steps already shown as breadcrumbs this turn. Breadcrumbs track
+        # the pipeline STEPS (Geo-Lookup, Score & Rank, ...), not the tool calls, so
+        # one consolidated recommend_or_escalate call still lights up every step it
+        # runs internally -- and a step is never shown twice (e.g. if the user asked
+        # for an on-demand find_candidate_routes first). See narration.tool_steps.
+        emitted_steps: set[str] = set()
         # The agent's own recommendation narration (everything it says AFTER it
         # calls recommend_or_escalate this turn), captured so the visualization's
         # "Why the agent chose this" can show the same words as the chat box.
@@ -398,18 +404,24 @@ class LlmChatService:
             calls = event.get_function_calls()
             if calls:
                 for fc in calls:
-                    label = step_label(fc.name)
-                    if label:
-                        frame = {"type": "tool", "name": fc.name, "label": label}
+                    # Emit one breadcrumb per pipeline STEP this tool runs internally,
+                    # skipping any step already shown this turn -- so recommend_or_
+                    # escalate lights up Geo-Lookup + Score & Rank + Recommend/Decide
+                    # even though it is a single tool call (see narration.tool_steps).
+                    for step in tool_steps(fc.name):
+                        if step in emitted_steps:
+                            continue
+                        emitted_steps.add(step)
+                        frame = {"type": "tool", "name": step, "label": step_label(step)}
                         # A plain-language line of what this step is doing (Intake
                         # echoes the customer's own inputs back); omit when there's
                         # nothing to add so the frame shape stays minimal.
-                        detail = step_detail(fc.name, fc.args or {})
+                        detail = step_detail(step, fc.args or {})
                         if detail:
                             frame["detail"] = detail
                         yield frame
-                        if fc.name == "recommend_or_escalate":
-                            saw_recommendation = True
+                    if fc.name in ("recommend_or_escalate", "assign_prospect"):
+                        saw_recommendation = True
                 continue
 
             if event.get_function_responses():

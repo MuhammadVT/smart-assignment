@@ -8,7 +8,12 @@ echo the customer's own inputs and never invent one).
 
 from __future__ import annotations
 
-from smart_assignment.webapp.narration import STEP_LABELS, step_detail, step_label
+from smart_assignment.webapp.narration import (
+    STEP_LABELS,
+    step_detail,
+    step_label,
+    tool_steps,
+)
 
 
 def test_step_label_maps_pipeline_tools():
@@ -57,3 +62,32 @@ def test_intake_detail_ignores_bogus_values():
 
 def test_step_detail_none_for_non_step_tool():
     assert step_detail("resolve_address", {}) is None
+
+
+# --- tool -> pipeline steps (breadcrumbs decoupled from tool count) -----------
+
+
+def test_tool_steps_single_step_tools_map_to_themselves():
+    assert tool_steps("intake_customer") == ["intake_customer"]
+    assert tool_steps("find_candidate_routes") == ["find_candidate_routes"]
+
+
+def test_recommend_or_escalate_covers_geo_score_and_decide():
+    # One tool call that internally runs geo + score + decide lights up all three.
+    assert tool_steps("recommend_or_escalate") == [
+        "find_candidate_routes",
+        "evaluate_and_score_routes",
+        "recommend_or_escalate",
+    ]
+
+
+def test_every_tool_step_has_a_label_and_detail():
+    for tool in ("intake_customer", "recommend_or_escalate", "assign_prospect"):
+        for step in tool_steps(tool):
+            assert step_label(step), f"no label for step {step}"
+            assert step_detail(step), f"no detail for step {step}"
+
+
+def test_tool_steps_empty_for_non_pipeline_tool():
+    assert tool_steps("resolve_address") == []
+    assert tool_steps("some_other_tool") == []
