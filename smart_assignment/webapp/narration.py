@@ -1,10 +1,14 @@
 """
 Plain-language narration for the live workflow steps.
 
-While the agent runs, the chat shows one breadcrumb per pipeline tool call so the
-user can follow *what it is doing right now*. This module owns the wording for
-those breadcrumbs -- the short step label (the row heading) and a one-line,
-plain-language description of what that step does.
+While the agent runs, the chat shows one breadcrumb per pipeline STEP so the user
+can follow *what it is doing right now*. This module owns the wording for those
+breadcrumbs -- the short step label (the row heading), a one-line, plain-language
+description of what that step does, and the declared step list behind each tool.
+
+It owns the WORDING only. Whether a step actually ran is decided elsewhere, from
+the tool's own result (``webapp/llm_chat``), so nothing here can imply that work
+happened.
 
 These strings are deliberately **descriptive signposts, not data**: the verified
 numbers, scores, proximity map, and slot timeline all render in the step cards
@@ -42,15 +46,21 @@ _STEP_DETAIL = {
     "recommend_or_escalate": "Checking the top slot against the auto-assign bar and deciding.",
 }
 
-# Each pipeline tool -> the ordered pipeline STEPS it executes internally, where
+# Each pipeline tool -> the ordered pipeline STEPS it may execute internally, where
 # each step is named by the tool that canonically represents it (so it maps through
-# STEP_LABELS / step_detail above with no new label copy). The live breadcrumbs
-# reflect these steps -- what the workflow is *doing* -- decoupled from how many
-# tools the agent actually called: recommend_or_escalate re-derives candidates,
-# scores, and decides internally, so it lights up Geo-Lookup + Score & Rank +
-# Recommend/Decide even as a single tool call. Callers dedupe across a turn, so a
-# step already shown (e.g. Geo-Lookup from an on-demand find_candidate_routes) is
-# not repeated.
+# STEP_LABELS / step_detail above with no new label copy). This decouples WHICH
+# steps the breadcrumbs show from how many tools the agent actually called:
+# recommend_or_escalate re-derives candidates, scores, and decides internally, so it
+# lights up Geo-Lookup + Score & Rank + Recommend/Decide even as a single tool call.
+# Callers dedupe across a turn, so a step already shown (e.g. Geo-Lookup from an
+# on-demand find_candidate_routes) is not repeated.
+#
+# This is the tool's DECLARED step list, not a record of what ran. It says only
+# which steps to put on screen; whether one succeeded is never read from here --
+# the caller opens them as "running" on the tool call and settles them from the
+# tool's own result (see webapp/llm_chat._tool_outcome). Keeping the two apart is
+# the point: a static table can't know that a geocode failed, and a breadcrumb
+# claiming a step finished is a claim about the audited run.
 TOOL_STEPS = {
     "intake_customer": ["intake_customer"],
     "find_candidate_routes": ["find_candidate_routes"],
@@ -71,13 +81,14 @@ TOOL_STEPS = {
 
 
 def tool_steps(tool_name: str) -> list[str]:
-    """The ordered pipeline steps a tool executes internally (each named by the tool
-    that canonically represents it -- pass each to step_label / step_detail). Empty
-    for a tool that isn't a pipeline step.
+    """The ordered pipeline steps a tool may execute internally (each named by the
+    tool that canonically represents it -- pass each to step_label / step_detail).
+    Empty for a tool that isn't a pipeline step.
 
-    The live stepper emits one breadcrumb per step, so a single consolidated call
-    (recommend_or_escalate, assign_prospect) still shows every underlying step --
-    the breadcrumbs track the logic, not the tool count."""
+    The live stepper shows one breadcrumb per step, so a single consolidated call
+    (recommend_or_escalate, assign_prospect) still surfaces every underlying step --
+    which steps appear is decoupled from the tool count. Their outcome is NOT: this
+    returns the declared step list, never a claim that any of it ran."""
     return TOOL_STEPS.get(tool_name, [])
 
 
