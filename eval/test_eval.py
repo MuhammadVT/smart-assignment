@@ -3,7 +3,8 @@ Runs the smart_assignment conversational agent's golden dataset through
 ADK's AgentEvaluator. It REPLAYS each scripted intake conversation against the
 real ``root_agent`` -- so it needs a live LLM backend -- and scores TRAJECTORY
 (did the agent drive the pipeline in the right order: intake_customer ->
-find_candidate_routes -> evaluate_and_score_routes -> recommend_or_escalate).
+recommend_or_escalate; see ``_PIPELINE_AFTER_INTAKE`` in golden_cases.py for the
+tools deliberately left unpinned).
 
 Phase 2a scores trajectory ONLY (see eval/data/test_config.json). The dataset is
 generated deterministically from the repo's mock fixtures by

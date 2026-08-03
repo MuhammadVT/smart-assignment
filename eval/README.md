@@ -26,19 +26,26 @@ live LLM backend** and are kept separate from the hermetic tests.
 
 **Phase 2a — trajectory only.** `test_config.json` sets `tool_trajectory_avg_score`
 only. That checks the agent drives the pipeline correctly —
-`intake_customer` → `find_candidate_routes` → `evaluate_and_score_routes` →
-`recommend_or_escalate` — and catches structural regressions (a dropped or
-reordered tool, or the address-resolution branch firing when it shouldn't).
+`intake_customer` → `recommend_or_escalate` — and catches structural regressions
+(a dropped or reordered tool, or the address-resolution branch firing when it
+shouldn't).
 
-That metric runs with `match_type: IN_ORDER`, not ADK's `EXACT` default: those
-four calls must all appear, in that order, with exactly the expected args, but
-**extra trailing calls are tolerated**. That matters because the two escalate
-cases also hand off to a human — `escalation_triage` (when
-`SMART_ASSIGNMENT_USE_ESCALATION_TRIAGE` is on, the default) and ADK's
-`adk_request_input`. Their only arguments are model-authored prose that differs
-every run, so they can't be pinned in the dataset without making the suite
-permanently flaky. Under `EXACT` both escalate cases fail. See the comment on
-`_PIPELINE_AFTER_INTAKE` in `golden_cases.py`.
+Only the **required** steps are pinned. `find_candidate_routes` and
+`evaluate_and_score_routes` are not: `recommend_or_escalate` geocodes,
+constraint-checks and scores internally, so the default flow goes straight from
+intake to the decision and calls neither (see `smart_assignment/prompts.py`).
+They stay available as on-demand tools for a user who asks to see the nearby
+routes or per-route scores first.
+
+That metric runs with `match_type: IN_ORDER`, not ADK's `EXACT` default: the
+pinned calls must appear, in that order, with exactly the expected args, but
+**extra calls are tolerated anywhere**. That matters twice over: for the
+on-demand tools above, and because the two escalate cases also hand off to a
+human — `escalation_triage` (when `SMART_ASSIGNMENT_USE_ESCALATION_TRIAGE` is on,
+the default) and ADK's `adk_request_input`. Their only arguments are
+model-authored prose that differs every run, so they can't be pinned in the
+dataset without making the suite permanently flaky. Under `EXACT` both escalate
+cases fail. See the comment on `_PIPELINE_AFTER_INTAKE` in `golden_cases.py`.
 
 `intake_customer`'s expected arguments are the **known ground-truth fields** of
 each mock customer (derived from the fixture, not invented), so the trajectory
