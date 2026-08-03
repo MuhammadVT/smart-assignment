@@ -92,10 +92,14 @@
 
   // --- Live workflow stepper -------------------------------------------------
   // Replaces the old stream of italic "🔧 Intake…" pills with a single agent
-  // turn that grows a connected checklist: each pipeline tool call marks the
-  // previous step done (✓) and adds the new one as active (spinner). It narrates
-  // WHAT is happening in plain language; the numbers/map/timeline render in the
-  // detailed cards below once the run finishes, so nothing is duplicated here.
+  // turn that grows a connected checklist. Each frame carries an explicit status
+  // — running (spinner), done (✓), failed (✕) — so a step turns green only when
+  // the server saw the tool report that work finished. The UI never infers that
+  // one step completed just because another started: a single consolidated tool
+  // call opens several steps at once, and marking the earlier ones done would
+  // claim work that hasn't happened (and stay green when the tool then fails).
+  // It narrates WHAT is happening in plain language; the numbers/map/timeline
+  // render in the detailed cards below once the run finishes.
   function makeStepper() {
     var row = document.createElement('div');
     row.className = 'msg agent';
@@ -117,57 +121,96 @@
     transcript.appendChild(row);
     transcript.scrollTop = transcript.scrollHeight;
 
-    var rows = [];  // one entry per step: { row, dot }
+    var rows = {};      // step name -> { row, dot, content, say, phase }
+    var order = [];     // step names, in the order they first appeared
+    var awaitingHuman = false;
 
-    function markDone(i) {
-      var r = rows[i];
-      if (!r) { return; }
-      r.row.className = 'step-row done';
-      r.dot.className = 'step-dot done';
-      r.dot.textContent = '✓';  // ✓
+    // Paint one row in the state the server reported. 'running' keeps the CSS
+    // class 'active' the stylesheet already uses for an in-progress step. A
+    // step's phase ('handoff') rides alongside its status, so a row that hands
+    // the prospect to a person stays visually distinct from the assignment
+    // steps whether it is running or settled.
+    function setState(entry, status) {
+      var st = status || 'running';
+      var cls = (st === 'running') ? 'active' : st;
+      if (entry.phase) { cls += ' ' + entry.phase; }
+      entry.row.className = 'step-row ' + cls;
+      entry.dot.className = 'step-dot ' + cls;
+      if (st === 'done') {
+        entry.dot.textContent = '✓';
+      } else if (st === 'failed') {
+        entry.dot.textContent = '✕';
+      } else {
+        entry.dot.innerHTML = '<span class="spin"></span>';
+      }
+    }
+
+    function addRow(key, label) {
+      var stepRow = document.createElement('div');
+
+      var rail = document.createElement('div');
+      rail.className = 'step-rail';
+      var dot = document.createElement('div');
+      var lineEl = document.createElement('div');
+      lineEl.className = 'step-line';
+      rail.appendChild(dot);
+      rail.appendChild(lineEl);
+
+      var content = document.createElement('div');
+      content.className = 'step-content';
+      var name = document.createElement('div');
+      name.className = 'step-name';
+      name.textContent = label || key;
+      content.appendChild(name);
+
+      stepRow.appendChild(rail);
+      stepRow.appendChild(content);
+      list.appendChild(stepRow);
+
+      var entry = { row: stepRow, dot: dot, content: content, say: null, phase: null };
+      rows[key] = entry;
+      order.push(key);
+      return entry;
     }
 
     return {
-      // Finalise the current step and start the next one.
-      addStep: function (label, detail) {
-        if (rows.length) { markDone(rows.length - 1); }
-
-        var stepRow = document.createElement('div');
-        stepRow.className = 'step-row active';
-
-        var rail = document.createElement('div');
-        rail.className = 'step-rail';
-        var dot = document.createElement('div');
-        dot.className = 'step-dot active';
-        dot.innerHTML = '<span class="spin"></span>';
-        var lineEl = document.createElement('div');
-        lineEl.className = 'step-line';
-        rail.appendChild(dot);
-        rail.appendChild(lineEl);
-
-        var content = document.createElement('div');
-        content.className = 'step-content';
-        var name = document.createElement('div');
-        name.className = 'step-name';
-        name.textContent = label;
-        content.appendChild(name);
+      // Add a step the first time it's seen, then move it to whatever status the
+      // server reports next. Steps are keyed by name, so the 'done'/'failed'
+      // frame updates the row its 'running' frame created.
+      upsertStep: function (name, label, detail, status, phase) {
+        var key = name || label;
+        if (!key) { return; }
+        var entry = rows[key] || addRow(key, label);
+        if (phase) { entry.phase = phase; }
+        // A closing frame carries only what changed, so keep the existing line
+        // unless this frame brought a new one (e.g. a tool's own error text, or
+        // the decision step reporting that it escalated).
         if (detail) {
-          var say = document.createElement('div');
-          say.className = 'step-say';
-          say.textContent = detail;
-          content.appendChild(say);
+          if (!entry.say) {
+            entry.say = document.createElement('div');
+            entry.say.className = 'step-say';
+            entry.content.appendChild(entry.say);
+          }
+          entry.say.textContent = detail;
         }
-
-        stepRow.appendChild(rail);
-        stepRow.appendChild(content);
-        list.appendChild(stepRow);
-        rows.push({ row: stepRow, dot: dot });
+        setState(entry, status);
         transcript.scrollTop = transcript.scrollHeight;
       },
-      // Mark the last step done (the run produced a reply / result / error).
+      // The prospect was handed to a person. The turn is NOT done — it is parked
+      // waiting for a specialist to answer — so say that rather than captioning
+      // the panel 'Done' and implying the work finished here.
+      awaiting: function () {
+        awaitingHuman = true;
+      },
+      // The turn ended. Anything still spinning got no closing frame (e.g. the
+      // human-in-the-loop handoff interrupts before the tool reports); settle it
+      // rather than leaving a spinner running forever.
       finish: function () {
-        if (rows.length) { markDone(rows.length - 1); }
-        cap.textContent = 'Done';
+        for (var i = 0; i < order.length; i++) {
+          var entry = rows[order[i]];
+          if (entry.row.className.indexOf('active') !== -1) { setState(entry, 'done'); }
+        }
+        cap.textContent = awaitingHuman ? 'Waiting on a specialist' : 'Done';
       }
     };
   }
@@ -796,11 +839,14 @@
 
           if (frame.type === 'tool') {
             if (!stepper) { stepper = makeStepper(); }
-            stepper.addStep(frame.label, frame.detail);
+            stepper.upsertStep(frame.name, frame.label, frame.detail, frame.status, frame.phase);
           } else if (frame.type === 'message') {
             endStepper();
             bubble('agent', frame.text);
           } else if (frame.type === 'await_input') {
+            // Tell the stepper the prospect went to a person BEFORE closing it,
+            // so it captions itself 'Waiting on a specialist' rather than 'Done'.
+            if (stepper) { stepper.awaiting(); }
             endStepper();
             bubble('agent', '🙋 ' + frame.message, 'await');
           } else if (frame.type === 'visualization') {

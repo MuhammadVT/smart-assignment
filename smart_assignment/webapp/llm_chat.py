@@ -24,8 +24,9 @@ the default that activates the moment credentials are present.
 
 from __future__ import annotations
 
+import logging
 import os
-from typing import AsyncGenerator, Optional
+from typing import Any, AsyncGenerator, Optional
 
 from smart_assignment.pipeline import run_slot_recommendation
 from smart_assignment.reporting.page import build_workflow_payload
@@ -40,14 +41,65 @@ from smart_assignment.tools.slot_recommendation import (
     _profile_from_state_dict,
     cached_decision_for,
 )
-from smart_assignment.webapp.narration import step_detail, step_label
+from smart_assignment.webapp.narration import (
+    ESCALATION_DETAIL,
+    step_detail,
+    step_label,
+    step_phase,
+    tool_steps,
+)
 from smart_assignment.webapp.parse import parse_intake
+
+logger = logging.getLogger(__name__)
 
 _APP_NAME = "smart_assignment_webapp"
 _USER_ID = "webapp_user"
 
 # ADK's request_input long-running tool surfaces under this function name.
 _REQUEST_INPUT_NAME = "adk_request_input"
+
+# Tools whose successful return IS the prospect's decision, so the turn should
+# render the result visualization and mark the prospect concluded.
+_DECISION_TOOLS = ("recommend_or_escalate", "assign_prospect")
+
+
+def _call_key(part: Any) -> str:
+    """Correlation key pairing a FunctionCall with its FunctionResponse. ADK sets
+    a matching ``id`` on both; fall back to the tool name so a backend that omits
+    the id still pairs correctly for the one-call-at-a-time flow."""
+    return getattr(part, "id", None) or part.name
+
+
+def _requires_human_review(part: Any) -> bool:
+    """Whether a decision tool reported that this prospect needs a human.
+
+    Read straight off ``requires_human_review`` on the tool's own result, so the
+    breadcrumb restates a fact the audited decision produced. False for any other
+    tool, or a payload we can't read."""
+    if part.name not in _DECISION_TOOLS:
+        return False
+    response = part.response
+    return isinstance(response, dict) and bool(response.get("requires_human_review"))
+
+
+def _tool_outcome(response: Any) -> tuple[bool, Optional[str]]:
+    """Did a tool call succeed, and -- if not -- what did it say went wrong?
+
+    The pipeline tools return a plain ``{"ok": bool, "error": str, ...}`` dict,
+    which ADK hands back verbatim on the FunctionResponse, so this reads a real
+    fact the tool reported rather than assuming an outcome from the call.
+
+    Anything unreadable (a non-dict payload, or a tool we don't own such as the
+    ``escalation_triage`` AgentTool) counts as success: this only drives
+    breadcrumb wording, and treating a finished step as failed -- or leaving it
+    spinning forever -- would be worse than the benign default.
+    """
+    if not isinstance(response, dict) or "ok" not in response:
+        return True, None
+    if response.get("ok"):
+        return True, None
+    error = response.get("error")
+    return False, error.strip() if isinstance(error, str) and error.strip() else None
 
 
 # ---------------------------------------------------------------------------
@@ -328,9 +380,15 @@ class LlmChatService:
     async def stream_turn(self, session_id: str, message: str) -> AsyncGenerator[dict, None]:
         """Run one conversational turn, yielding frame dicts:
 
-        ``{"type": "tool", "name", "label", "detail"}`` — a pipeline tool was
-                                                   called (``detail`` is a short,
-                                                   plain-language line for the UI)
+        ``{"type": "tool", "name", "status", "label", "detail"}``
+                                                   — a pipeline step changed state.
+                                                   ``status`` is ``running`` (the
+                                                   tool was just called), ``done``
+                                                   or ``failed`` (the tool reported
+                                                   back). ``label``/``detail`` come
+                                                   with the ``running`` frame; the
+                                                   closing frame carries only what
+                                                   changed.
         ``{"type": "message", "text"}``            — agent natural-language reply
         ``{"type": "await_input", "message"}``     — human-in-the-loop escalation
         ``{"type": "visualization", "payload"}``   — the 5 step cards + result
@@ -353,6 +411,17 @@ class LlmChatService:
         from google.adk.agents.run_config import RunConfig, StreamingMode
 
         saw_recommendation = False
+        # Pipeline steps already shown as breadcrumbs this turn. Breadcrumbs track
+        # the pipeline STEPS (Geo-Lookup, Score & Rank, ...), not the tool calls, so
+        # one consolidated recommend_or_escalate call still lights up every step it
+        # runs internally -- and a step is never shown twice (e.g. if the user asked
+        # for an on-demand find_candidate_routes first). See narration.tool_steps.
+        emitted_steps: set[str] = set()
+        # Steps opened by an in-flight tool call, keyed by that call's id, so the
+        # matching FunctionResponse can close them out with what ACTUALLY happened.
+        # A call only tells us work was requested; only the response says whether
+        # it succeeded, so no step is ever marked done off the back of a call.
+        open_steps: dict[str, list[str]] = {}
         # The agent's own recommendation narration (everything it says AFTER it
         # calls recommend_or_escalate this turn), captured so the visualization's
         # "Why the agent chose this" can show the same words as the chat box.
@@ -398,22 +467,73 @@ class LlmChatService:
             calls = event.get_function_calls()
             if calls:
                 for fc in calls:
-                    label = step_label(fc.name)
-                    if label:
-                        frame = {"type": "tool", "name": fc.name, "label": label}
+                    # Open one breadcrumb per pipeline STEP this tool runs internally,
+                    # skipping any step already shown this turn -- so recommend_or_
+                    # escalate lights up Geo-Lookup + Score & Rank + Recommend/Decide
+                    # even though it is a single tool call (see narration.tool_steps).
+                    # They open as RUNNING: the tool has been asked to do this work,
+                    # and none of it has happened yet.
+                    started: list[str] = []
+                    for step in tool_steps(fc.name):
+                        if step in emitted_steps:
+                            continue
+                        emitted_steps.add(step)
+                        started.append(step)
+                        frame = {
+                            "type": "tool",
+                            "name": step,
+                            "label": step_label(step),
+                            "status": "running",
+                        }
+                        # "handoff" for a step that passes the prospect to a person
+                        # (the escalation brief), so the UI can style that phase
+                        # apart from the assignment steps. Absent otherwise.
+                        phase = step_phase(step)
+                        if phase:
+                            frame["phase"] = phase
                         # A plain-language line of what this step is doing (Intake
                         # echoes the customer's own inputs back); omit when there's
                         # nothing to add so the frame shape stays minimal.
-                        detail = step_detail(fc.name, fc.args or {})
+                        detail = step_detail(step, fc.args or {})
                         if detail:
                             frame["detail"] = detail
                         yield frame
-                        if fc.name == "recommend_or_escalate":
-                            saw_recommendation = True
+                    if started:
+                        open_steps[_call_key(fc)] = started
                 continue
 
-            if event.get_function_responses():
-                continue  # tool return values drive the pipeline; nothing to show
+            responses = event.get_function_responses()
+            if responses:
+                # The tool reported back -- the only point in the turn where we
+                # learn what actually ran. Close its steps with that verdict, and
+                # treat a decision as reached only when the tool says it succeeded.
+                for fr in responses:
+                    ok, error = _tool_outcome(fr.response)
+                    if ok and fr.name in _DECISION_TOOLS:
+                        saw_recommendation = True
+                    # A decision that escalated says so on its own step, so the
+                    # handoff breadcrumb that follows reads as a consequence rather
+                    # than a surprise. Restates the tool's own
+                    # ``requires_human_review`` flag -- the REASON is the audited
+                    # brief's job, never a breadcrumb's.
+                    escalated = ok and _requires_human_review(fr)
+                    for step in open_steps.pop(_call_key(fr), []):
+                        frame = {
+                            "type": "tool",
+                            "name": step,
+                            "status": "done" if ok else "failed",
+                        }
+                        phase = step_phase(step)
+                        if phase:
+                            frame["phase"] = phase
+                        # On a failure, relay the tool's OWN error text rather than
+                        # narrating a cause we'd be guessing at.
+                        if error:
+                            frame["detail"] = error
+                        elif escalated and step == "recommend_or_escalate":
+                            frame["detail"] = ESCALATION_DETAIL
+                        yield frame
+                continue
 
             # Natural-language text. Emit only the aggregated (non-partial) event
             # so the transcript gets each reply once, not per streamed chunk.
@@ -429,9 +549,23 @@ class LlmChatService:
             # in this browser session should start a fresh ADK conversation.
             self._concluded.add(session_id)
             override = "\n\n".join(recommendation_reply) or None
-            payload = await self._visualization_from_state(
-                adk_session_id, user_id=user_id, reasoning_override=override
-            )
+            try:
+                payload = await self._visualization_from_state(
+                    adk_session_id, user_id=user_id, reasoning_override=override
+                )
+            except Exception:  # noqa: BLE001 - the turn already has a real answer
+                # The visualization is a re-derivation of a decision the agent has
+                # ALREADY made and narrated to the user. If rebuilding it fails
+                # (a geocoder hiccup on the re-run, unreadable state), that must
+                # not take the turn down with it -- doing so would discard the
+                # agent's own correct reply and hand the user a deterministic
+                # fallback contradicting it. Log the reason and show no cards.
+                logger.exception(
+                    "Could not rebuild the visualization for session %s; the "
+                    "agent's reply stands and no result cards are shown.",
+                    session_id,
+                )
+                payload = None
             if payload:
                 yield {"type": "visualization", "payload": payload}
 

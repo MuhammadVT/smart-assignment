@@ -33,6 +33,13 @@ class _FakeCall:
         self.args = args or {}
 
 
+class _FakeResponse:
+    def __init__(self, name, id="fc1", response=None):
+        self.name = name
+        self.id = id
+        self.response = {"ok": True} if response is None else response
+
+
 class _FakePart:
     def __init__(self, text):
         self.text = text
@@ -44,8 +51,9 @@ class _FakeContent:
 
 
 class _FakeEvent:
-    def __init__(self, calls=None, text=None):
+    def __init__(self, calls=None, responses=None, text=None):
         self._calls = calls or []
+        self._responses = responses or []
         self.long_running_tool_ids = None
         self.partial = False
         self.content = _FakeContent(text) if text is not None else None
@@ -54,7 +62,16 @@ class _FakeEvent:
         return self._calls
 
     def get_function_responses(self):
-        return []
+        return self._responses
+
+
+def _tool_pair(name, id="fc1"):
+    """The call + response pair ADK emits for one tool invocation. A prospect only
+    counts as concluded once the tool REPORTS a decision, so both are needed."""
+    return [
+        _FakeEvent(calls=[_FakeCall(name, id=id)]),
+        _FakeEvent(responses=[_FakeResponse(name, id=id)]),
+    ]
 
 
 class _FakeSession:
@@ -226,9 +243,8 @@ async def test_concluding_prospect_is_folded_into_memory_on_rotation(monkeypatch
     minted -- so its facts survive the rotation. Memory is scoped to the browser
     session (user_id == 's1')."""
     monkeypatch.setattr(llm_chat_module, "DEFAULT_CONFIG", Config(use_session_memory=True))
-    rec = _FakeCall("recommend_or_escalate")
-    turn1 = [_FakeEvent(calls=[rec]), _FakeEvent(text="First result.")]
-    turn2 = [_FakeEvent(calls=[rec]), _FakeEvent(text="Second result.")]
+    turn1 = [*_tool_pair("recommend_or_escalate"), _FakeEvent(text="First result.")]
+    turn2 = [*_tool_pair("recommend_or_escalate"), _FakeEvent(text="Second result.")]
     memory = _RecordingMemoryService()
     svc = LlmChatService(
         runner=_FakeRunner([turn1, turn2]),
@@ -258,9 +274,8 @@ async def test_no_memory_ingest_when_flag_off(monkeypatch):
     injected service is never touched) and keeps the fixed user_id -- i.e. today's
     behavior is reproduced exactly."""
     monkeypatch.setattr(llm_chat_module, "DEFAULT_CONFIG", Config(use_session_memory=False))
-    rec = _FakeCall("recommend_or_escalate")
-    turn1 = [_FakeEvent(calls=[rec]), _FakeEvent(text="First result.")]
-    turn2 = [_FakeEvent(calls=[rec]), _FakeEvent(text="Second result.")]
+    turn1 = [*_tool_pair("recommend_or_escalate"), _FakeEvent(text="First result.")]
+    turn2 = [*_tool_pair("recommend_or_escalate"), _FakeEvent(text="Second result.")]
     memory = _RecordingMemoryService()
     svc = LlmChatService(
         runner=_FakeRunner([turn1, turn2]),

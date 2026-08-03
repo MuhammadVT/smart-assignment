@@ -35,6 +35,16 @@ class _FakeCall:
         self.args = args or {}
 
 
+class _FakeResponse:
+    """A tool's return value coming back on a FunctionResponse event. Defaults to
+    the ``{"ok": True}`` shape every pipeline tool returns on success."""
+
+    def __init__(self, name, id="fc1", response=None):
+        self.name = name
+        self.id = id
+        self.response = {"ok": True} if response is None else response
+
+
 class _FakePart:
     def __init__(self, text):
         self.text = text
@@ -108,6 +118,29 @@ _SAMPLE_STATE = {
 }
 
 
+def _tool_pair(name, args=None, response=None, id=None):
+    """The call + response event pair ADK always emits for one tool invocation.
+
+    Breadcrumbs open as ``running`` on the call and are settled from the response,
+    so a scripted turn must carry BOTH -- a call on its own means the tool was
+    asked to do the work and hasn't reported back yet.
+    """
+    call_id = id or f"fc-{name}"
+    return [
+        _FakeEvent(calls=[_FakeCall(name, id=call_id, args=args)]),
+        _FakeEvent(responses=[_FakeResponse(name, id=call_id, response=response)]),
+    ]
+
+
+def _steps(frames, status=None):
+    """(name, status) for each tool frame, optionally filtered to one status."""
+    return [
+        (f["name"], f.get("status"))
+        for f in frames
+        if f["type"] == "tool" and (status is None or f.get("status") == status)
+    ]
+
+
 async def _collect(agen):
     return [frame async for frame in agen]
 
@@ -171,10 +204,10 @@ def test_resolve_mode_explicit_deterministic(monkeypatch):
 
 async def test_stream_turn_maps_tools_and_renders_visualization():
     events = [
-        _FakeEvent(calls=[_FakeCall("intake_customer")]),
-        _FakeEvent(calls=[_FakeCall("find_candidate_routes")]),
-        _FakeEvent(calls=[_FakeCall("evaluate_and_score_routes")]),
-        _FakeEvent(calls=[_FakeCall("recommend_or_escalate")]),
+        *_tool_pair("intake_customer"),
+        *_tool_pair("find_candidate_routes"),
+        *_tool_pair("evaluate_and_score_routes"),
+        *_tool_pair("recommend_or_escalate"),
         _FakeEvent(text="Here is my recommendation."),
     ]
     service = LlmChatService(
@@ -184,8 +217,15 @@ async def test_stream_turn_maps_tools_and_renders_visualization():
     )
     frames = await _collect(service.stream_turn("s1", "New prospect at 1200 McKinney St, 90 cases"))
 
-    tool_labels = [f["label"] for f in frames if f["type"] == "tool"]
-    assert tool_labels == ["Intake", "Geo-Lookup", "Score & Rank", "Recommend / Decide"]
+    labels = [f["label"] for f in frames if f["type"] == "tool" and f.get("status") == "running"]
+    assert labels == ["Intake", "Geo-Lookup", "Score & Rank", "Recommend / Decide"]
+    # Each step opens running and is settled done by its own tool's response.
+    assert _steps(frames, "done") == [
+        ("intake_customer", "done"),
+        ("find_candidate_routes", "done"),
+        ("evaluate_and_score_routes", "done"),
+        ("recommend_or_escalate", "done"),
+    ]
     assert any(f["type"] == "message" and "recommendation" in f["text"] for f in frames)
     viz = [f for f in frames if f["type"] == "visualization"]
     assert len(viz) == 1
@@ -193,16 +233,14 @@ async def test_stream_turn_maps_tools_and_renders_visualization():
     assert frames[-1] == {"type": "done"}
 
 
-async def test_stream_turn_tool_frames_carry_plain_language_detail():
-    """Each tool frame carries a ``detail`` breadcrumb for the UI stepper, and
-    Intake echoes the customer's own inputs back (grounded, not invented)."""
+async def test_breadcrumbs_track_pipeline_steps_not_tool_calls():
+    """The optimized default flow makes only TWO tool calls (intake ->
+    recommend_or_escalate), but the live stepper must still show ALL four pipeline
+    steps: recommend_or_escalate runs geo + score + decide internally, so its one
+    call lights up Geo-Lookup, Score & Rank, and Recommend/Decide."""
     events = [
-        _FakeEvent(calls=[_FakeCall("intake_customer", args={
-            "order_quantity_cases": 90, "preferred_day": "TUE",
-        })]),
-        _FakeEvent(calls=[_FakeCall("find_candidate_routes")]),
-        _FakeEvent(calls=[_FakeCall("evaluate_and_score_routes")]),
-        _FakeEvent(calls=[_FakeCall("recommend_or_escalate")]),
+        *_tool_pair("intake_customer"),
+        *_tool_pair("recommend_or_escalate"),
         _FakeEvent(text="Here is my recommendation."),
     ]
     service = LlmChatService(
@@ -212,12 +250,219 @@ async def test_stream_turn_tool_frames_carry_plain_language_detail():
     )
     frames = await _collect(service.stream_turn("s1", "New prospect at 1200 McKinney St, 90 cases"))
 
-    tools = {f["name"]: f for f in frames if f["type"] == "tool"}
+    labels = [f["label"] for f in frames if f["type"] == "tool" and f.get("status") == "running"]
+    # All four steps, in order, from just two tool calls.
+    assert labels == ["Intake", "Geo-Lookup", "Score & Rank", "Recommend / Decide"]
+    # And the full 5-step visualization still renders (state-derived, unchanged).
+    viz = [f for f in frames if f["type"] == "visualization"]
+    assert len(viz) == 1 and len(viz[0]["payload"]["steps"]) == 5
+
+
+async def test_consolidated_tool_opens_its_steps_running_and_settles_them_together():
+    """A step must never be shown as done off the back of a CALL. One
+    recommend_or_escalate call opens Geo-Lookup + Score & Rank + Recommend/Decide
+    as running; all three turn done only when that tool reports back."""
+    events = [
+        *_tool_pair("recommend_or_escalate"),
+        _FakeEvent(text="Here is my recommendation."),
+    ]
+    service = LlmChatService(
+        runner=_FakeRunner([events]),
+        session_service=_FakeSessionService(_SAMPLE_STATE),
+        geocoder=MockGeocoder(),
+    )
+    frames = await _collect(service.stream_turn("s1", "decide for 1200 McKinney St, 90 cases"))
+
+    # Every running frame precedes every done frame: nothing is green while the
+    # single tool call that does all three steps is still in flight.
+    statuses = [s for _, s in _steps(frames)]
+    assert statuses == ["running"] * 3 + ["done"] * 3
+    assert _steps(frames, "running") == [
+        ("find_candidate_routes", "running"),
+        ("evaluate_and_score_routes", "running"),
+        ("recommend_or_escalate", "running"),
+    ]
+
+
+async def test_failed_tool_marks_its_steps_failed_and_renders_no_visualization():
+    """When the tool reports {"ok": false} -- e.g. the address can't be geocoded --
+    none of its steps ran, so none may show as done. They are marked failed with
+    the tool's OWN error text, and no result cards are rendered for a decision that
+    was never made."""
+    error = "I couldn't find a close match for '9999 Zzzqqx Nowhere Blvd'."
+    events = [
+        *_tool_pair("intake_customer"),
+        *_tool_pair("recommend_or_escalate", response={"ok": False, "error": error}),
+        _FakeEvent(text="I couldn't find that address -- could you double-check it?"),
+    ]
+    service = LlmChatService(
+        runner=_FakeRunner([events]),
+        session_service=_FakeSessionService(_SAMPLE_STATE),
+        geocoder=MockGeocoder(),
+    )
+    frames = await _collect(service.stream_turn("s1", "9999 Zzzqqx Nowhere Blvd, 60 cases"))
+
+    assert _steps(frames, "done") == [("intake_customer", "done")]
+    assert _steps(frames, "failed") == [
+        ("find_candidate_routes", "failed"),
+        ("evaluate_and_score_routes", "failed"),
+        ("recommend_or_escalate", "failed"),
+    ]
+    # The failure breadcrumb relays the tool's own words, not a guessed cause.
+    assert all(f["detail"] == error for f in frames if f.get("status") == "failed")
+    # No decision was reached: no result cards, and the prospect isn't concluded.
+    assert not [f for f in frames if f["type"] == "visualization"]
+    assert "s1" not in service._concluded
+
+
+async def test_escalation_shows_the_handoff_phase_while_the_brief_is_composed():
+    """Composing the specialist brief (escalation_triage) is the LONGEST call in an
+    escalation turn -- measured at ~14s against the real agent. Without a step of
+    its own the panel sits fully ticked while it runs, so it gets a breadcrumb like
+    any other tool, marked as the handoff phase rather than a fifth pipeline step.
+    The decision step also reports that it escalated, so the handoff reads as a
+    consequence."""
+    events = [
+        *_tool_pair(
+            "recommend_or_escalate",
+            response={"ok": True, "requires_human_review": True},
+        ),
+        # The AgentTool returns prose, not an {"ok": ...} dict.
+        *_tool_pair("escalation_triage", response="SITUATION\nNew prospect, 90 cases..."),
+        _FakeEvent(
+            calls=[_FakeCall("adk_request_input", id="req-1", args={"message": "Confirm?"})],
+            long_running=["req-1"],
+        ),
+    ]
+    service = LlmChatService(
+        runner=_FakeRunner([events]),
+        session_service=_FakeSessionService(_SAMPLE_STATE),
+        geocoder=MockGeocoder(),
+    )
+    frames = await _collect(service.stream_turn("s1", "1200 McKinney St, 90 cases"))
+
+    tools = [f for f in frames if f["type"] == "tool"]
+    triage = [f for f in tools if f["name"] == "escalation_triage"]
+    # Shown while it runs, then settled -- not a silent gap.
+    assert [f["status"] for f in triage] == ["running", "done"]
+    assert triage[0]["label"] == "Briefing a specialist"
+    # Marked as the handoff phase on BOTH frames, so the row keeps its treatment
+    # once it settles.
+    assert all(f["phase"] == "handoff" for f in triage)
+    # ...and no assignment step is mistaken for one.
+    assert not any("phase" in f for f in tools if f["name"] != "escalation_triage")
+    # The decision step closes by restating the tool's own requires_human_review.
+    decided = [
+        f for f in tools if f["name"] == "recommend_or_escalate" and f["status"] == "done"
+    ]
+    assert decided and decided[0]["detail"] == "Escalating for human review."
+    assert any(f["type"] == "await_input" for f in frames)
+
+
+async def test_a_plain_recommendation_shows_no_handoff_phase():
+    """No escalation, no handoff: the breadcrumbs stay the four assignment steps and
+    the decision step keeps its generic description."""
+    events = [
+        *_tool_pair(
+            "recommend_or_escalate",
+            response={"ok": True, "requires_human_review": False},
+        ),
+        _FakeEvent(text="I recommend RTE-A on TUE."),
+    ]
+    service = LlmChatService(
+        runner=_FakeRunner([events]),
+        session_service=_FakeSessionService(_SAMPLE_STATE),
+        geocoder=MockGeocoder(),
+    )
+    frames = await _collect(service.stream_turn("s1", "1200 McKinney St, 90 cases"))
+
+    tools = [f for f in frames if f["type"] == "tool"]
+    assert not any("phase" in f for f in tools)
+    assert not any(f["name"] == "escalation_triage" for f in tools)
+    # A successful, non-escalating close adds no detail to overwrite the original.
+    assert not any("detail" in f for f in tools if f["status"] == "done")
+
+
+async def test_a_failed_visualization_rebuild_does_not_kill_the_turn(monkeypatch):
+    """The visualization re-derives a decision the agent has ALREADY narrated. If
+    that rebuild raises, the turn must still complete -- otherwise the agent's own
+    correct reply is discarded and the caller falls back to the deterministic brain,
+    contradicting what the user was just told."""
+    events = [
+        *_tool_pair("recommend_or_escalate"),
+        _FakeEvent(text="I recommend RTE-A on TUE."),
+    ]
+    service = LlmChatService(
+        runner=_FakeRunner([events]),
+        session_service=_FakeSessionService(_SAMPLE_STATE),
+        geocoder=MockGeocoder(),
+    )
+
+    async def _boom(*args, **kwargs):
+        raise RuntimeError("geocoder unavailable on the re-run")
+
+    monkeypatch.setattr(service, "_visualization_from_state", _boom)
+
+    frames = await _collect(service.stream_turn("s1", "1200 McKinney St, 90 cases"))
+
+    assert any(f["type"] == "message" and "RTE-A" in f["text"] for f in frames)
+    assert not [f for f in frames if f["type"] == "visualization"]
+    assert frames[-1] == {"type": "done"}
+
+
+async def test_breadcrumbs_are_not_duplicated_across_tool_calls():
+    """If the user asks for an on-demand find_candidate_routes before the decision,
+    the Geo-Lookup step must not appear twice when recommend_or_escalate (which also
+    covers geo) runs -- each step is shown at most once per turn."""
+    events = [
+        *_tool_pair("intake_customer"),
+        *_tool_pair("find_candidate_routes"),
+        *_tool_pair("recommend_or_escalate"),
+        _FakeEvent(text="Here is my recommendation."),
+    ]
+    service = LlmChatService(
+        runner=_FakeRunner([events]),
+        session_service=_FakeSessionService(_SAMPLE_STATE),
+        geocoder=MockGeocoder(),
+    )
+    frames = await _collect(service.stream_turn("s1", "show me the routes then decide"))
+
+    labels = [f["label"] for f in frames if f["type"] == "tool" and f.get("status") == "running"]
+    assert labels == ["Intake", "Geo-Lookup", "Score & Rank", "Recommend / Decide"]
+    # Geo-Lookup was opened by find_candidate_routes, so ITS response settles it --
+    # the later recommend_or_escalate must not re-open or re-settle it.
+    assert _steps(frames, "done").count(("find_candidate_routes", "done")) == 1
+
+
+async def test_stream_turn_tool_frames_carry_plain_language_detail():
+    """Each tool frame carries a ``detail`` breadcrumb for the UI stepper, and
+    Intake echoes the customer's own inputs back (grounded, not invented)."""
+    events = [
+        *_tool_pair("intake_customer", args={
+            "order_quantity_cases": 90, "preferred_day": "TUE",
+        }),
+        *_tool_pair("find_candidate_routes"),
+        *_tool_pair("evaluate_and_score_routes"),
+        *_tool_pair("recommend_or_escalate"),
+        _FakeEvent(text="Here is my recommendation."),
+    ]
+    service = LlmChatService(
+        runner=_FakeRunner([events]),
+        session_service=_FakeSessionService(_SAMPLE_STATE),
+        geocoder=MockGeocoder(),
+    )
+    frames = await _collect(service.stream_turn("s1", "New prospect at 1200 McKinney St, 90 cases"))
+
+    # The opening frame carries the wording; the closing one only what changed.
+    tools = {f["name"]: f for f in frames if f["type"] == "tool" and f["status"] == "running"}
     # Every step has a detail line...
     assert all("detail" in f for f in tools.values())
     # ...and Intake reads back the stated order size + day.
     assert "90 cases" in tools["intake_customer"]["detail"]
     assert "TUE" in tools["intake_customer"]["detail"]
+    # A successful close adds no new wording to overwrite it.
+    done = [f for f in frames if f["type"] == "tool" and f["status"] == "done"]
+    assert done and not any("detail" in f for f in done)
 
 
 async def test_stream_turn_requests_non_streaming_mode():
@@ -278,9 +523,8 @@ async def test_new_prospect_after_conclusion_rotates_to_a_fresh_session():
     """A second full prospect (one that carries a street address), entered after
     the first concluded, runs in a FRESH underlying ADK session -- so the previous
     prospect's history/state can't bleed into it."""
-    rec = _FakeCall("recommend_or_escalate")
-    turn1 = [_FakeEvent(calls=[rec]), _FakeEvent(text="First result.")]
-    turn2 = [_FakeEvent(calls=[rec]), _FakeEvent(text="Second result.")]
+    turn1 = [*_tool_pair("recommend_or_escalate"), _FakeEvent(text="First result.")]
+    turn2 = [*_tool_pair("recommend_or_escalate"), _FakeEvent(text="Second result.")]
     svc = LlmChatService(
         runner=_FakeRunner([turn1, turn2]),
         session_service=_FakeSessionService(_SAMPLE_STATE),
@@ -296,8 +540,8 @@ async def test_new_prospect_after_conclusion_rotates_to_a_fresh_session():
 async def test_revision_after_conclusion_stays_in_the_same_session():
     """A revision (no new address, e.g. 'try 20 cases') keeps the same session so
     multi-turn context is preserved -- it must NOT rotate."""
-    turn1 = [_FakeEvent(calls=[_FakeCall("recommend_or_escalate")]), _FakeEvent(text="Result.")]
-    turn2 = [_FakeEvent(calls=[_FakeCall("recommend_or_escalate")]), _FakeEvent(text="Revised.")]
+    turn1 = [*_tool_pair("recommend_or_escalate"), _FakeEvent(text="Result.")]
+    turn2 = [*_tool_pair("recommend_or_escalate"), _FakeEvent(text="Revised.")]
     svc = LlmChatService(
         runner=_FakeRunner([turn1, turn2]),
         session_service=_FakeSessionService(_SAMPLE_STATE),
@@ -313,7 +557,7 @@ async def test_new_prospect_after_escalation_is_not_misrouted_as_a_resume():
     """After an escalation leaves a pending request_input, a NEW prospect must NOT
     be consumed as the specialist's reply -- it starts fresh, pending cleared."""
     call = _FakeCall("adk_request_input", id="req-1", args={"message": "Confirm?"})
-    turn1 = [_FakeEvent(calls=[_FakeCall("recommend_or_escalate")]),
+    turn1 = [*_tool_pair("recommend_or_escalate"),
              _FakeEvent(calls=[call], long_running=["req-1"])]
     turn2 = [_FakeEvent(text="Second prospect handled.")]
     runner = _FakeRunner([turn1, turn2])
@@ -335,9 +579,9 @@ async def test_recommendation_narration_shown_in_visualization():
     this', so the panel matches the chat box word-for-word. Text emitted BEFORE
     the recommendation (e.g. a Score & Rank summary) must not leak into it."""
     events = [
-        _FakeEvent(calls=[_FakeCall("evaluate_and_score_routes")]),
+        *_tool_pair("evaluate_and_score_routes"),
         _FakeEvent(text="All three routes look feasible with this order."),
-        _FakeEvent(calls=[_FakeCall("recommend_or_escalate")]),
+        *_tool_pair("recommend_or_escalate"),
         _FakeEvent(text="I recommend RTE-A on TUE, 07:20-10:20 — tight fit and an open slot."),
     ]
     service = LlmChatService(

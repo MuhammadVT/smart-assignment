@@ -148,6 +148,9 @@
 .step-dot.done { background: var(--green); }
 .step-dot.active { background: var(--blue); animation: step-pulse 1.5s ease-out infinite; }
 .step-dot.pending { background: transparent; border: 2px solid var(--line); }
+/* The tool reported this step did NOT complete -- shown as plainly as a ✓, so a
+   failed run never reads like a finished one. */
+.step-dot.failed { background: var(--red); }
 .step-line { width: 2px; flex: 1; background: var(--line); margin: 2px 0; min-height: 12px; }
 .step-row:last-child .step-line { display: none; }
 .step-content { flex: 1; min-width: 0; padding-bottom: 12px; }
@@ -155,6 +158,15 @@
 .step-name { font-size: 12.5px; font-weight: 700; color: var(--ink); }
 .step-say { font-size: 12px; color: var(--muted); margin-top: 1px; line-height: 1.45; }
 .step-row.active .step-say { color: var(--blue); }
+.step-row.failed .step-name { color: var(--red); }
+.step-row.failed .step-say { color: var(--red); }
+/* Handoff phase: the agent passing the prospect to a person, not another
+   assignment step. Amber ties it to the await bubble it leads into, so a run
+   that ended in a human handoff never reads as "all five steps, all fine". */
+.step-row.handoff .step-name { color: var(--amber); }
+.step-row.handoff .step-say { color: var(--amber); }
+.step-dot.handoff.done { background: var(--amber); }
+.step-dot.handoff.active { background: var(--amber); animation: step-pulse-amber 1.5s ease-out infinite; }
 .spin {
   width: 11px;
   height: 11px;
@@ -175,9 +187,15 @@
   70% { box-shadow: 0 0 0 6px rgba(18, 87, 166, 0); }
   100% { box-shadow: 0 0 0 0 rgba(18, 87, 166, 0); }
 }
+@keyframes step-pulse-amber {
+  0% { box-shadow: 0 0 0 0 rgba(154, 103, 0, .4); }
+  70% { box-shadow: 0 0 0 6px rgba(154, 103, 0, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(154, 103, 0, 0); }
+}
 @keyframes step-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {
   .step-dot.active { animation: none; }
+  .step-dot.handoff.active { animation: none; }
   .spin { animation: none; border-top-color: rgba(255, 255, 255, .9); }
 }
 

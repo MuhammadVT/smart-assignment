@@ -944,6 +944,53 @@ app — through `decide_route_slot`, and the conversational tool
 (`tools/slot_recommendation.recommend_or_escalate`) calls it directly. There is a
 single decision path, so no surface can drift from another.
 
+### Live breadcrumbs: which steps to show vs. whether they ran
+
+While a turn streams, the chat shows a checklist of the pipeline steps
+(`Intake` → `Geo-Lookup` → `Score & Rank` → `Recommend / Decide`). Two separate
+questions decide what that checklist says, and they are answered by different
+things on purpose:
+
+- **Which steps appear** comes from `webapp/narration.TOOL_STEPS` — each tool's
+  *declared* step list. This decouples the checklist from the tool count: the
+  interactive flow goes straight from intake to `recommend_or_escalate`, which
+  re-derives geo and scores internally, so that one call surfaces three steps.
+  Steps are deduped per turn, so an on-demand `find_candidate_routes` before the
+  decision doesn't show `Geo-Lookup` twice.
+- **Whether a step ran** comes only from the tool's own result. A step opens as
+  `"status": "running"` on the FunctionCall event, and is settled `done` or
+  `failed` when the matching FunctionResponse arrives (paired by call id;
+  `_tool_outcome` reads the `{"ok": ...}` dict the tools return, and relays the
+  tool's own `error` text on a failure).
+
+**The handoff phase.** An escalation turn has a second half the assignment steps
+don't describe: `escalation_triage` composing the specialist brief, which is the
+*longest* single call in the turn (~14s measured against the real agent, out of
+~24s). Without a step of its own the panel sits fully ticked, captioned "Working
+on it", for most of the turn. So the triage tool is a narrated step like any
+other — and `narration.HANDOFF_STEPS` / `step_phase` mark it `"handoff"`, which
+rides on its frames so the UI can style it as a change of hands (amber, matching
+the `await` bubble it leads into) rather than a fifth pipeline step. The stepper
+also captions itself *Waiting on a specialist* instead of *Done*, because an
+escalated turn is parked on a human, not finished. Nothing is flag-gated: the
+breadcrumb follows a real tool call, so it appears exactly when triage runs and
+never when `Config.use_escalation_triage` is off.
+
+Alongside it, a decision that reported `requires_human_review` closes its own step
+with "Escalating for human review." — a restatement of a real field on the tool's
+result (never an invented cause; the *reason* is the audited brief's job), so the
+handoff row reads as a consequence rather than a surprise.
+
+Keeping these apart matters: a static table cannot know that a geocode failed. If
+completion were inferred from the call — or, in the browser, from "the next step
+started" — the UI would mark `Geo-Lookup` and `Score & Rank` complete the instant
+`recommend_or_escalate` was *requested*, hold them green through ~10s of work that
+hadn't begun, and keep them green when the tool then returned an address error. A
+breadcrumb saying a step finished is a claim about the audited run, so it is
+grounded in a real fact the tool reported, exactly like every other value a user
+sees. The browser mirrors this: `app.js`'s stepper keys rows by step name and
+paints whatever status arrives, never inferring one step's outcome from another's.
+
 ### Deciding once per turn
 
 The chat web app renders a turn twice: the agent calls `recommend_or_escalate`,
@@ -963,6 +1010,13 @@ whenever it is absent, belongs to a different profile (the prospect was revised
 mid-conversation), or can't be parsed. Reuse is therefore config-independent: it
 holds whether the decision was reached deterministically or by either grounded
 path.
+
+The rebuild is attempted only once the tool has **reported a successful
+decision** — a call that failed (an address that won't geocode) never produced one
+to render — and any error it still raises is caught and logged, yielding no result
+cards. The visualization re-derives an answer the agent has already computed and
+narrated; letting a failed rebuild take the turn down would discard that correct
+reply and hand the user the deterministic fallback contradicting it.
 
 **What changes on purpose when escalation grounding is on:** the fixed
 `route_slot_score_threshold` no longer gates auto-assignment. The
