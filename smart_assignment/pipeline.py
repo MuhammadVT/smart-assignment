@@ -6,7 +6,9 @@ both drive these same functions, so there is no logic drift between
 "runnable now" and "deployable on ADK".
 
     1. intake            — validate the new customer's profile
-    2. geo_lookup        — geocode + pick Top-N nearest candidate routes
+    2. geo_lookup        — geocode + pick Top-N nearest candidate routes (plus
+                           the nearest preferred-day route, if the Top-N misses
+                           the day the customer asked for)
     3. evaluate          — hard-constraint check each candidate (constraints.py)
     4. rank              — score every (route, slot) pair & sort  (scoring.py)
     5. decide            — recommend the best route-slot, or escalate to a human
@@ -19,12 +21,17 @@ this file.
 
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 from smart_assignment.integrations.geocoding_client import resolve_geocoder
 from smart_assignment.integrations.route_capacity_client import fetch_candidate_routes
 from smart_assignment.shared.config import DEFAULT_CONFIG, Config
-from smart_assignment.shared.constraints import build_context, evaluate_constraints
+from smart_assignment.shared.constraints import (
+    build_context,
+    evaluate_constraints,
+    service_distance_limit,
+)
 from smart_assignment.shared.customer import validate_customer_number
 from smart_assignment.shared.geo import Geocoder, haversine_miles
 from smart_assignment.shared.models import (
@@ -37,6 +44,8 @@ from smart_assignment.shared.models import (
 )
 from smart_assignment.shared.scoring import score_route_slot
 from smart_assignment.shared.slot_selection import SLOT_BASIS_NONE
+
+logger = logging.getLogger(__name__)
 
 # --- Step 1: intake ---------------------------------------------------------
 
@@ -67,12 +76,80 @@ def geo_lookup(
     geocoder: Geocoder,
     config: Config,
 ) -> list[Route]:
+    """Geocode the customer and return the candidate routes to evaluate: the
+    Top-N nearest, plus -- when `use_preferred_day_candidate` is on -- the
+    nearest in-range route running on the customer's preferred day, if none of
+    the Top-N already does (see `_preferred_day_candidate`)."""
     customer.location = geocoder.geocode(customer.address)
     ranked_by_proximity = sorted(
         routes,
         key=lambda r: haversine_miles(customer.location, r.service_center),
     )
-    return ranked_by_proximity[: config.top_n_candidate_routes]
+    candidates = ranked_by_proximity[: config.top_n_candidate_routes]
+
+    if config.use_preferred_day_candidate:
+        extra = _preferred_day_candidate(customer, ranked_by_proximity, candidates, config)
+        if extra is not None:
+            logger.info(
+                "Top-%d nearest routes run no %s; adding the nearest %s route %s (%.1f mi) "
+                "as an extra candidate so the stated preference is scoreable.",
+                config.top_n_candidate_routes,
+                customer.preferred_slot.day.value,
+                customer.preferred_slot.day.value,
+                extra.route_id,
+                haversine_miles(customer.location, extra.service_center),
+            )
+            candidates.append(extra)
+
+    return candidates
+
+
+def _preferred_day_candidate(
+    customer: CustomerProfile,
+    ranked_by_proximity: list[Route],
+    candidates: list[Route],
+    config: Config,
+) -> Optional[Route]:
+    """The nearest SERVICEABLE route running on the customer's preferred DAY, or
+    ``None`` when there is nothing to add.
+
+    Returns ``None`` when no preference was stated, when a candidate already runs
+    on that day, or when no route in the whole set both runs on it and is within
+    range. Because ``ranked_by_proximity`` is distance-ordered, a preferred-day
+    route already inside the Top-N *is* the nearest one -- so "add the nearest
+    preferred-day route" and "add one only when the day is missing" are the same
+    rule, and this can never duplicate a candidate.
+
+    **Capped at the service-area limit.** A route beyond
+    ``constraints.service_distance_limit`` would provably fail
+    ``geographic_serviceability``, so adding it would only put a
+    guaranteed-rejected route in front of a specialist -- noise, not a
+    diagnostic. The limit is per-route (a route's own radius, capped by the
+    global ceiling) and comes from the constraint's own helper, so this filter
+    can never disagree with the constraint that follows it. The scan continues
+    past an out-of-range route rather than giving up, since a farther route may
+    declare a wider radius and still be serviceable.
+
+    The cap is deliberately about DISTANCE only. A preferred-day route that is in
+    range but too full is still added, fails ``route_capacity``, and shows up as
+    a rejected candidate -- that one a human genuinely can act on (split the
+    order, move a stop), and unlike distance it depends on the order size rather
+    than on geography alone."""
+    preferred = customer.preferred_slot
+    if preferred is None:
+        return None
+    if any(route.day == preferred.day for route in candidates):
+        return None
+    return next(
+        (
+            route
+            for route in ranked_by_proximity
+            if route.day == preferred.day
+            and haversine_miles(customer.location, route.service_center)
+            <= service_distance_limit(route, config)
+        ),
+        None,
+    )
 
 
 # --- Step 3 + 4: evaluate constraints, then score the feasible ones ---------

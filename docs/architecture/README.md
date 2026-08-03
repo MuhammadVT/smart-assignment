@@ -7,7 +7,8 @@ that talks to the user and calls one tool per step, in order:
 
 ```
 intake_customer            (code — validate/merge address, cases, preferred slot)
-find_candidate_routes      (code — geocode + Top-N nearest routes)
+find_candidate_routes      (code — geocode + Top-N nearest routes, plus the
+                            nearest in-range preferred-day route when the Top-N misses it)
   -> address not found? -> agent calls resolve_address (grounded pick among the
                            geocoder's candidate matches) -> user confirms ->
                            intake_customer(confirmed) -> retry  [opt-in, default on]
@@ -108,6 +109,62 @@ bounded by a semaphore to at most that many in flight.
 
 Run it: `python3 scripts/run_batch.py --mock-geocoder` (built-in demo prospects,
 fully offline) or `--source prospects.json --out results.jsonl`.
+
+## Candidate identification (`pipeline.geo_lookup`)
+
+Step 2 geocodes the prospect and takes the **Top-N nearest** routes by distance
+to each route's service center. That cut is *day-blind*, which has a sharp edge:
+a customer who asks for Thursday can have every Thursday route eliminated by
+proximity alone — before any constraint, score, or decision layer sees anything.
+The damage is worse than a missed preference, because `window_match` keeps its
+weight (`RS_WEIGHT_WINDOW`) in the denominator whether or not it is satisfiable:
+with no same-day route in the set, *every* option scores 0 on it, so stating a
+preference can only ever **lower** the totals.
+
+So when `Config.use_preferred_day_candidate` is on (**default**), and none of the
+Top-N runs on the stated day, the **nearest route that does** is kept as one
+ADDITIONAL candidate:
+
+```
+ranked = sorted(routes, by distance)          # day-blind, as before
+candidates = ranked[:top_n]
+  + nearest route with route.day == preferred.day AND
+    distance <= service_distance_limit(route),   when no candidate has that day
+```
+
+Deliberate choices, each of which the alternative would have cost something:
+
+- **Additive, not displacing.** `top_n_candidate_routes` becomes a floor; the
+  candidate set is at most `N + 1`. Displacing the N-th would trade a
+  known-close route for a preference that may not survive the constraints.
+- **Exactly one route.** The ranking is by distance, so a preferred-day route
+  already inside the Top-N *is* the nearest one — "add the nearest preferred-day
+  route" and "add one only when the day is missing" are the same rule, and it can
+  never duplicate a candidate.
+- **Capped at the service-area limit.** A route beyond it would *provably* fail
+  `geographic_serviceability`, so adding it would only put a guaranteed-rejected
+  route in front of a specialist — noise, not a diagnostic. The limit is
+  `SMART_ASSIGNMENT_MAX_SERVICE_MILES`, tightened by a route's own
+  `service_radius_miles` when it declares one, and it comes from the constraint's
+  own helper (`constraints.service_distance_limit`) rather than a second copy of
+  the rule — so the candidate filter and the hard constraint can never disagree
+  about what "in range" means. The scan continues past an out-of-range route
+  rather than giving up, since a farther route may declare a wider radius and
+  still be serviceable.
+- **The cap is on distance only.** An in-range preferred-day route that is too
+  *full* is still added, fails `route_capacity`, and reaches the specialist as a
+  rejected candidate. That one is actionable (split the order, move a stop), and
+  unlike distance it depends on the order size rather than on geography alone.
+
+This guarantees the preference is **considered**, never that it wins — the added
+route is scored like any other and can lose. Flag off reproduces the prior
+day-blind Top-N exactly. Pinned by `tests/test_geo_lookup.py`.
+
+| Knob (env) | Default | Meaning |
+|---|---|---|
+| `SMART_ASSIGNMENT_TOP_N` | `3` | How many nearest routes to evaluate. |
+| `SMART_ASSIGNMENT_USE_PREFERRED_DAY_CANDIDATE` | `true` | Also keep the nearest **in-range** route running on the stated preferred day, when the Top-N misses it. |
+| `SMART_ASSIGNMENT_MAX_SERVICE_MILES` | `25.0` | Doubles as the cap on that extra candidate (tightened by a route's own radius). |
 
 ## Delivery-slot selection (`shared/slot_selection.py`)
 
