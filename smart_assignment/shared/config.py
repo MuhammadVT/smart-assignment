@@ -113,6 +113,30 @@ class Config:
 
     # --- Candidate identification ---
     top_n_candidate_routes: int = 3  # spec step 2: "Top N candidate routes by proximity"
+    # When True (default), and the customer stated a preferred DAY that none of
+    # the Top-N nearest routes runs on, the nearest route that DOES run on that
+    # day is kept as an ADDITIONAL candidate -- however far down the proximity
+    # ranking it sits. Without this, a purely distance-based cut can eliminate
+    # the preferred day before any scoring happens, so `window_match` is 0 for
+    # every option and a stated preference can only ever LOWER the totals (it
+    # keeps its weight in the denominator whether or not it is satisfiable).
+    #
+    # This guarantees the preference is CONSIDERED, never that it wins: the added
+    # route still faces the hard constraints and is scored like any other, so it
+    # can be rejected or out-scored. Exactly one route is added, so the candidate
+    # set is at most Top-N + 1.
+    #
+    # The search is capped at the service-area limit
+    # (max_service_distance_miles, tightened by a route's own service_radius_miles
+    # when it declares one -- see constraints.service_distance_limit): a route
+    # beyond it would provably fail geographic_serviceability, so adding it would
+    # only put a guaranteed-rejected route in front of a specialist. The cap is
+    # on DISTANCE only -- an in-range preferred-day route that is too full is
+    # still added and shows as rejected on capacity, which a human can act on.
+    #
+    # Off reproduces the prior behavior exactly: candidates are the N nearest,
+    # day-blind.
+    use_preferred_day_candidate: bool = True
 
     # --- Scoring ---
     # Distance (mi) at which geographic-clustering score decays to ~0.
@@ -397,6 +421,9 @@ class Config:
             max_utilization_after_assignment=_float_env("SMART_ASSIGNMENT_MAX_UTILIZATION", 0.90),
             max_service_distance_miles=_float_env("SMART_ASSIGNMENT_MAX_SERVICE_MILES", 25.0),
             top_n_candidate_routes=_int_env("SMART_ASSIGNMENT_TOP_N", 3),
+            use_preferred_day_candidate=_bool_env(
+                "SMART_ASSIGNMENT_USE_PREFERRED_DAY_CANDIDATE", True
+            ),
             cluster_reference_miles=_float_env("SMART_ASSIGNMENT_CLUSTER_REF_MILES", 15.0),
             capacity_buffer_safety_margin=_float_env(
                 "SMART_ASSIGNMENT_CAPACITY_SAFETY_MARGIN", 0.15

@@ -14,6 +14,7 @@ from smart_assignment.shared.constraints import (
     evaluate_constraints,
     geographic_serviceability,
     route_capacity,
+    service_distance_limit,
 )
 from smart_assignment.shared.geo import haversine_miles
 from smart_assignment.shared.models import CustomerProfile, DayOfWeek, GeoPoint
@@ -44,6 +45,38 @@ def test_far_route_fails_serviceability(sample_customer, far_route, config):
     ctx = build_context(sample_customer, far_route)
     outcome = geographic_serviceability(sample_customer, far_route, ctx, config)
     assert outcome.passed is False
+
+
+# --- the shared service-distance limit ----------------------------------------
+
+
+def test_service_distance_limit_is_the_global_ceiling_without_a_route_radius(
+    open_route, config
+):
+    open_route.service_radius_miles = None
+    assert service_distance_limit(open_route, config) == config.max_service_distance_miles
+
+
+def test_service_distance_limit_takes_the_tighter_of_the_two(open_route, config):
+    # A route's own radius only ever NARROWS the global ceiling...
+    open_route.service_radius_miles = 12.0
+    assert service_distance_limit(open_route, config) == 12.0
+
+    # ...it can never widen past it, so nothing is ever admitted beyond
+    # max_service_distance_miles (SMART_ASSIGNMENT_MAX_SERVICE_MILES).
+    open_route.service_radius_miles = 100.0
+    assert service_distance_limit(open_route, config) == config.max_service_distance_miles
+
+
+def test_geographic_serviceability_gates_on_that_same_limit(sample_customer, open_route, config):
+    """The constraint and `pipeline.geo_lookup`'s preferred-day filter share this
+    one definition, so they can never disagree about what "in range" means."""
+    ctx = build_context(sample_customer, open_route)
+    limit = service_distance_limit(open_route, config)
+
+    assert geographic_serviceability(sample_customer, open_route, ctx, config).passed is (
+        ctx.distance_miles <= limit
+    )
 
 
 def test_hard_constraints_exclude_delivery_window():

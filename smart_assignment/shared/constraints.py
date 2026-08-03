@@ -123,13 +123,24 @@ def build_context(
 ConstraintFn = Callable[[CustomerProfile, Route, EvalContext, Config], ConstraintOutcome]
 
 
+def service_distance_limit(route: Route, config: Config) -> float:
+    """How far from its service center this route may deliver: its own declared
+    radius when it has one, always capped by the global ceiling.
+
+    Exposed separately from the constraint below because `pipeline.geo_lookup`
+    needs the SAME rule to tell, before evaluation, whether a preferred-day route
+    could be serviceable at all (see `_preferred_day_candidate`). Sharing one
+    definition is what stops the candidate filter and the hard constraint from
+    ever disagreeing about what "in range" means."""
+    if route.service_radius_miles is None:
+        return config.max_service_distance_miles
+    return min(route.service_radius_miles, config.max_service_distance_miles)
+
+
 def geographic_serviceability(
     customer: CustomerProfile, route: Route, ctx: EvalContext, config: Config
 ) -> ConstraintOutcome:
-    if route.service_radius_miles is None:
-        limit = config.max_service_distance_miles
-    else:
-        limit = min(route.service_radius_miles, config.max_service_distance_miles)
+    limit = service_distance_limit(route, config)
     passed = ctx.distance_miles <= limit
     return ConstraintOutcome(
         name=CONSTRAINT_GEOGRAPHIC_SERVICEABILITY,

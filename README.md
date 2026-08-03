@@ -32,6 +32,8 @@ optional placeholder field, only used/validated if an account already has one.
 ```
 1. Intake        collect address, order quantity (cases), optional slot (day+time)
 2. Geo-Lookup    geocode the address, pick the Top-N nearest candidate routes
+                 (+ the nearest in-range route on the stated preferred day,
+                  if the Top-N misses it -- see docs/architecture/README.md)
 3. Constraints   drop routes failing any HARD constraint (deterministic code)
 4. Score & Rank  weighted multi-factor scoring over the survivors
 5. Recommend     output the top slot + full reasoning trace,
@@ -78,7 +80,8 @@ and calls one tool per pipeline step, in order:
 
 ```
 intake_customer            -> validate/merge the profile (address, cases, slot)
-find_candidate_routes      -> geocode + Top-N nearest routes
+find_candidate_routes      -> geocode + Top-N nearest routes (+ nearest
+                              in-range preferred-day route when the Top-N misses it)
 evaluate_and_score_routes  -> hard constraints, then weighted scoring
 recommend_or_escalate      -> rank + total-score gate -> decision + reasoning
   -> requires_human_review? -> agent calls ADK's request_input tool
