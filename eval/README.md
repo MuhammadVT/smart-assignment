@@ -17,6 +17,7 @@ live LLM backend** and are kept separate from the hermetic tests.
 | `test_eval.py` | The pytest entry point that runs `AgentEvaluator` (trajectory, full dataset). |
 | `capture.py` | Runs the live agent once per case to record its real final response + whether it escalated (Phase 2b). |
 | `test_response_match.py` | Separate pytest entry point: `response_match_score`, scoped to captured cases known NOT to have escalated. See its module docstring for why escalate cases can't be scored this way at all. |
+| `inference_guard.py` | Fails the run when ADK *drops* an eval case (a crashed inference) instead of scoring it — otherwise a dropped case is indistinguishable from a passing one. Used by `test_eval.py` and `test_response_match.py`. |
 | `case_selection.py` | Owns the `SMART_ASSIGNMENT_EVAL_IDS` subset knob for the **test runners** (`test_eval.py`, `test_quality.py`, `test_rationale_faithfulness.py`): local-only, rejected under CI, warns when it narrows. Also exposes `filter_cases_by_ids` — the explicit-subset primitive `capture.py`'s `--ids` uses (capture does not read the env var). |
 | `deepeval_llm.py` | `SmartAssignmentDeepEvalLLM` — adapts this repo's own `generate_text` (any `SMART_ASSIGNMENT_LLM_BACKEND`) to DeepEval's judge-model interface. |
 | `test_quality.py` | Separate pytest entry point (Phase 3a): DeepEval G-Eval `brief_quality`/`response_clarity`, scored directly against captured `{final_response, escalated}` data — no ADK dataset involved. |
@@ -46,6 +47,28 @@ the default) and ADK's `adk_request_input`. Their only arguments are
 model-authored prose that differs every run, so they can't be pinned in the
 dataset without making the suite permanently flaky. Under `EXACT` both escalate
 cases fail. See the comment on `_PIPELINE_AFTER_INTAKE` in `golden_cases.py`.
+
+### A dropped case is a failure, not a pass (`inference_guard.py`)
+
+ADK deliberately swallows a per-case inference failure so one bad case can't take
+down the rest of the run: `LocalEvalService` logs ``Inference failed for eval case
+`X` ``, marks that `InferenceResult` `FAILURE`, and returns it. `AgentEvaluator`
+groups results *by eval id*, so a dropped case simply isn't a key — no metric
+result, no failure, no mention in the summary.
+
+That means **a dropped case looks exactly like a case that passed.** A run whose
+two escalate cases both crashed (a backend timeout, a malformed model reply)
+reports `1 passed`, with the score quietly computed over the survivors. Two real
+defects hid behind that, so both live entry points now wrap
+`AgentEvaluator.evaluate()` in `fail_on_dropped_cases()`, which observes each
+`InferenceResult` as it streams past and raises afterwards, naming every dropped
+case and its error.
+
+ADK's behavior is unchanged — cases still don't take each other down and every
+surviving case is scored exactly as before. Only the *verdict* changes: the run
+now fails instead of silently under-scoring. A metric failure raised by
+`AgentEvaluator` itself still wins (it's the more specific failure); the drops are
+logged alongside it.
 
 `intake_customer`'s expected arguments are the **known ground-truth fields** of
 each mock customer (derived from the fixture, not invented), so the trajectory
