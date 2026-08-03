@@ -640,6 +640,46 @@ the loop-binding dance below, the response diagnostic) is unchanged. The flag
 is off by default, so the direct-agent path is reproduced exactly unless a
 caller opts in.
 
+### Array-wrapped tool-call arguments (`Config.repair_tool_call_args`, on by default)
+
+A tool call's arguments are a *named mapping* — ADK builds a genai `FunctionCall`
+from them, and pydantic requires a `dict`. The sage backend intermittently emits
+them wrapped in a JSON array beside a stray sibling; observed verbatim on an
+`escalation_triage` call:
+
+```
+[{"request": "{...the decision JSON, including rejected_alternatives...}"},
+ ["RTE-4200 …", "RTE-4110 - Downtown / Midtown (WED): infeasible — truck capacity"]]
+```
+
+The first element is the complete, correct argument object; the second is a
+fragment of the escaped JSON *inside* it that leaked to the top level (those
+strings duplicate the `rejected_alternatives` array within `request`, so nothing
+is lost by dropping them). ADK's own `_parse_tool_call_arguments` repairs several
+malformed payloads, but this one is **valid JSON** — it parses cleanly to a
+`list`, is handed to `types.Part.from_function_call(args=<list>)`, and pydantic
+raises. That exception escapes the entire agent run: in eval the case is silently
+dropped (a green suite that scored fewer cases than it appears to), on a live turn
+the turn dies. No retry helps — a `ValidationError` is not a retryable API error.
+
+`shared/llm.py`'s `_install_litellm_tool_args_repair` wraps that one ADK function.
+The repair is deliberately narrow, because a bare array carries no parameter names
+and so cannot be a valid argument set for *any* tool — it is provably debris, not
+data:
+
+| Payload | Behavior |
+|---|---|
+| A well-formed object | Returned untouched — the same object, not a copy |
+| An array with exactly one object | That object is used; the discarded siblings are logged |
+| Anything else (no object, or several) | Passed through unchanged → ADK raises, loudly, as before |
+
+An argument value is never synthesized, and the wrapper never raises: any
+unexpected failure inside it falls through to the value ADK would have used.
+Unlike the opt-in flags elsewhere in this document it defaults **on**
+(`SMART_ASSIGNMENT_REPAIR_TOOL_CALL_ARGS=false` to disable), because it provably
+cannot change a healthy call — it only ever fires on a payload that would
+otherwise crash.
+
 ## Tracing & observability (`shared/tracing.py`, opt-in)
 
 The grounded decision layers already produce an auditable *record* of every

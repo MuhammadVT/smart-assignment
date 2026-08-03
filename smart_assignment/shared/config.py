@@ -316,6 +316,19 @@ class Config:
     # standard); the backend itself stays global.
     role_models: dict[str, str] = field(default_factory=dict)
 
+    # --- Backend compatibility (on by default) ---
+    # When True, a tool call whose arguments arrive wrapped in a JSON array -- an
+    # intermittent sage-backend quirk that otherwise raises inside ADK and kills the
+    # entire turn -- is repaired by taking the single argument object out of that
+    # array (see _install_litellm_tool_args_repair in shared/llm.py).
+    #
+    # ON by default, unlike the opt-in flags above, because it provably cannot change
+    # a healthy call: a well-formed arguments object is returned untouched, so the
+    # repair only ever fires on a payload that would otherwise crash, and any shape it
+    # cannot read with certainty is passed through unchanged so that failure stays
+    # loud. Set to False for ADK's raw behavior.
+    repair_tool_call_args: bool = True
+
     # --- Diagnostics (opt-in, off by default) ---
     # When True, wrap the Sage SDK's response extractor so that whenever it would
     # return its generic "Something went wrong" sentinel -- masking the model's real
@@ -467,6 +480,7 @@ class Config:
             sage_model=os.environ.get("SMART_ASSIGNMENT_SAGE_MODEL", "sage-gemini-2.5-flash"),
             use_sage_gateway=_bool_env("SMART_ASSIGNMENT_USE_SAGE_GATEWAY", False),
             role_models=_role_models_from_env(),
+            repair_tool_call_args=_bool_env("SMART_ASSIGNMENT_REPAIR_TOOL_CALL_ARGS", True),
             debug_sage_raw_response=_bool_env("SMART_ASSIGNMENT_DEBUG_SAGE_RESPONSE", False),
             use_tracing=_bool_env("SMART_ASSIGNMENT_USE_TRACING", False),
             use_human_feedback=_bool_env("SMART_ASSIGNMENT_USE_HUMAN_FEEDBACK", False),
