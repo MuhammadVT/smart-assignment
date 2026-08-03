@@ -121,14 +121,19 @@
     transcript.appendChild(row);
     transcript.scrollTop = transcript.scrollHeight;
 
-    var rows = {};      // step name -> { row, dot, content, say }
+    var rows = {};      // step name -> { row, dot, content, say, phase }
     var order = [];     // step names, in the order they first appeared
+    var awaitingHuman = false;
 
     // Paint one row in the state the server reported. 'running' keeps the CSS
-    // class 'active' the stylesheet already uses for an in-progress step.
+    // class 'active' the stylesheet already uses for an in-progress step. A
+    // step's phase ('handoff') rides alongside its status, so a row that hands
+    // the prospect to a person stays visually distinct from the assignment
+    // steps whether it is running or settled.
     function setState(entry, status) {
       var st = status || 'running';
       var cls = (st === 'running') ? 'active' : st;
+      if (entry.phase) { cls += ' ' + entry.phase; }
       entry.row.className = 'step-row ' + cls;
       entry.dot.className = 'step-dot ' + cls;
       if (st === 'done') {
@@ -162,7 +167,7 @@
       stepRow.appendChild(content);
       list.appendChild(stepRow);
 
-      var entry = { row: stepRow, dot: dot, content: content, say: null };
+      var entry = { row: stepRow, dot: dot, content: content, say: null, phase: null };
       rows[key] = entry;
       order.push(key);
       return entry;
@@ -172,12 +177,14 @@
       // Add a step the first time it's seen, then move it to whatever status the
       // server reports next. Steps are keyed by name, so the 'done'/'failed'
       // frame updates the row its 'running' frame created.
-      upsertStep: function (name, label, detail, status) {
+      upsertStep: function (name, label, detail, status, phase) {
         var key = name || label;
         if (!key) { return; }
         var entry = rows[key] || addRow(key, label);
+        if (phase) { entry.phase = phase; }
         // A closing frame carries only what changed, so keep the existing line
-        // unless this frame brought a new one (e.g. a tool's own error text).
+        // unless this frame brought a new one (e.g. a tool's own error text, or
+        // the decision step reporting that it escalated).
         if (detail) {
           if (!entry.say) {
             entry.say = document.createElement('div');
@@ -189,6 +196,12 @@
         setState(entry, status);
         transcript.scrollTop = transcript.scrollHeight;
       },
+      // The prospect was handed to a person. The turn is NOT done — it is parked
+      // waiting for a specialist to answer — so say that rather than captioning
+      // the panel 'Done' and implying the work finished here.
+      awaiting: function () {
+        awaitingHuman = true;
+      },
       // The turn ended. Anything still spinning got no closing frame (e.g. the
       // human-in-the-loop handoff interrupts before the tool reports); settle it
       // rather than leaving a spinner running forever.
@@ -197,7 +210,7 @@
           var entry = rows[order[i]];
           if (entry.row.className.indexOf('active') !== -1) { setState(entry, 'done'); }
         }
-        cap.textContent = 'Done';
+        cap.textContent = awaitingHuman ? 'Waiting on a specialist' : 'Done';
       }
     };
   }
@@ -826,11 +839,14 @@
 
           if (frame.type === 'tool') {
             if (!stepper) { stepper = makeStepper(); }
-            stepper.upsertStep(frame.name, frame.label, frame.detail, frame.status);
+            stepper.upsertStep(frame.name, frame.label, frame.detail, frame.status, frame.phase);
           } else if (frame.type === 'message') {
             endStepper();
             bubble('agent', frame.text);
           } else if (frame.type === 'await_input') {
+            // Tell the stepper the prospect went to a person BEFORE closing it,
+            // so it captions itself 'Waiting on a specialist' rather than 'Done'.
+            if (stepper) { stepper.awaiting(); }
             endStepper();
             bubble('agent', '🙋 ' + frame.message, 'await');
           } else if (frame.type === 'visualization') {

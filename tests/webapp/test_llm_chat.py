@@ -315,6 +315,74 @@ async def test_failed_tool_marks_its_steps_failed_and_renders_no_visualization()
     assert "s1" not in service._concluded
 
 
+async def test_escalation_shows_the_handoff_phase_while_the_brief_is_composed():
+    """Composing the specialist brief (escalation_triage) is the LONGEST call in an
+    escalation turn -- measured at ~14s against the real agent. Without a step of
+    its own the panel sits fully ticked while it runs, so it gets a breadcrumb like
+    any other tool, marked as the handoff phase rather than a fifth pipeline step.
+    The decision step also reports that it escalated, so the handoff reads as a
+    consequence."""
+    events = [
+        *_tool_pair(
+            "recommend_or_escalate",
+            response={"ok": True, "requires_human_review": True},
+        ),
+        # The AgentTool returns prose, not an {"ok": ...} dict.
+        *_tool_pair("escalation_triage", response="SITUATION\nNew prospect, 90 cases..."),
+        _FakeEvent(
+            calls=[_FakeCall("adk_request_input", id="req-1", args={"message": "Confirm?"})],
+            long_running=["req-1"],
+        ),
+    ]
+    service = LlmChatService(
+        runner=_FakeRunner([events]),
+        session_service=_FakeSessionService(_SAMPLE_STATE),
+        geocoder=MockGeocoder(),
+    )
+    frames = await _collect(service.stream_turn("s1", "1200 McKinney St, 90 cases"))
+
+    tools = [f for f in frames if f["type"] == "tool"]
+    triage = [f for f in tools if f["name"] == "escalation_triage"]
+    # Shown while it runs, then settled -- not a silent gap.
+    assert [f["status"] for f in triage] == ["running", "done"]
+    assert triage[0]["label"] == "Briefing a specialist"
+    # Marked as the handoff phase on BOTH frames, so the row keeps its treatment
+    # once it settles.
+    assert all(f["phase"] == "handoff" for f in triage)
+    # ...and no assignment step is mistaken for one.
+    assert not any("phase" in f for f in tools if f["name"] != "escalation_triage")
+    # The decision step closes by restating the tool's own requires_human_review.
+    decided = [
+        f for f in tools if f["name"] == "recommend_or_escalate" and f["status"] == "done"
+    ]
+    assert decided and decided[0]["detail"] == "Escalating for human review."
+    assert any(f["type"] == "await_input" for f in frames)
+
+
+async def test_a_plain_recommendation_shows_no_handoff_phase():
+    """No escalation, no handoff: the breadcrumbs stay the four assignment steps and
+    the decision step keeps its generic description."""
+    events = [
+        *_tool_pair(
+            "recommend_or_escalate",
+            response={"ok": True, "requires_human_review": False},
+        ),
+        _FakeEvent(text="I recommend RTE-A on TUE."),
+    ]
+    service = LlmChatService(
+        runner=_FakeRunner([events]),
+        session_service=_FakeSessionService(_SAMPLE_STATE),
+        geocoder=MockGeocoder(),
+    )
+    frames = await _collect(service.stream_turn("s1", "1200 McKinney St, 90 cases"))
+
+    tools = [f for f in frames if f["type"] == "tool"]
+    assert not any("phase" in f for f in tools)
+    assert not any(f["name"] == "escalation_triage" for f in tools)
+    # A successful, non-escalating close adds no detail to overwrite the original.
+    assert not any("detail" in f for f in tools if f["status"] == "done")
+
+
 async def test_a_failed_visualization_rebuild_does_not_kill_the_turn(monkeypatch):
     """The visualization re-derives a decision the agent has ALREADY narrated. If
     that rebuild raises, the turn must still complete -- otherwise the agent's own

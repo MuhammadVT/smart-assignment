@@ -963,6 +963,24 @@ things on purpose:
   `_tool_outcome` reads the `{"ok": ...}` dict the tools return, and relays the
   tool's own `error` text on a failure).
 
+**The handoff phase.** An escalation turn has a second half the assignment steps
+don't describe: `escalation_triage` composing the specialist brief, which is the
+*longest* single call in the turn (~14s measured against the real agent, out of
+~24s). Without a step of its own the panel sits fully ticked, captioned "Working
+on it", for most of the turn. So the triage tool is a narrated step like any
+other — and `narration.HANDOFF_STEPS` / `step_phase` mark it `"handoff"`, which
+rides on its frames so the UI can style it as a change of hands (amber, matching
+the `await` bubble it leads into) rather than a fifth pipeline step. The stepper
+also captions itself *Waiting on a specialist* instead of *Done*, because an
+escalated turn is parked on a human, not finished. Nothing is flag-gated: the
+breadcrumb follows a real tool call, so it appears exactly when triage runs and
+never when `Config.use_escalation_triage` is off.
+
+Alongside it, a decision that reported `requires_human_review` closes its own step
+with "Escalating for human review." — a restatement of a real field on the tool's
+result (never an invented cause; the *reason* is the audited brief's job), so the
+handoff row reads as a consequence rather than a surprise.
+
 Keeping these apart matters: a static table cannot know that a geocode failed. If
 completion were inferred from the call — or, in the browser, from "the next step
 started" — the UI would mark `Geo-Lookup` and `Score & Rank` complete the instant

@@ -41,7 +41,13 @@ from smart_assignment.tools.slot_recommendation import (
     _profile_from_state_dict,
     cached_decision_for,
 )
-from smart_assignment.webapp.narration import step_detail, step_label, tool_steps
+from smart_assignment.webapp.narration import (
+    ESCALATION_DETAIL,
+    step_detail,
+    step_label,
+    step_phase,
+    tool_steps,
+)
 from smart_assignment.webapp.parse import parse_intake
 
 logger = logging.getLogger(__name__)
@@ -62,6 +68,18 @@ def _call_key(part: Any) -> str:
     a matching ``id`` on both; fall back to the tool name so a backend that omits
     the id still pairs correctly for the one-call-at-a-time flow."""
     return getattr(part, "id", None) or part.name
+
+
+def _requires_human_review(part: Any) -> bool:
+    """Whether a decision tool reported that this prospect needs a human.
+
+    Read straight off ``requires_human_review`` on the tool's own result, so the
+    breadcrumb restates a fact the audited decision produced. False for any other
+    tool, or a payload we can't read."""
+    if part.name not in _DECISION_TOOLS:
+        return False
+    response = part.response
+    return isinstance(response, dict) and bool(response.get("requires_human_review"))
 
 
 def _tool_outcome(response: Any) -> tuple[bool, Optional[str]]:
@@ -467,6 +485,12 @@ class LlmChatService:
                             "label": step_label(step),
                             "status": "running",
                         }
+                        # "handoff" for a step that passes the prospect to a person
+                        # (the escalation brief), so the UI can style that phase
+                        # apart from the assignment steps. Absent otherwise.
+                        phase = step_phase(step)
+                        if phase:
+                            frame["phase"] = phase
                         # A plain-language line of what this step is doing (Intake
                         # echoes the customer's own inputs back); omit when there's
                         # nothing to add so the frame shape stays minimal.
@@ -487,16 +511,27 @@ class LlmChatService:
                     ok, error = _tool_outcome(fr.response)
                     if ok and fr.name in _DECISION_TOOLS:
                         saw_recommendation = True
+                    # A decision that escalated says so on its own step, so the
+                    # handoff breadcrumb that follows reads as a consequence rather
+                    # than a surprise. Restates the tool's own
+                    # ``requires_human_review`` flag -- the REASON is the audited
+                    # brief's job, never a breadcrumb's.
+                    escalated = ok and _requires_human_review(fr)
                     for step in open_steps.pop(_call_key(fr), []):
                         frame = {
                             "type": "tool",
                             "name": step,
                             "status": "done" if ok else "failed",
                         }
+                        phase = step_phase(step)
+                        if phase:
+                            frame["phase"] = phase
                         # On a failure, relay the tool's OWN error text rather than
                         # narrating a cause we'd be guessing at.
                         if error:
                             frame["detail"] = error
+                        elif escalated and step == "recommend_or_escalate":
+                            frame["detail"] = ESCALATION_DETAIL
                         yield frame
                 continue
 

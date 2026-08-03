@@ -36,6 +36,8 @@ STEP_LABELS = {
     "find_candidate_routes": "Geo-Lookup",
     "evaluate_and_score_routes": "Score & Rank",
     "recommend_or_escalate": "Recommend / Decide",
+    # The handoff phase (see HANDOFF_STEPS): only reached on an escalation.
+    "escalation_triage": "Briefing a specialist",
 }
 
 # Pipeline tool name -> one-line, plain-language description of what it does.
@@ -44,7 +46,21 @@ _STEP_DETAIL = {
     "find_candidate_routes": "Placing the address on the map and finding the nearest routes.",
     "evaluate_and_score_routes": "Scoring each open slot on distance, capacity, and timing.",
     "recommend_or_escalate": "Checking the top slot against the auto-assign bar and deciding.",
+    "escalation_triage": "Summarizing why this needs a human, and what the options are.",
 }
+
+# What the decision step says once the tool has reported an escalation. This is a
+# restatement of a real field on the tool's own result (``requires_human_review``),
+# never an invented cause -- the *reason* for the escalation is the audited brief's
+# job, not a breadcrumb's.
+ESCALATION_DETAIL = "Escalating for human review."
+
+# Steps belonging to the HANDOFF phase rather than the assignment pipeline. The
+# assignment steps answer "which route and slot?"; these are the agent changing
+# hands to a person, so the UI styles them apart (see step_phase). Declared here,
+# beside the wording they belong to, rather than hardcoded at the streaming site.
+HANDOFF_STEPS = frozenset({"escalation_triage"})
+_PHASE_HANDOFF = "handoff"
 
 # Each pipeline tool -> the ordered pipeline STEPS it may execute internally, where
 # each step is named by the tool that canonically represents it (so it maps through
@@ -77,7 +93,21 @@ TOOL_STEPS = {
         "evaluate_and_score_routes",
         "recommend_or_escalate",
     ],
+    # The escalation-triage sub-agent composing the specialist brief. It is the
+    # longest single call in an escalation turn, and without a step here the
+    # stepper sits fully ticked while it runs. Present only when the agent
+    # actually escalates AND Config.use_escalation_triage is on -- breadcrumbs
+    # follow real tool calls, so nothing needs flag-gating here.
+    "escalation_triage": ["escalation_triage"],
 }
+
+
+def step_phase(step_name: str) -> Optional[str]:
+    """``"handoff"`` for a step that hands the prospect to a person, else None.
+
+    Lets the display surface style the handoff apart from the assignment steps
+    without knowing which step names those are."""
+    return _PHASE_HANDOFF if step_name in HANDOFF_STEPS else None
 
 
 def tool_steps(tool_name: str) -> list[str]:
