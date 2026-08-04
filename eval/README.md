@@ -17,7 +17,7 @@ live LLM backend** and are kept separate from the hermetic tests.
 | `test_eval.py` | The pytest entry point that runs `AgentEvaluator` (trajectory, full dataset). |
 | `capture.py` | Runs the live agent once per case to record its real final response + whether it escalated (Phase 2b). |
 | `test_response_match.py` | Separate pytest entry point: `response_match_score`, scoped to captured cases known NOT to have escalated. See its module docstring for why escalate cases can't be scored this way at all. |
-| `inference_guard.py` | Fails the run when ADK *drops* an eval case (a crashed inference) instead of scoring it — otherwise a dropped case is indistinguishable from a passing one. Used by `test_eval.py` and `test_response_match.py`. |
+| `inference_guard.py` | The two things `AgentEvaluator.evaluate()` doesn't let you control, both applied at one seam: **fail** the run when ADK *drops* a case (a crashed inference) instead of scoring it, and **pin** how many cases infer concurrently (`SMART_ASSIGNMENT_EVAL_PARALLELISM`). Used by `test_eval.py` and `test_response_match.py`. |
 | `case_selection.py` | Owns the `SMART_ASSIGNMENT_EVAL_IDS` subset knob for the **test runners** (`test_eval.py`, `test_quality.py`, `test_rationale_faithfulness.py`): local-only, rejected under CI, warns when it narrows. Also exposes `filter_cases_by_ids` — the explicit-subset primitive `capture.py`'s `--ids` uses (capture does not read the env var). |
 | `deepeval_llm.py` | `SmartAssignmentDeepEvalLLM` — adapts this repo's own `generate_text` (any `SMART_ASSIGNMENT_LLM_BACKEND`) to DeepEval's judge-model interface. |
 | `test_quality.py` | Separate pytest entry point (Phase 3a): DeepEval G-Eval `brief_quality`/`response_clarity`, scored directly against captured `{final_response, escalated}` data — no ADK dataset involved. |
@@ -69,6 +69,48 @@ surviving case is scored exactly as before. Only the *verdict* changes: the run
 now fails instead of silently under-scoring. A metric failure raised by
 `AgentEvaluator` itself still wins (it's the more specific failure); the drops are
 logged alongside it.
+
+### How many cases run at once (`SMART_ASSIGNMENT_EVAL_PARALLELISM`)
+
+`AgentEvaluator` builds its `InferenceConfig()` with defaults and exposes no
+override, so **every eval case infers concurrently** (ADK's default is `4`).
+`pinned_parallelism()` overrides just that one field on the request as it passes
+through `LocalEvalService.perform_inference`; ADK still owns the scheduling, the
+semaphore, and the result stream.
+
+```bash
+SMART_ASSIGNMENT_EVAL_PARALLELISM=1 pytest eval/test_eval.py   # fully serial
+```
+
+A malformed or non-positive value logs a warning and falls back to the default
+rather than crashing mid-run (a `0` would deadlock ADK's semaphore).
+
+**The default stays at ADK's `4`, and the measurement is why.** The hypothesis
+was that concurrency against a single Sage endpoint inflates per-call latency
+until a call crosses `SAGE_TIMEOUT` and its case is dropped. A sweep of the full
+golden set at 1 / 2 / 4 (3 runs each) does not support it:
+
+| parallelism | green | median wall clock |
+|---|---|---|
+| 1 | 1/3 | 226s |
+| 2 | 1/3 | 183s |
+| 4 | 1/3 | 92s |
+
+Identical reliability, 2.5× the wall clock. The dropped cases span **recommend
+and escalate cases alike at every setting** — the signature of backend latency
+variance, not contention. (An earlier "one case at a time is greener" reading was
+confounded: a single case makes a quarter of the calls, so a quarter of the
+exposure to a latency spike.)
+
+So the knob is a *control*, not a fix — it is the only handle on this that exists,
+so a genuinely contended environment can dial it down without a code change.
+Revisit the default if a larger sample says otherwise.
+
+This pairs with **`SAGE_TIMEOUT`** (`.env`, set to `40`): parallelism controls how
+much contention there is, the timeout controls how long a call may take before it
+is abandoned. Both exist because the same measurement — the triage agent's brief
+generation is the only call shape that reaches the ceiling — points at both.
+See `docs/architecture/README.md`'s "Request timeout" section.
 
 `intake_customer`'s expected arguments are the **known ground-truth fields** of
 each mock customer (derived from the fixture, not invented), so the trajectory

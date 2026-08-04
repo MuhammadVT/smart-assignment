@@ -667,6 +667,23 @@ the loop-binding dance below, the response diagnostic) is unchanged. The flag
 is off by default, so the direct-agent path is reproduced exactly unless a
 caller opts in.
 
+### Request timeout (`SAGE_TIMEOUT`, set to 40s)
+
+The Sage SDK applies `SAGE_TIMEOUT` (its own env var, read directly — not through
+this repo's `Config`, same as `LLM_GATEWAY_*`) as an **aiohttp total-request
+timeout**, defaulting to 30s. That default is too tight here, and the reason is
+specific rather than general slowness: measurement showed the only call shape that
+ever reaches the ceiling is the **escalation-triage agent writing its brief**
+(~1000 characters of prose, ~10s median, tail reaching 30–31s). A root-agent tool
+call is ~2.5s and never timed out; the root agent's own ~1000-character narration
+is ~5.3s and never timed out — so it is not output length alone, the triage task
+itself is heavier to reason through.
+
+A timeout there does not degrade one call; it aborts the whole agent run. `.env`
+therefore sets `SAGE_TIMEOUT=40`, clearing the observed tail while still failing a
+genuinely wedged request promptly. This raises the ceiling — it does not make
+anything faster; the latency work itself is the triage changes above.
+
 ### Array-wrapped tool-call arguments (`Config.repair_tool_call_args`, on by default)
 
 A tool call's arguments are a *named mapping* — ADK builds a genai `FunctionCall`

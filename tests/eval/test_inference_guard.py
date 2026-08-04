@@ -12,7 +12,14 @@ import asyncio
 
 import pytest
 
-from eval.inference_guard import DroppedEvalCasesError, fail_on_dropped_cases
+from eval.inference_guard import (
+    DEFAULT_PARALLELISM,
+    PARALLELISM_ENV,
+    DroppedEvalCasesError,
+    fail_on_dropped_cases,
+    pinned_parallelism,
+    resolve_parallelism,
+)
 
 # google-adk[eval] is an optional extra (see pyproject); the hermetic suite must
 # never require it, so skip rather than fail when it is absent.
@@ -155,6 +162,97 @@ def test_the_patch_is_always_undone(monkeypatch):
             asyncio.run(_consume())
 
     assert LocalEvalService.perform_inference is stub
+
+
+# --- inference parallelism ----------------------------------------------------
+
+
+class _FakeInferenceConfig:
+    def __init__(self, parallelism=4):
+        self.parallelism = parallelism
+
+
+class _FakeInferenceRequest:
+    def __init__(self, parallelism=4):
+        self.inference_config = _FakeInferenceConfig(parallelism)
+
+
+def _run_inference(request, results=()):
+    async def _consume():
+        async for _ in LocalEvalService.perform_inference(None, inference_request=request):
+            pass
+
+    asyncio.run(_consume())
+
+
+def test_resolve_parallelism_defaults_when_unset(monkeypatch):
+    monkeypatch.delenv(PARALLELISM_ENV, raising=False)
+    assert resolve_parallelism() == DEFAULT_PARALLELISM
+
+
+def test_resolve_parallelism_reads_the_env_var(monkeypatch):
+    monkeypatch.setenv(PARALLELISM_ENV, "3")
+    assert resolve_parallelism() == 3
+
+
+@pytest.mark.parametrize("bad", ["nonsense", "", "0", "-2", "1.5"])
+def test_resolve_parallelism_falls_back_on_a_bad_value(monkeypatch, bad):
+    # Never crash mid-run, and never yield 0 -- ADK's semaphore would deadlock.
+    monkeypatch.setenv(PARALLELISM_ENV, bad)
+    assert resolve_parallelism() == DEFAULT_PARALLELISM
+
+
+def test_pinned_parallelism_overrides_adks_hardcoded_value(monkeypatch):
+    monkeypatch.setattr(
+        LocalEvalService, "perform_inference", _stub_perform_inference([])
+    )
+    request = _FakeInferenceRequest(parallelism=4)  # ADK's default
+
+    with pinned_parallelism(1) as applied:
+        assert applied == 1
+        _run_inference(request)
+
+    assert request.inference_config.parallelism == 1
+
+
+def test_pinned_parallelism_uses_the_env_var_when_not_given(monkeypatch):
+    monkeypatch.setenv(PARALLELISM_ENV, "3")
+    monkeypatch.setattr(
+        LocalEvalService, "perform_inference", _stub_perform_inference([])
+    )
+    request = _FakeInferenceRequest(parallelism=4)
+
+    with pinned_parallelism():
+        _run_inference(request)
+
+    assert request.inference_config.parallelism == 3
+
+
+def test_pinned_parallelism_restores_the_patch(monkeypatch):
+    stub = _stub_perform_inference([])
+    monkeypatch.setattr(LocalEvalService, "perform_inference", stub)
+
+    with pinned_parallelism(1):
+        assert LocalEvalService.perform_inference is not stub
+    assert LocalEvalService.perform_inference is stub
+
+
+def test_pinning_and_the_dropped_case_guard_compose(monkeypatch):
+    # Both wrap the same method; nested, the results must still stream through and
+    # a dropped case must still be caught.
+    monkeypatch.setattr(
+        LocalEvalService,
+        "perform_inference",
+        _stub_perform_inference([_result("a", InferenceStatus.FAILURE, "boom")]),
+    )
+    request = _FakeInferenceRequest(parallelism=4)
+
+    with pytest.raises(DroppedEvalCasesError, match="a"):
+        with pinned_parallelism(1):
+            with fail_on_dropped_cases():
+                _run_inference(request)
+
+    assert request.inference_config.parallelism == 1
 
 
 def test_a_failure_inside_the_block_is_not_masked(monkeypatch):

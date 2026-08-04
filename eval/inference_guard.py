@@ -1,4 +1,14 @@
-"""Fail loudly when a live eval case never produced an inference.
+"""Control and observe ADK's inference stage from the live-eval entry points.
+
+Both concerns here hang off the same seam -- wrapping
+``LocalEvalService.perform_inference``, the one method every eval case's
+inference streams through -- which is why they share a module rather than
+reimplementing ADK's evaluate flow twice:
+
+* :func:`fail_on_dropped_cases` -- a dropped case must fail the run, not vanish.
+* :func:`pinned_parallelism` -- how many cases ADK infers concurrently.
+
+--- Dropped cases ---
 
 ADK's ``LocalEvalService`` deliberately swallows a per-case inference failure so
 that one bad case can't take down the rest of the run: it logs
@@ -26,15 +36,42 @@ and why.
 Used by both live-eval entry points (``eval/test_eval.py``,
 ``eval/test_response_match.py``), which run ``AgentEvaluator.evaluate()`` and
 otherwise share the blind spot identically.
+
+--- Parallelism ---
+
+``AgentEvaluator`` builds its ``InferenceConfig()`` with defaults and exposes no
+override, so every eval case runs concurrently (ADK's default is 4). Against a
+single Sage endpoint that concurrency inflates per-call latency until brief
+generation crosses the request timeout, and the case is dropped -- an
+infrastructure failure that says nothing about the agent.
+:func:`pinned_parallelism` overrides that value on the request as it goes past,
+driven by ``SMART_ASSIGNMENT_EVAL_PARALLELISM``. Nothing else about ADK's
+scheduling changes.
 """
 
 from __future__ import annotations
 
 import contextlib
 import logging
-from typing import Any, Iterator, List
+import os
+from typing import Any, Iterator, List, Optional
 
 logger = logging.getLogger(__name__)
+
+PARALLELISM_ENV = "SMART_ASSIGNMENT_EVAL_PARALLELISM"
+# Cases inferred concurrently when the env var is unset.
+#
+# 4 is ADK's own default, kept deliberately: a sweep of the full golden set at
+# parallelism 1 / 2 / 4 (3 runs each) came out 1/3 green at EVERY setting, while
+# median wall clock went 226s / 183s / 92s. Contention is not what drops cases --
+# the drops span recommend AND escalate cases at every setting, which is the
+# signature of backend latency variance, not of concurrency. Lowering this by
+# default would buy nothing measurable and cost 2.5x the wall clock.
+#
+# The knob still earns its place: it is the only control over this that exists
+# (AgentEvaluator exposes none), so a contended environment can dial it down
+# without a code change. Revisit the default if a larger sample says otherwise.
+DEFAULT_PARALLELISM = 4
 
 
 class DroppedEvalCasesError(AssertionError):
@@ -48,6 +85,81 @@ def _describe(dropped: List[Any]) -> str:
         f"  - {result.eval_case_id}: {result.error_message}" for result in dropped
     ]
     return "\n".join(lines)
+
+
+def resolve_parallelism() -> int:
+    """How many eval cases to infer concurrently.
+
+    ``SMART_ASSIGNMENT_EVAL_PARALLELISM`` when it is a positive integer, else
+    ``DEFAULT_PARALLELISM``. A malformed or non-positive value is a loud warning
+    and the default, never a crash mid-run and never a silent 0 (which would
+    deadlock ADK's semaphore).
+    """
+    raw = os.environ.get(PARALLELISM_ENV)
+    if not raw or not raw.strip():
+        return DEFAULT_PARALLELISM
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            "%s=%r is not an integer; using the default of %d.",
+            PARALLELISM_ENV,
+            raw,
+            DEFAULT_PARALLELISM,
+        )
+        return DEFAULT_PARALLELISM
+    if value < 1:
+        logger.warning(
+            "%s=%d must be >= 1; using the default of %d.",
+            PARALLELISM_ENV,
+            value,
+            DEFAULT_PARALLELISM,
+        )
+        return DEFAULT_PARALLELISM
+    return value
+
+
+@contextlib.contextmanager
+def pinned_parallelism(value: Optional[int] = None) -> Iterator[int]:
+    """Pin how many eval cases ADK infers concurrently inside this block.
+
+    ``AgentEvaluator`` hardcodes ``InferenceConfig()`` and offers no override, so
+    this overrides ``parallelism`` on the request as it passes through
+    ``LocalEvalService.perform_inference``. Only that one field is touched --
+    ADK still owns the scheduling, the semaphore, and the result stream.
+
+    ``value`` defaults to :func:`resolve_parallelism`. Yields the value actually
+    applied. Idempotent and always restored; a no-op (yielding the value) when
+    google-adk[eval] is absent, exactly like :func:`fail_on_dropped_cases`.
+    """
+    resolved = resolve_parallelism() if value is None else value
+
+    try:
+        from google.adk.evaluation.local_eval_service import LocalEvalService
+    except ImportError:  # pragma: no cover - exercised only without the eval extra
+        yield resolved
+        return
+
+    original = LocalEvalService.perform_inference
+
+    async def _pinned_perform_inference(self, inference_request):
+        config = getattr(inference_request, "inference_config", None)
+        if config is not None and getattr(config, "parallelism", None) != resolved:
+            logger.info(
+                "Pinning eval inference parallelism %s -> %d (%s).",
+                getattr(config, "parallelism", "?"),
+                resolved,
+                PARALLELISM_ENV,
+            )
+            config.parallelism = resolved
+        async for result in original(self, inference_request=inference_request):
+            yield result
+
+    LocalEvalService.perform_inference = _pinned_perform_inference
+    try:
+        yield resolved
+    finally:
+        LocalEvalService.perform_inference = original
 
 
 @contextlib.contextmanager

@@ -69,7 +69,7 @@ from google.adk.evaluation.agent_evaluator import AgentEvaluator
 from eval.build_evalset import render_dataset
 from eval.capture import load_captured_outcomes
 from eval.golden_cases import GOLDEN_CASES
-from eval.inference_guard import fail_on_dropped_cases
+from eval.inference_guard import fail_on_dropped_cases, pinned_parallelism
 from smart_assignment.shared.config import DEFAULT_CONFIG
 
 AGENT_MODULE_PATH = "smart_assignment"
@@ -153,9 +153,9 @@ async def test_response_match_on_recommend_cases():
         json.dumps(_SCRATCH_TEST_CONFIG, indent=2) + "\n", encoding="utf-8"
     )
 
-    # Same blind spot as eval/test_eval.py: a crashed case is dropped by ADK, not
-    # failed, so it would silently vanish from the score. See eval/inference_guard.py.
-    with fail_on_dropped_cases():
+    # Same seam as eval/test_eval.py: pin how many cases infer at once, and fail
+    # on a dropped case instead of letting it vanish from the score silently.
+    with pinned_parallelism(), fail_on_dropped_cases():
         await AgentEvaluator.evaluate(
             agent_module=AGENT_MODULE_PATH,
             eval_dataset_file_path_or_dir=str(dataset_path),
