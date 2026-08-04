@@ -48,10 +48,10 @@ Identify any uncommented `KEY=value` lines in `.env` that do **not** exist in `.
 
 For any key that exists in **both** files:
 - Keep the **value from `.env`** (never overwrite with the placeholder from `.env.example`)
-- If the key is **active in `.env` but commented in `.env.example`**, the result has:
-  - The comment line(s) from `.env.example` preserved as comments (separate lines)
-  - The active `KEY=value` from `.env` kept active (not commented)
-  - This maintains documentation context while respecting the user's active choice
+- If the key is **active in `.env` but commented in `.env.example`**, keep **one active declaration only** in `.env`:
+  - Do **not** keep/add a duplicate commented `# KEY=...` example line for that key
+  - Place/preserve the active `KEY=value` at the template location for that key
+  - Remove any duplicate second declaration elsewhere in `.env`
 - Preserve all surrounding documentation and structure
 
 ### 5. Apply edits
@@ -79,7 +79,7 @@ After editing, re-read the affected regions to confirm:
 | Key in `.env.example` only | Add to `.env` with the example's default value |
 | Key in both files | Keep `.env` value; do not touch it |
 | Key in `.env` only | Remove from `.env` |
-| Key commented in `.env.example`, active in `.env` | Preserve the comment line(s) from `.env.example` as comments in `.env`; keep the key active with its `.env` value. Result: comment line + active `KEY=value` line, both in `.env` |
+| Key commented in `.env.example`, active in `.env` | Keep a single active `KEY=value` line (using `.env` value) at that position; do not also keep/add `# KEY=...` for the same key |
 | Comment/section only in `.env.example` | Add to `.env` at the matching position |
 | Comment text updated in `.env.example` | Replace old comment text in `.env` with the new wording |
 | Header comment updated in `.env.example` | Merge new lines into `.env` header |
@@ -91,5 +91,5 @@ After editing, re-read the affected regions to confirm:
 - Maintain the same section ordering as `.env.example` for consistency
 - If `.env` does not exist yet, create it as a direct copy of `.env.example`
 - If a local-only key is still required, add it to `.env.example` first, then sync
-- **Comment preservation**: When a key is active (uncommented) in `.env` but has documentation comments in `.env.example` (even if commented there), both the comment and the active variable appear in `.env` — the user's choice stays active while documentation is visible.
+- **Single declaration per key**: If a key is active in `.env`, keep exactly one active `KEY=value` declaration. Do not keep/add an extra `# KEY=...` commented assignment line for the same key.
 - **Avoid duplicate variable declarations in comments**: If a variable name appears inside a comment block (e.g., as an example or explanation like `# SMART_ASSIGNMENT_USE_ROUTE_SLOT_SCORING=false`), and that variable is already active elsewhere in the file, do NOT uncomment or activate it mid-comment. The comment line(s) should remain as pure comments. The active variable declaration should appear only once at its designated location. Preserve the comment verbatim from `.env.example` to maintain documentation context.
