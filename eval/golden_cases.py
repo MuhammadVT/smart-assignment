@@ -2,11 +2,12 @@
 deterministic mock fixtures (``smart_assignment.mock_customers``).
 
 Each case pairs a natural-language intake message with the customer facts it
-encodes and the *expected tool trajectory* -- the ordered pipeline the agent
-must drive: ``intake_customer`` -> ``find_candidate_routes`` ->
-``evaluate_and_score_routes`` -> ``recommend_or_escalate``. Only ``intake_customer``
+encodes and the *expected tool trajectory* -- the ordered pipeline the agent must
+drive: ``intake_customer`` -> ``recommend_or_escalate``. Only ``intake_customer``
 takes arguments; its expected args are the KNOWN ground-truth fields of the mock
 customer (not invented), so the trajectory expectation is real, not a guess.
+See ``_PIPELINE_AFTER_INTAKE`` below for which tools are deliberately left
+unpinned and why.
 
 What is deliberately NOT encoded here is the agent's final natural-language
 response: that is the LLM's narration, which can only be captured faithfully by
@@ -26,27 +27,35 @@ from typing import Any, Dict, List, Tuple
 from smart_assignment.mock_customers import SAMPLE_CUSTOMERS
 from smart_assignment.shared.models import CustomerProfile
 
-# The fixed deterministic pipeline the agent drives on every intake. These three
-# tools take no arguments (they read accumulated session state), so their
-# expected calls carry empty args; ``intake_customer`` is handled separately
-# because its args are the customer's known fields.
+# The decision step the agent must reach on every successful intake. It takes no
+# arguments (it reads accumulated session state), so its expected call carries
+# empty args; ``intake_customer`` is handled separately because its args are the
+# customer's known fields.
 #
-# This is the pipeline PREFIX, not the whole trajectory: on an ESCALATE case the
-# agent additionally hands off to a human -- ``escalation_triage`` (when
-# Config.use_escalation_triage is on, the default) and/or ADK's
-# ``adk_request_input``. Those tail calls are deliberately NOT listed here
-# because their only arguments are model-authored prose (the triage `request`
-# and the handoff `message`), which differ on every run -- pinning them would
-# make the eval permanently flaky, and the trajectory metric compares args
-# exactly. So eval/data/test_config.json scores this metric with
+# Only what the agent is REQUIRED to do belongs here. Two other tool families are
+# deliberately absent, for different reasons:
+#
+# * ``find_candidate_routes`` / ``evaluate_and_score_routes`` are OPTIONAL,
+#   on-demand tools -- ``recommend_or_escalate`` geocodes, constraint-checks and
+#   scores internally, so the default flow goes straight from intake to the
+#   decision and calls neither (see smart_assignment/prompts.py, "Workflow"). They
+#   were pinned here until the flow was optimized to skip them, which silently
+#   made every case score 0.0; don't re-add them, or the eval starts asserting a
+#   path the prompt explicitly tells the agent not to take.
+# * On an ESCALATE case the agent additionally hands off to a human --
+#   ``escalation_triage`` (when Config.use_escalation_triage is on, the default)
+#   and/or ADK's ``adk_request_input``. Their only arguments are model-authored
+#   prose (the triage `request`, the handoff `message`) which differs every run,
+#   and the trajectory metric compares args exactly, so pinning them would make
+#   the eval permanently flaky.
+#
+# eval/data/test_config.json therefore scores this metric with
 # ``match_type: IN_ORDER``: every tool below must appear, in this order, with
-# exactly these args, while extra trailing handoff calls are tolerated. Don't
-# "tighten" that back to the EXACT default -- it fails the two escalate cases.
-_PIPELINE_AFTER_INTAKE: Tuple[str, ...] = (
-    "find_candidate_routes",
-    "evaluate_and_score_routes",
-    "recommend_or_escalate",
-)
+# exactly these args, while any additional call -- an on-demand scoring tool the
+# user asked for, or an escalation handoff -- is tolerated anywhere in the
+# trajectory. Don't "tighten" that back to the EXACT default: it fails the two
+# escalate cases, and any user-prompted on-demand call too.
+_PIPELINE_AFTER_INTAKE: Tuple[str, ...] = ("recommend_or_escalate",)
 
 
 @dataclass(frozen=True)

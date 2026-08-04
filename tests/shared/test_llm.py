@@ -11,12 +11,19 @@ offline suite.
 from __future__ import annotations
 
 import asyncio
+import json
 from unittest.mock import MagicMock, patch
+
+import pytest
+from pydantic import ValidationError
 
 from smart_assignment.shared.config import Config
 from smart_assignment.shared.llm import (
     _SAGE_ERROR_SENTINEL,
+    _coerce_tool_call_args,
+    _install_litellm_tool_args_repair,
     _install_sage_response_diagnostic,
+    _maybe_install_litellm_tool_args_repair,
     _maybe_install_sage_response_diagnostic,
     _run_coro_blocking,
     generate_text,
@@ -529,3 +536,194 @@ def test_maybe_install_is_a_noop_when_flag_off(monkeypatch):
 def test_maybe_install_survives_missing_sdk(monkeypatch):
     # Flag on but the Sage SDK isn't importable (this offline suite) -> no crash.
     _maybe_install_sage_response_diagnostic(Config(debug_sage_raw_response=True))
+
+
+# --- Array-wrapped tool-call arguments (Config.repair_tool_call_args) ---------
+#
+# The sage backend intermittently wraps a tool call's arguments in a JSON array with
+# a stray leaked sibling; ADK hands that list to a pydantic model that requires a
+# dict, which raises and kills the whole agent run. See the section comment above
+# _coerce_tool_call_args in shared/llm.py.
+
+# The exact payload captured from a live escalation_triage call (abridged in the
+# middle of `request`, which is not what the repair keys on). The trailing array is a
+# verbatim duplicate of the "rejected_alternatives" list INSIDE `request` -- leaked
+# out of the escaped JSON string to sit beside the argument object.
+_OBSERVED_ARGS_OBJECT = {
+    "request": (
+        '{"ok": true, "decision": "ESCALATED_LOW_SCORE", "requires_human_review": true, '
+        '"total_score": 0.4, "recommended_route_id": "RTE-4200", '
+        '"rejected_alternatives": ["RTE-4200 - West Houston / Energy Corridor (WED) '
+        '07:45-10:45: route-slot scored 0.38", "RTE-4110 - Downtown / Midtown (WED): '
+        'infeasible - truck capacity"]}'
+    )
+}
+_OBSERVED_LEAKED_SIBLING = [
+    "RTE-4200 - West Houston / Energy Corridor (WED) 07:45-10:45: route-slot scored 0.38",
+    "RTE-4110 - Downtown / Midtown (WED): infeasible - truck capacity",
+]
+_OBSERVED_MALFORMED_PAYLOAD = [_OBSERVED_ARGS_OBJECT, _OBSERVED_LEAKED_SIBLING]
+
+
+class _FakeLiteLlmModule:
+    """Stands in for google.adk.models.lite_llm: the repair only needs the one
+    module-level function it wraps."""
+
+    @staticmethod
+    def _parse_tool_call_arguments(arguments):
+        # Mirrors ADK: a JSON string in, whatever it parses to out.
+        return json.loads(arguments) if isinstance(arguments, str) else arguments
+
+
+def _fresh_fake_lite_llm_module():
+    return type("FakeLiteLlm", (_FakeLiteLlmModule,), {})
+
+
+def test_coerce_returns_a_well_formed_dict_untouched():
+    # The 99.9% path: same object out, not a copy -- the repair cannot perturb a
+    # healthy call.
+    args = {"address": "1200 McKinney St", "order_quantity_cases": 90}
+    repaired, discarded = _coerce_tool_call_args(args)
+    assert repaired is args
+    assert discarded == []
+
+
+def test_coerce_unwraps_the_observed_array_wrapped_payload():
+    repaired, discarded = _coerce_tool_call_args(_OBSERVED_MALFORMED_PAYLOAD)
+    assert repaired == _OBSERVED_ARGS_OBJECT
+    assert discarded == [_OBSERVED_LEAKED_SIBLING]
+
+
+def test_coerce_unwraps_a_lone_object_in_an_array():
+    repaired, discarded = _coerce_tool_call_args([{"request": "brief"}])
+    assert repaired == {"request": "brief"}
+    assert discarded == []
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        [],  # nothing to use
+        ["just", "strings"],  # no argument object at all
+        [{"request": "a"}, {"request": "b"}],  # two that may disagree -- never guess
+        "a bare string",
+        42,
+        None,
+    ],
+)
+def test_coerce_declines_every_shape_it_cannot_read_with_certainty(payload):
+    repaired, discarded = _coerce_tool_call_args(payload)
+    assert repaired is None
+    assert discarded == []
+
+
+def test_repair_lets_a_normal_tool_call_through_unchanged():
+    module = _fresh_fake_lite_llm_module()
+    _install_litellm_tool_args_repair(module)
+    assert module._parse_tool_call_arguments('{"address": "1200 McKinney St"}') == {
+        "address": "1200 McKinney St"
+    }
+
+
+def test_repair_recovers_the_observed_payload_and_logs_what_it_dropped(caplog):
+    module = _fresh_fake_lite_llm_module()
+    _install_litellm_tool_args_repair(module)
+
+    with caplog.at_level("WARNING"):
+        result = module._parse_tool_call_arguments(json.dumps(_OBSERVED_MALFORMED_PAYLOAD))
+
+    # A dict now, so ADK's FunctionCall(args=...) validates -- and its content is the
+    # model's own argument object, nothing synthesized.
+    assert result == _OBSERVED_ARGS_OBJECT
+    assert "Repaired array-wrapped tool-call arguments" in caplog.text
+    assert "discarded 1 stray sibling" in caplog.text
+
+
+def test_repair_passes_through_an_unreadable_shape_so_adk_still_raises(caplog):
+    # Two competing objects: the failure must stay loud rather than be guessed away.
+    module = _fresh_fake_lite_llm_module()
+    _install_litellm_tool_args_repair(module)
+    payload = [{"request": "a"}, {"request": "b"}]
+
+    with caplog.at_level("ERROR"):
+        result = module._parse_tool_call_arguments(json.dumps(payload))
+
+    assert result == payload  # unchanged -> ADK rejects it exactly as it does today
+    assert "cannot be repaired safely" in caplog.text
+
+
+def test_repair_never_raises_even_if_coercion_blows_up(monkeypatch, caplog):
+    import smart_assignment.shared.llm as llm_mod
+
+    module = _fresh_fake_lite_llm_module()
+    _install_litellm_tool_args_repair(module)
+    monkeypatch.setattr(
+        llm_mod, "_coerce_tool_call_args", MagicMock(side_effect=RuntimeError("boom"))
+    )
+
+    with caplog.at_level("WARNING"):
+        result = module._parse_tool_call_arguments('[{"request": "brief"}]')
+
+    # Falls through to the value ADK would have used without the shim.
+    assert result == [{"request": "brief"}]
+    assert "repair failed" in caplog.text
+
+
+def test_repair_install_is_idempotent():
+    module = _fresh_fake_lite_llm_module()
+    _install_litellm_tool_args_repair(module)
+    wrapped_once = module._parse_tool_call_arguments
+    _install_litellm_tool_args_repair(module)
+    assert module._parse_tool_call_arguments is wrapped_once  # not double-wrapped
+
+
+def test_maybe_install_repair_is_a_noop_when_flag_off(monkeypatch):
+    def _boom(*args, **kwargs):
+        raise AssertionError("should not import ADK's lite_llm when the flag is off")
+
+    monkeypatch.setattr("builtins.__import__", _boom, raising=False)
+    _maybe_install_litellm_tool_args_repair(Config(repair_tool_call_args=False))
+
+
+def test_repair_flag_is_on_by_default():
+    # Unlike the opt-in diagnostics, this one ships enabled -- see the field comment
+    # in shared/config.py for why that is safe.
+    assert Config().repair_tool_call_args is True
+
+
+def test_repaired_payload_builds_a_real_adk_function_call():
+    """End-to-end against the REAL ADK + pydantic, not the stub above.
+
+    This is the actual failure being fixed: ADK feeds the parsed arguments straight
+    into ``types.Part.from_function_call``, whose pydantic model rejects a list. The
+    payload here is the one captured live, so this asserts the crash is gone at the
+    exact line that raised it.
+    """
+    from google.adk.models import lite_llm as real_lite_llm
+    from google.genai import types
+
+    raw = json.dumps(_OBSERVED_MALFORMED_PAYLOAD)
+    installed = real_lite_llm._parse_tool_call_arguments
+    # An earlier test in this file may have called get_llm() on a sage config, which
+    # installs the repair process-wide; recover ADK's untouched function so the
+    # "before" half below observes the real, unrepaired failure either way.
+    pristine = getattr(installed, "_sa_original", installed)
+
+    try:
+        real_lite_llm._parse_tool_call_arguments = pristine
+        with pytest.raises(ValidationError):  # the bug, reproduced against real ADK
+            types.Part.from_function_call(
+                name="escalation_triage",
+                args=real_lite_llm._parse_tool_call_arguments(raw),
+            )
+
+        _install_litellm_tool_args_repair(real_lite_llm)
+        part = types.Part.from_function_call(
+            name="escalation_triage", args=real_lite_llm._parse_tool_call_arguments(raw)
+        )
+    finally:
+        real_lite_llm._parse_tool_call_arguments = installed
+
+    assert part.function_call.name == "escalation_triage"
+    # The model's own argument object, carried through intact.
+    assert part.function_call.args == _OBSERVED_ARGS_OBJECT
