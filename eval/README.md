@@ -380,12 +380,31 @@ SMART_ASSIGNMENT_USE_JUDGE_CALIBRATION=true \
     --log feedback_data/annotations.jsonl          # 2. vs. the human labels
 ```
 
+Judging the four built-in golden fixtures produces verdicts that pair with
+*nothing*, because no human ever labeled an invented fixture:
+
 ```
-human labels: 8  judge verdicts: 4  aligned pairs: 1
+human labels: 8  judge verdicts: 6  aligned pairs: 0
 dimension                n    kappa   danger  trust
-brief_quality            1     1.00       0%  gate
-composite                4     0.00     100%  distrust
+composite                0      n/a      n/a  insufficient
 ```
+
+Pairs only form over cases curated from decisions a human actually saw. Judging
+those (they carry the real `decision_id`; see below) is what the report is for:
+
+```
+human labels: 8  judge verdicts: 4  aligned pairs: 0
+dimension                n    kappa   danger  trust
+composite                4     0.00     100%  distrust
+
+composite - top disagreements (judge vs human):
+  [holistic] judge_passed_human_rejected 1210bd3e4a984ff0bfb72a5426af3ed6
+```
+
+Read that as: on all 4 decisions, the judge said "fine" where the human said "no"
+— a 100% dangerous-cell rate, hence `distrust`. (`aligned_pairs` counts only
+*per-dimension* pairs; these are Tier-1 composite pairs, for the reason in the
+next paragraph.)
 
 The `--verdicts` reader is chosen by suffix, so the older precomputed `.json`
 mapping still works unchanged. Since the log is append-only, the **latest line per
