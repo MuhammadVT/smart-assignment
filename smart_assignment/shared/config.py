@@ -393,6 +393,18 @@ class Config:
     # Off by default; flag-off makes the CLI a no-op, so calibration never runs
     # unless explicitly turned on.
     use_judge_calibration: bool = False
+    # Absolute or relative path to the append-only JSONL log of automated
+    # JUDGE verdicts (see ``eval/judge_log.py``) -- the machine-verdict sibling of
+    # ``feedback_log_path``'s human-label log, and the producer of the verdicts
+    # ``scripts/calibrate_judges.py`` consumes. The path IS the switch: set it
+    # empty to record nothing. It needs no ``use_*`` flag of its own because
+    # recording is purely observational -- it changes no decision and cannot fail
+    # a run (writes are swallowed; see judge_log.append_verdict) -- and gating it
+    # off by default would mean an eval run still recorded nothing, which is the
+    # problem this exists to solve. Defaults alongside the human log in the
+    # gitignored feedback_data/, since judge scores are non-deterministic run
+    # output, not source.
+    judge_log_path: str = "feedback_data/judge_verdicts.jsonl"
 
     def tier_harm_weight(self, tier: Optional[str]) -> float:
         """Harm weight for crowding a committed stop of the given Sysco tier --
@@ -494,6 +506,12 @@ class Config:
                 "SMART_ASSIGNMENT_USE_TRACE_DATASET_PAYLOADS", False
             ),
             use_judge_calibration=_bool_env("SMART_ASSIGNMENT_USE_JUDGE_CALIBRATION", False),
+            # Unlike feedback_log_path above, an explicitly EMPTY value is
+            # meaningful here (it disables recording) rather than falling back to
+            # the default -- so only an unset var takes the default.
+            judge_log_path=os.environ.get(
+                "SMART_ASSIGNMENT_JUDGE_LOG_PATH", "feedback_data/judge_verdicts.jsonl"
+            ).strip(),
         )
 
 

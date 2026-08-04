@@ -319,6 +319,54 @@ resampling — routeslot's own resampling only exists on its grounded-
 *escalation* path, `Config.use_grounded_route_slot_escalation`, off by
 default).
 
+### Recording judge verdicts — `eval/judge_log.py`
+
+A judge score is otherwise **ephemeral**: it lives on the metric object for one
+loop iteration and is gone when the process exits. Only *failures* reach the
+assertion message, so a passing `brief_quality` told you nothing about whether it
+scored 0.55 or 0.95 — and a judge that drifts because the *judge model* changed
+(not the agent) was invisible.
+
+Every verdict from both files above — pass **and** fail — is now appended to a
+durable JSONL log, the machine-verdict sibling of the human-feedback log
+(`feedback_data/annotations.jsonl`). One self-describing record per line:
+
+```jsonc
+{
+  "eval_id": "bayou_city_bistro_recommend",
+  "decision_id": "bayou_city_bistro_recommend",   // what a human label joins on
+  "dimension": "response_clarity",                 // the judge's name
+  "score": 0.4, "threshold": 0.5, "passed": false,
+  "reason": "…the judge's own explanation…",
+  "output_excerpt": "I have successfully analyzed…",
+  "output_ref": "sha256:9f2c…",                    // the full judged text, hashed
+  "judged_at": "2026-08-04T17:31:02+00:00",
+  "judge": {"backend": "standard", "model": "gemini-3.1-flash-lite", "metric": "GEval"},
+  "run":   {"dataset": {"name": "mock", …}, "backend": "…", "model": "…"}
+}
+```
+
+`judge` (who scored) is kept separate from `run` (the dataset + product model the
+judged output came from — the same provenance block `eval/capture.py` records) so
+a score change is *attributable*: did the agent change, or the judge? `output_ref`
+answers the same question for the text itself, which matters most for
+`test_rationale_faithfulness`, whose prose is regenerated every run and stored
+nowhere else.
+
+```bash
+# Where verdicts land. The path IS the switch -- set it empty to record nothing.
+SMART_ASSIGNMENT_JUDGE_LOG_PATH=feedback_data/judge_verdicts.jsonl   # default
+
+# Read the last few verdicts
+python3 -c "from eval.judge_log import read_verdicts; \
+  [print(r.dimension, r.eval_id, r.score, r.passed) for r in read_verdicts()]"
+```
+
+Recording is purely observational — it changes no score, threshold, or test
+result, and a write that fails (bad path, full disk) is logged and swallowed
+rather than turning an advisory eval red. The *judge call* itself is deliberately
+not swallowed: a judge that cannot score is a real failure and stays loud.
+
 ## Running locally
 
 Needs a configured backend (see `.env.example`); the CI job uses
