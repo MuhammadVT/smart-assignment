@@ -404,7 +404,8 @@ recommend_or_escalate -> requires_human_review?
   escalation_triage   (AgentTool: a second LlmAgent, consult-and-return)
      └─ get_escalation_context (reads session state: the profile + last
         recommendation; re-derives every feasible/infeasible route with its
-        raw facts + any split model opinions)  -> composes a specialist brief
+        raw facts, the decision thresholds it was judged against, + any split
+        model opinions)  -> composes a specialist brief
         in a fixed, scannable layout:
         SITUATION · ROOT CAUSE · OPTIONS (ranked, most-workable first, each with
         its state / action / trade-off) · RECOMMENDATION (advisory starting point)
@@ -573,13 +574,39 @@ Two enforcement points:
 
 ```
 triage agent drafts brief
-   ├─ (cooperative) calls check_brief_grounding(brief) -> revise until ok
+   ├─ (cooperative) calls check_brief_grounding(brief) -> revise
+   │                bounded: MAX_GROUNDING_CHECKS (2) -- see below
    └─ (deterministic) after_model_callback (_finalize_brief):
         1. normalize_brief -> reflow the FINAL brief into the one canonical
            layout (headers/options/labels each on their own line)
         2. verify_brief -> if any figure/route is still ungrounded, append a
            caveat naming them ("⚠ Unverified — figures not found …")
 ```
+
+**The decision thresholds are facts (`decision_thresholds`, `triage/context.py`).**
+An escalation is *defined* by a bar it failed to clear, and the brief's ROOT CAUSE
+section is explicitly asked to name that gate "with the exact numbers". Those bars
+were originally absent from the escalation context, so the verifier flagged them
+as invented — even though the context's own `review_reason` had handed the agent
+the figure ("No route-slot cleared the **55%** auto-assign bar"). The instruction
+was unwinnable: the only way to pass the check was to drop the number, and the
+agent needed two or three **full brief rewrites** to discover that. The context now
+publishes a `thresholds` block (auto-assign score bar, utilization ceiling, safe
+utilization line) as fractions, exactly like every other ratio it carries, and
+`collect_grounding` picks them up like any other fact. Nothing is loosened — a
+fabricated bar ("63%") is still flagged.
+
+**The revision loop is bounded (`MAX_GROUNDING_CHECKS`).** Every grounding round
+costs a *full* regeneration of the brief — the agent passes the whole brief as the
+tool's argument, then writes it again as its final answer — and a brief generation
+is the only call in this system measured to reach the sage request timeout (~10s
+median, with a tail past the 30s `SAGE_TIMEOUT`, versus ~2.5s for a root-agent tool
+call). An unbounded loop therefore multiplies the chance the whole turn dies while
+adding **no** guarantee, because `_finalize_brief` re-verifies the final brief and
+caveats anything ungrounded regardless. After two checks the tool returns
+`"stop": true` alongside the still-flagged items; `ok` stays honest about
+groundedness, and `stop` says what to do about it. The budget resets in
+`get_escalation_context`, so each triage invocation gets its own.
 
 **Layout normalization (`triage/formatting.py`).** The brief is LLM-written, so
 its formatting drifts turn to turn — one escalation comes back tidy and

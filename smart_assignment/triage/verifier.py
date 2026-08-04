@@ -146,6 +146,16 @@ def collect_grounding(context: dict) -> dict:
     if isinstance(total_score, (int, float)) and not isinstance(total_score, bool):
         numbers.append(float(total_score))
 
+    # The decision bars (auto-assign score bar, utilization ceiling and safe line).
+    # An escalation is defined by the threshold it failed to clear, and the brief is
+    # asked to name that gate with its number, so these are load-bearing facts --
+    # see triage/context.py's decision_thresholds for why they live in the context.
+    # Absent from contexts stashed before thresholds were published; .get() keeps
+    # those working unchanged.
+    for value in (context.get("thresholds") or {}).values():
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            numbers.append(float(value))
+
     candidates = (context.get("feasible_candidates") or []) + (
         context.get("infeasible_candidates") or []
     )
