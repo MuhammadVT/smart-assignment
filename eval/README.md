@@ -319,6 +319,109 @@ resampling — routeslot's own resampling only exists on its grounded-
 *escalation* path, `Config.use_grounded_route_slot_escalation`, off by
 default).
 
+### Recording judge verdicts — `eval/judge_log.py`
+
+A judge score is otherwise **ephemeral**: it lives on the metric object for one
+loop iteration and is gone when the process exits. Only *failures* reach the
+assertion message, so a passing `brief_quality` told you nothing about whether it
+scored 0.55 or 0.95 — and a judge that drifts because the *judge model* changed
+(not the agent) was invisible.
+
+Every verdict from both files above — pass **and** fail — is now appended to a
+durable JSONL log, the machine-verdict sibling of the human-feedback log
+(`feedback_data/annotations.jsonl`). One self-describing record per line:
+
+```jsonc
+{
+  "eval_id": "bayou_city_bistro_recommend",
+  "decision_id": "bayou_city_bistro_recommend",   // what a human label joins on
+  "dimension": "response_clarity",                 // the judge's name
+  "score": 0.4, "threshold": 0.5, "passed": false,
+  "reason": "…the judge's own explanation…",
+  "output_excerpt": "I have successfully analyzed…",
+  "output_ref": "sha256:9f2c…",                    // the full judged text, hashed
+  "judged_at": "2026-08-04T17:31:02+00:00",
+  "judge": {"backend": "standard", "model": "gemini-3.1-flash-lite", "metric": "GEval"},
+  "run":   {"dataset": {"name": "mock", …}, "backend": "…", "model": "…"}
+}
+```
+
+`judge` (who scored) is kept separate from `run` (the dataset + product model the
+judged output came from — the same provenance block `eval/capture.py` records) so
+a score change is *attributable*: did the agent change, or the judge? `output_ref`
+answers the same question for the text itself, which matters most for
+`test_rationale_faithfulness`, whose prose is regenerated every run and stored
+nowhere else.
+
+```bash
+# Where verdicts land. The path IS the switch -- set it empty to record nothing.
+SMART_ASSIGNMENT_JUDGE_LOG_PATH=feedback_data/judge_verdicts.jsonl   # default
+
+# Read the last few verdicts
+python3 -c "from eval.judge_log import read_verdicts; \
+  [print(r.dimension, r.eval_id, r.score, r.passed) for r in read_verdicts()]"
+```
+
+Recording is purely observational — it changes no score, threshold, or test
+result, and a write that fails (bad path, full disk) is logged and swallowed
+rather than turning an advisory eval red. The *judge call* itself is deliberately
+not swallowed: a judge that cannot score is a real failure and stays loud.
+
+#### Feeding calibration — do the judges agree with humans?
+
+The log is what `scripts/calibrate_judges.py` consumes, so the loop runs with no
+hand-authored file in the middle:
+
+```bash
+pytest eval/test_quality.py                       # 1. judges run, verdicts recorded
+SMART_ASSIGNMENT_USE_JUDGE_CALIBRATION=true \
+  python3 scripts/calibrate_judges.py \
+    --verdicts feedback_data/judge_verdicts.jsonl \
+    --log feedback_data/annotations.jsonl          # 2. vs. the human labels
+```
+
+Judging the four built-in golden fixtures produces verdicts that pair with
+*nothing*, because no human ever labeled an invented fixture:
+
+```
+human labels: 8  judge verdicts: 6  aligned pairs: 0
+dimension                n    kappa   danger  trust
+composite                0      n/a      n/a  insufficient
+```
+
+Pairs only form over cases curated from decisions a human actually saw. Judging
+those (they carry the real `decision_id`; see below) is what the report is for:
+
+```
+human labels: 8  judge verdicts: 4  aligned pairs: 0
+dimension                n    kappa   danger  trust
+composite                4     0.00     100%  distrust
+
+composite - top disagreements (judge vs human):
+  [holistic] judge_passed_human_rejected 1210bd3e4a984ff0bfb72a5426af3ed6
+```
+
+Read that as: on all 4 decisions, the judge said "fine" where the human said "no"
+— a 100% dangerous-cell rate, hence `distrust`. (`aligned_pairs` counts only
+*per-dimension* pairs; these are Tier-1 composite pairs, for the reason in the
+next paragraph.)
+
+The `--verdicts` reader is chosen by suffix, so the older precomputed `.json`
+mapping still works unchanged. Since the log is append-only, the **latest line per
+`(decision_id, dimension)` wins** — otherwise a case judged on five runs would
+outvote one judged once.
+
+**What makes a pair.** Verdicts join to human labels on `(decision_id, dimension)`:
+
+* `decision_id` — a curated case carries the production decision it came from
+  (`GoldenCase.decision_id`, lifted from the candidate's `provenance` by
+  `eval/case_source.py`). A hand-written golden fixture has none — no human ever
+  labeled it — so it joins only under its own `eval_id`.
+* `dimension` — a holistic 👍/👎 routes to `brief_quality` (escalate) or
+  `response_clarity` (recommend). `rationale_faithfulness` has **no** human
+  counterpart in the annotation vocabulary, so its verdicts feed only the Tier-1
+  *composite*, never a per-dimension pair. That's expected, not a gap in the wiring.
+
 ## Running locally
 
 Needs a configured backend (see `.env.example`); the CI job uses

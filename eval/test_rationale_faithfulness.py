@@ -42,6 +42,12 @@ does not apply -- one live call per case, no resampling here (routeslot's own
 resampling only kicks in on its grounded-ESCALATION path, which is off by
 default -- see Config.use_grounded_route_slot_escalation).
 
+Every verdict -- pass and fail -- is recorded to the durable judge log (see
+eval/judge_log.py). That matters more here than for 3a: the judged prose is
+regenerated fresh each run and stored nowhere else, so the log's content ref is
+the only way to tell a score moved because the RATIONALE changed rather than the
+judge.
+
 Advisory, needs a live LLM backend + the `eval-quality` extra, NOT in the
 hermetic `tests/` suite.
 
@@ -68,6 +74,7 @@ from deepeval.test_case import LLMTestCase, LLMTestCaseParams  # noqa: E402
 from eval.case_selection import select_cases  # noqa: E402
 from eval.deepeval_llm import SmartAssignmentDeepEvalLLM  # noqa: E402
 from eval.golden_cases import GOLDEN_CASES, GoldenCase  # noqa: E402
+from eval.judge_log import current_run_provenance, measure_and_record  # noqa: E402
 from smart_assignment.integrations.geocoding_client import resolve_geocoder  # noqa: E402
 from smart_assignment.integrations.route_capacity_client import fetch_candidate_routes  # noqa: E402
 from smart_assignment.pipeline import evaluate_candidates, geo_lookup  # noqa: E402
@@ -78,6 +85,14 @@ from smart_assignment.shared.config import DEFAULT_CONFIG, ROLE_QUALITY_JUDGE  #
 
 # Starting point, not calibrated -- deepeval's own GEval default, same as 3a.
 _RATIONALE_FAITHFULNESS_THRESHOLD = 0.5
+
+# The dimension this judge records under (see eval/judge_log.py). Owned here
+# rather than in eval/judge_calibration.DIMENSIONS on purpose: that tuple is the
+# HUMAN-annotation vocabulary (deployment/phoenix/README.md), and there is no
+# human counterpart for rationale faithfulness yet -- the grounded layer's own
+# reasoning is not something the feedback UI asks a human about. It joins on
+# (decision_id, dimension) all the same once one exists.
+_DIMENSION = "rationale_faithfulness"
 
 _JUDGE_MODEL = SmartAssignmentDeepEvalLLM(DEFAULT_CONFIG.for_role(ROLE_QUALITY_JUDGE))
 
@@ -142,6 +157,11 @@ def _grounded_choice_for(case: GoldenCase) -> Optional[Tuple[RouteSlotChoice, di
 @pytest.mark.asyncio
 async def test_rationale_faithfulness_on_grounded_picks():
     cases: List[GoldenCase] = select_cases(GOLDEN_CASES)
+    # Snapshot the run's provenance BEFORE the first replay: replaying a case
+    # mutates the in-memory mock fixtures, so a dataset ref taken afterwards
+    # would describe the mutation state rather than the dataset. Same reason
+    # eval/capture.py takes its provenance up front.
+    run = current_run_provenance()
 
     scored_any = False
     failures = []
@@ -157,12 +177,16 @@ async def test_rationale_faithfulness_on_grounded_picks():
             actual_output=" ".join(choice.prose_fields()),
             context=[json.dumps(packet_dict, sort_keys=True)],
         )
-        await _FAITHFULNESS.a_measure(test_case)
-        if _FAITHFULNESS.score < _FAITHFULNESS.threshold:
-            failures.append(
-                f"{case.eval_id}: {_FAITHFULNESS.score:.2f} < "
-                f"{_FAITHFULNESS.threshold} -- {_FAITHFULNESS.reason}"
-            )
+        record = await measure_and_record(
+            _FAITHFULNESS,
+            test_case,
+            eval_id=case.eval_id,
+            dimension=_DIMENSION,
+            decision_id=case.decision_id,
+            run=run,
+        )
+        if not record.passed:
+            failures.append(record.failure_line())
 
     if not scored_any:
         pytest.skip(

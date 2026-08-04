@@ -863,7 +863,29 @@ this just makes the *backend-native* curation path viable too.
 LLM, CODE}` means an LLM-as-judge score or a deterministic code check can flow
 through the *same* record, log, and OTLP span later — so the existing eval
 judges (`eval/deepeval_llm.py`, `eval/sage_judge_llm.py`) can unify with human
-ground truth without a second mechanism. Curation (`feedback/curate.py`) only
+ground truth without a second mechanism.
+
+**The machine half of that ground truth (`eval/judge_log.py`).** The automated
+judges now *record* what they scored, instead of discarding it: every verdict
+from `eval/test_quality.py` and `eval/test_rationale_faithfulness.py` — pass and
+fail — is appended to `Config.judge_log_path` (default
+`feedback_data/judge_verdicts.jsonl`), one self-describing JSONL record per line,
+deliberately mirroring `feedback/store.py`'s format and its defensive-write
+discipline. The two logs are counterparts: human labels and machine verdicts on
+the same quality dimensions, joining on `(decision_id, dimension)` — which is
+exactly the pair `eval/judge_calibration.py` needs, and the input
+`scripts/calibrate_judges.py` documents but nothing previously produced. They
+stay *separate files* on purpose: the annotations log is the production audit
+trail of judgments on real customer decisions, this is eval-run output, and
+merging them would mix provenance domains and let machine rows reach human-label
+curation. Each record separates `judge` (the resolved `ROLE_QUALITY_JUDGE` model
+and backend) from `run` (the dataset + product model provenance
+`eval/dataset.run_provenance` already stamps on captures), so a score change is
+attributable to the agent, the judge, or the data rather than guessed. Recording
+is observational — it changes no score or test result, needs no `use_*` flag
+because it cannot regress behavior, and the path itself is the switch (empty
+records nothing); a failed *write* is swallowed, while a failed *judge call*
+still fails the eval. Curation (`feedback/curate.py`) only
 reads HUMAN records — those are the ground truth the auto-judges calibrate
 against — and emits *candidate* cases for a human to review and promote into
 `eval/golden_cases.py`. A `suggested_expected_outcome` is filled in only when the
@@ -921,6 +943,23 @@ label, no schema change), **Phoenix** (annotations on the decision trace, today)
 or **Langfuse** (scores, later) — all normalized by the shared parser, with the live
 client calls lazily imported and defensive. No replay and no data source: calibration
 needs only the `(human_label, judge_verdict)` pairs that already exist.
+
+**Where the judge half now comes from.** `verdicts_from_jsonl` reads the durable
+judge log (`eval/judge_log.py`) the judges write as they run, so the harness's
+verdict side is *produced by running the judges* rather than hand-authored:
+`pytest eval/test_quality.py` then `scripts/calibrate_judges.py --verdicts
+feedback_data/judge_verdicts.jsonl`. The CLI picks the reader by suffix, so the
+precomputed `.json` mapping still works unchanged. Because the log is append-only,
+the **latest line per `(decision_id, dimension)` wins** — the same "latest record
+per decision" rule `feedback/curate.py` applies to the human log, so a case
+re-judged five times weighs the same as one judged once rather than five times as
+much. The join itself is `(decision_id, dimension)`, which is why a curated case
+carries `GoldenCase.decision_id` end to end (`eval/case_source.py` lifts it from
+the candidate's `provenance`, and the judge tests pass it to `measure_and_record`):
+the minted `eval_id` only encodes its first 8 characters, so without the field the
+link back to the human's label on that same decision would mean parsing an id out
+of a name. A hand-written fixture has no `decision_id` — no human ever labeled it,
+so there is nothing to join to, and it participates only as its own `eval_id`.
 
 ### Self-contained snapshot datasets — scoring the model, offline, in CI
 
