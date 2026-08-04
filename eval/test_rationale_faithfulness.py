@@ -178,7 +178,12 @@ async def test_rationale_faithfulness_on_grounded_picks():
             context=[json.dumps(packet_dict, sort_keys=True)],
         )
         record = await measure_and_record(
-            _FAITHFULNESS, test_case, eval_id=case.eval_id, dimension=_DIMENSION, run=run
+            _FAITHFULNESS,
+            test_case,
+            eval_id=case.eval_id,
+            dimension=_DIMENSION,
+            decision_id=case.decision_id,
+            run=run,
         )
         if not record.passed:
             failures.append(record.failure_line())

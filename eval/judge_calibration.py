@@ -346,6 +346,32 @@ def human_labels_from_feedback(path: str) -> List[HumanLabel]:
     return labels
 
 
+def verdicts_from_jsonl(path: str) -> List[JudgeVerdict]:
+    """Read the durable judge log (``eval/judge_log.py``) into ``JudgeVerdict``s.
+
+    That log is append-only, so the same case re-judged on a later run appends a
+    NEW line rather than replacing the old one. Calibration wants one verdict per
+    ``(decision_id, dimension)`` -- the CURRENT judge's opinion -- so the latest
+    line wins, the same "latest record per decision" rule ``feedback/curate.py``
+    applies to the human log. Without it a case judged five times would weigh
+    five times as much as one judged once.
+
+    Imports the log reader lazily so this module stays import-light."""
+    from eval.judge_log import iter_verdicts
+
+    latest: Dict[Tuple[str, str], JudgeVerdict] = {}
+    for record in iter_verdicts(path):
+        if not record.decision_id or not record.dimension:
+            continue
+        latest[(record.decision_id, record.dimension)] = JudgeVerdict(
+            decision_id=record.decision_id,
+            dimension=record.dimension,
+            passed=record.passed,
+            score=record.score,
+        )
+    return list(latest.values())
+
+
 def verdicts_from_mapping(mapping: Dict[str, Dict[str, object]]) -> List[JudgeVerdict]:
     """Parse a precomputed ``{decision_id: {dimension: {passed, score}}}`` mapping
     (e.g. produced by running the judges) into ``JudgeVerdict``s."""

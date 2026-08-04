@@ -47,6 +47,21 @@ def test_reconstructs_profile_with_preference():
     assert args["preferred_day"] == "THU" and args["preferred_window_start"] == "09:00"
 
 
+def test_carries_the_originating_decision_id():
+    """The id a judge verdict and the human's label on the SAME decision join on
+    (eval/judge_calibration.py). The minted eval_id only encodes 8 characters of
+    it, so it has to travel as its own field."""
+    candidate = _candidate(provenance={"decision_id": "1210bd3e4a984ff0bfb72a5426af3ed6"})
+    assert candidate_to_case(candidate).decision_id == "1210bd3e4a984ff0bfb72a5426af3ed6"
+
+
+def test_decision_id_is_none_without_provenance():
+    """A hand-written or provenance-less candidate has nothing to join to, and
+    says so rather than inventing an id."""
+    assert candidate_to_case(_candidate()).decision_id is None
+    assert candidate_to_case(_candidate(provenance={})).decision_id is None
+
+
 def test_suggested_outcome_overrides_observed():
     case = candidate_to_case(_candidate(suggested_expected_outcome="escalate"))
     assert case.expected_outcome == "escalate"

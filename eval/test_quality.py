@@ -153,7 +153,11 @@ async def test_brief_quality_on_escalate_cases():
     for case, final_response in pairs:
         test_case = LLMTestCase(input=case.query, actual_output=final_response)
         record = await measure_and_record(
-            _BRIEF_QUALITY, test_case, eval_id=case.eval_id, dimension=DIM_BRIEF_QUALITY
+            _BRIEF_QUALITY,
+            test_case,
+            eval_id=case.eval_id,
+            dimension=DIM_BRIEF_QUALITY,
+            decision_id=case.decision_id,
         )
         if not record.passed:
             failures.append(record.failure_line())
@@ -175,7 +179,11 @@ async def test_response_clarity_on_recommend_cases():
     for case, final_response in pairs:
         test_case = LLMTestCase(input=case.query, actual_output=final_response)
         record = await measure_and_record(
-            _RESPONSE_CLARITY, test_case, eval_id=case.eval_id, dimension=DIM_RESPONSE_CLARITY
+            _RESPONSE_CLARITY,
+            test_case,
+            eval_id=case.eval_id,
+            dimension=DIM_RESPONSE_CLARITY,
+            decision_id=case.decision_id,
         )
         if not record.passed:
             failures.append(record.failure_line())

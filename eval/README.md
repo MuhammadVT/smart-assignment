@@ -367,6 +367,42 @@ result, and a write that fails (bad path, full disk) is logged and swallowed
 rather than turning an advisory eval red. The *judge call* itself is deliberately
 not swallowed: a judge that cannot score is a real failure and stays loud.
 
+#### Feeding calibration — do the judges agree with humans?
+
+The log is what `scripts/calibrate_judges.py` consumes, so the loop runs with no
+hand-authored file in the middle:
+
+```bash
+pytest eval/test_quality.py                       # 1. judges run, verdicts recorded
+SMART_ASSIGNMENT_USE_JUDGE_CALIBRATION=true \
+  python3 scripts/calibrate_judges.py \
+    --verdicts feedback_data/judge_verdicts.jsonl \
+    --log feedback_data/annotations.jsonl          # 2. vs. the human labels
+```
+
+```
+human labels: 8  judge verdicts: 4  aligned pairs: 1
+dimension                n    kappa   danger  trust
+brief_quality            1     1.00       0%  gate
+composite                4     0.00     100%  distrust
+```
+
+The `--verdicts` reader is chosen by suffix, so the older precomputed `.json`
+mapping still works unchanged. Since the log is append-only, the **latest line per
+`(decision_id, dimension)` wins** — otherwise a case judged on five runs would
+outvote one judged once.
+
+**What makes a pair.** Verdicts join to human labels on `(decision_id, dimension)`:
+
+* `decision_id` — a curated case carries the production decision it came from
+  (`GoldenCase.decision_id`, lifted from the candidate's `provenance` by
+  `eval/case_source.py`). A hand-written golden fixture has none — no human ever
+  labeled it — so it joins only under its own `eval_id`.
+* `dimension` — a holistic 👍/👎 routes to `brief_quality` (escalate) or
+  `response_clarity` (recommend). `rationale_faithfulness` has **no** human
+  counterpart in the annotation vocabulary, so its verdicts feed only the Tier-1
+  *composite*, never a per-dimension pair. That's expected, not a gap in the wiring.
+
 ## Running locally
 
 Needs a configured backend (see `.env.example`); the CI job uses

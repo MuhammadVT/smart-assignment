@@ -22,7 +22,7 @@ cannot yet generate. ``expected_outcome`` is documentation for the 2b capture
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from smart_assignment.mock_customers import SAMPLE_CUSTOMERS
 from smart_assignment.shared.models import CustomerProfile
@@ -68,6 +68,14 @@ class GoldenCase:
     customer: CustomerProfile
     expected_outcome: str  # "recommend" | "escalate" -- narrative target for 2b
     note: str
+    # The production decision this case was curated FROM, when it was curated at
+    # all (see eval/case_source.candidate_to_case). It is the id a human's
+    # feedback on that same decision carries, so it is what a judge verdict and a
+    # human label join on in eval/judge_calibration.py -- without it the link
+    # survives only as an 8-char prefix inside the minted eval_id. ``None`` for
+    # the hand-written fixtures below: no human ever labeled them, so there is
+    # nothing to join to.
+    decision_id: Optional[str] = None
 
 
 def intake_args(customer: CustomerProfile) -> Dict[str, Any]:
