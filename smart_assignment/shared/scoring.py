@@ -136,6 +136,8 @@ def _slot_window_match(
     """Slot-level window_match: how much THIS candidate window covers the
     customer's preferred slot. Returns None when there is no stated preference --
     in the route-slot path the factor is simply dropped (no 0.6 neutral)."""
+    # TODO when calculating the window match, does the size of the prefer window matter? E.g longer window provide more possibility.
+    # We do for overlap, so it does not have to center around the center of the preferred window
     pref = customer.preferred_slot
     if pref is None:
         return None

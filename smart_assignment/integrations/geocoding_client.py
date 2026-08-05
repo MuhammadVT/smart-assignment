@@ -53,6 +53,7 @@ class MockGeocoder:
             return _KNOWN_ADDRESSES[address]
         # Deterministic small offset derived from the address text, so an
         # unknown address always maps to the same nearby point (no randomness).
+        # TODO meaning?
         seed = sum(ord(c) for c in address)
         lat = _HOUSTON_CENTER.latitude + ((seed % 20) - 10) / 100.0
         lng = _HOUSTON_CENTER.longitude + ((seed % 17) - 8) / 100.0
@@ -82,6 +83,7 @@ class MockGeocoder:
 
 
 class SnapshotGeocoder:
+    # TODO snapshot?
     """Replays the geocode results committed in a snapshot dataset's
     ``geocode.json`` (see integrations/snapshot_data.py), so a self-contained eval
     resolves addresses to the *same* coordinates the dataset was frozen with -- no
