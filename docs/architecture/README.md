@@ -426,6 +426,22 @@ newlines) so the specialist can scan and compare options at a glance. The
 prompt-driven layout stays fully grounded — the same `verify_brief` prose scan
 (below) still rejects any figure not in the escalation context.
 
+**The `request` argument is a fixed label, not a payload
+(`prompts.TRIAGE_REQUEST_LINE`).** ADK's `AgentTool` declares `request` as a
+*required* string, so the model must always send one — but the triage agent
+ignores it and loads every fact from session state via `get_escalation_context`.
+Left unspecified, the model filled that hole differently from run to run:
+measured live against sage over 15 escalations of the same prospect, it sent
+four different values, and on 4 of the 15 it pasted the entire
+`recommend_or_escalate` result (805 chars of escaped JSON). With the argument
+pinned, the same 15 runs all sent the one 47-char line.
+That paste is what makes the call fragile — the oversized nested
+blob is where the array-wrapped tool-call arguments come from that ADK's
+argument parser rejects (see `Config.repair_tool_call_args` below). Both
+instructions therefore name one exact short line, and forbid pasting tool
+output into `request`. The repair stays as the backstop; this removes the input
+that triggers it.
+
 **Why an `AgentTool` (consult-and-return), not a peer agent with control
 transfer:** `root_agent` stays in control of the conversation and keeps
 ownership of the `request_input` pause/resume; triage is a bounded call that
