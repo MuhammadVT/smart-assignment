@@ -20,6 +20,7 @@ from eval.judge_calibration import (
     human_labels_from_feedback,
     route_by_outcome,
     trust_band,
+    verdicts_from_jsonl,
     verdicts_from_mapping,
 )
 
@@ -172,3 +173,98 @@ def test_human_labels_from_feedback(tmp_path):
 def test_verdicts_from_mapping():
     verdicts = verdicts_from_mapping({"d1": {"response_clarity": {"passed": True, "score": 0.9}}})
     assert verdicts[0] == JudgeVerdict("d1", "response_clarity", True, 0.9)
+
+
+# --- the durable judge log as a verdict source -----------------------------------
+
+
+def _write_verdict(path, **over):
+    from eval.judge_log import JudgeVerdictRecord, append_verdict
+
+    base = dict(
+        eval_id="case_a",
+        dimension=DIM_RESPONSE_CLARITY,
+        threshold=0.5,
+        passed=True,
+        decision_id="d1",
+        score=0.9,
+    )
+    base.update(over)
+    append_verdict(JudgeVerdictRecord(**base), str(path))
+
+
+def test_verdicts_from_jsonl_matches_the_mapping_source(tmp_path):
+    """Both sources must produce the same JudgeVerdict, so switching the input
+    format can never change a calibration result."""
+    log = tmp_path / "judge_verdicts.jsonl"
+    _write_verdict(log)
+
+    from_log = verdicts_from_jsonl(str(log))
+    from_mapping = verdicts_from_mapping(
+        {"d1": {DIM_RESPONSE_CLARITY: {"passed": True, "score": 0.9}}}
+    )
+    assert from_log == from_mapping == [JudgeVerdict("d1", DIM_RESPONSE_CLARITY, True, 0.9)]
+
+
+def test_verdicts_from_jsonl_latest_line_wins(tmp_path):
+    """The log is append-only: re-judging a case appends. Calibration wants the
+    CURRENT opinion once, not one vote per historical run."""
+    log = tmp_path / "judge_verdicts.jsonl"
+    _write_verdict(log, score=0.9, passed=True)
+    _write_verdict(log, score=0.2, passed=False)
+    _write_verdict(log, decision_id="d2", score=0.7, passed=True)
+
+    verdicts = sorted(verdicts_from_jsonl(str(log)), key=lambda v: v.decision_id)
+    assert verdicts == [
+        JudgeVerdict("d1", DIM_RESPONSE_CLARITY, False, 0.2),
+        JudgeVerdict("d2", DIM_RESPONSE_CLARITY, True, 0.7),
+    ]
+
+
+def test_verdicts_from_jsonl_keeps_dimensions_separate(tmp_path):
+    log = tmp_path / "judge_verdicts.jsonl"
+    _write_verdict(log, dimension=DIM_RESPONSE_CLARITY, score=0.9, passed=True)
+    _write_verdict(log, dimension=DIM_BRIEF_QUALITY, score=0.1, passed=False)
+
+    assert len(verdicts_from_jsonl(str(log))) == 2
+
+
+def test_verdicts_from_jsonl_falls_back_to_the_eval_id(tmp_path):
+    """A row written before decision ids were carried (or for a golden fixture,
+    where the two are the same) still joins -- under its eval_id."""
+    log = tmp_path / "judge_verdicts.jsonl"
+    log.write_text(
+        '{"eval_id": "case_a", "dimension": "response_clarity", "passed": true}\n',
+        encoding="utf-8",
+    )
+    assert [v.decision_id for v in verdicts_from_jsonl(str(log))] == ["case_a"]
+
+
+def test_verdicts_from_jsonl_skips_unjoinable_rows(tmp_path):
+    """A row with no id at all, or no dimension, can't be joined to a human
+    label; keeping it would only inflate the verdict count."""
+    log = tmp_path / "judge_verdicts.jsonl"
+    log.write_text(
+        '{"dimension": "response_clarity", "passed": true}\n'
+        '{"eval_id": "case_b", "decision_id": "d2", "dimension": ""}\n',
+        encoding="utf-8",
+    )
+    assert verdicts_from_jsonl(str(log)) == []
+
+
+def test_verdicts_from_jsonl_missing_log_is_empty(tmp_path):
+    assert verdicts_from_jsonl(str(tmp_path / "nothing.jsonl")) == []
+
+
+def test_judge_log_calibrates_against_human_labels(tmp_path):
+    """End to end over the two real files: the judges' log + the human feedback
+    log agree on a decision id, so a pair is actually formed."""
+    log = tmp_path / "judge_verdicts.jsonl"
+    _write_verdict(log, decision_id="d1", dimension=DIM_RESPONSE_CLARITY, passed=False, score=0.3)
+
+    labels = [HumanLabel(decision_id="d1", outcome="recommend", thumb="down")]
+    report = calibrate(labels, verdicts_from_jsonl(str(log)))
+
+    clarity = report["dimensions"][DIM_RESPONSE_CLARITY]
+    assert clarity["n"] == 1
+    assert clarity["confusion"] == {"tp": 0, "fp": 0, "fn": 0, "tn": 1}  # both say "not good"

@@ -241,6 +241,192 @@ def _maybe_install_sage_response_diagnostic(config: "Config") -> None:
 
 
 # ---------------------------------------------------------------------------
+# Compatibility: repair array-wrapped tool-call arguments
+# ---------------------------------------------------------------------------
+
+# A tool call's arguments are a NAMED mapping: ADK builds a genai ``FunctionCall``
+# from them and pydantic requires a dict. The sage backend intermittently emits them
+# wrapped in a JSON array alongside a stray sibling -- observed verbatim on an
+# ``escalation_triage`` call (abridged):
+#
+#   [{"request": "{\"ok\": true, ..., \"rejected_alternatives\": [\"RTE-4200 ...\",
+#                  \"RTE-4110 - Downtown / Midtown (WED): infeasible - truck capacity\"], ...}"},
+#    ["RTE-4200 ...", "RTE-4110 - Downtown / Midtown (WED): infeasible - truck capacity"]]
+#
+# The first element is the complete, correct argument object. The second is a
+# fragment of the escaped JSON *inside* it that leaked to the top level -- those
+# strings are a verbatim duplicate of the ``rejected_alternatives`` array within
+# ``request``, so nothing is lost by dropping them.
+#
+# ADK's own ``_parse_tool_call_arguments`` already repairs several malformed payloads
+# (dict literals, unquoted keys), but this one is VALID JSON: it parses cleanly to a
+# list and is handed straight to ``types.Part.from_function_call(args=<list>)``, where
+# pydantic raises. That exception escapes the whole agent run -- in eval the case is
+# silently dropped (a green suite that scored fewer cases than it looks), on a live
+# turn the turn dies -- and no retry helps, since a ValidationError is not a
+# retryable API error.
+#
+# The repair is deliberately narrow. A bare array carries no parameter names, so it
+# cannot be a valid argument set for ANY tool -- it is provably debris, not data we
+# might be discarding. So: exactly one object in the array -> use it and log what was
+# dropped; any other shape -> change nothing and let ADK raise exactly as it does
+# today. An argument value is never synthesized.
+
+# Longest payload repr written to a log line, so a malformed-call log entry stays
+# readable (matches the sage response diagnostic above).
+_MAX_LOGGED_PAYLOAD_CHARS = 1000
+
+
+def _coerce_tool_call_args(parsed: Any) -> "tuple[Optional[dict], list]":
+    """Return ``(arguments, discarded)`` for an already-parsed tool-call payload.
+
+    ``arguments`` is the mapping ADK should use, or ``None`` when the payload is not
+    a shape that can be read with certainty -- the caller then leaves it untouched.
+    ``discarded`` holds the non-object siblings dropped from an array-wrapped
+    payload, so every repair can be logged and audited.
+
+    Pure: no logging, no I/O, no imports -- the whole decision is testable offline.
+    """
+    if isinstance(parsed, dict):
+        return parsed, []  # already valid; returned as-is, never copied
+    if not isinstance(parsed, list):
+        return None, []
+    objects = [item for item in parsed if isinstance(item, dict)]
+    if len(objects) != 1:
+        # Zero objects (nothing to use) or several (they may disagree, and picking
+        # one would be a guess) -- neither is ours to repair.
+        return None, []
+    return objects[0], [item for item in parsed if not isinstance(item, dict)]
+
+
+def _install_litellm_tool_args_repair(lite_llm_module: Any) -> None:
+    """Wrap ADK's ``lite_llm._parse_tool_call_arguments`` with the repair above.
+
+    Idempotent, and it never raises: any unexpected failure inside the wrapper falls
+    through to exactly the value ADK would have used without it. Takes the module as
+    an argument (rather than importing it) so a test can drive it with a stub.
+
+    The installed wrapper carries the function it replaced as ``_sa_original``. This
+    patch is process-wide by design (ADK resolves that function as a module global),
+    so that attribute is the supported way to restore ADK's untouched behavior --
+    e.g. a test that needs to observe the unrepaired failure."""
+    original = lite_llm_module._parse_tool_call_arguments
+    if getattr(original, "_sa_tool_args_repair", False):
+        return
+
+    def _repairing_parse(arguments: Any) -> Any:
+        parsed = original(arguments)
+        if isinstance(parsed, dict):
+            return parsed  # the overwhelmingly common path -- identical object out
+        try:
+            repaired, discarded = _coerce_tool_call_args(parsed)
+            if repaired is None:
+                logger.error(
+                    "Tool-call arguments parsed to %s, not an object, in a shape that "
+                    "cannot be repaired safely; passing it through unchanged (ADK will "
+                    "reject it). Raw payload: %s",
+                    type(parsed).__name__,
+                    repr(arguments)[:_MAX_LOGGED_PAYLOAD_CHARS],
+                )
+                return parsed
+            logger.warning(
+                "Repaired array-wrapped tool-call arguments: kept the single argument "
+                "object, discarded %d stray sibling(s): %s",
+                len(discarded),
+                repr(discarded)[:_MAX_LOGGED_PAYLOAD_CHARS],
+            )
+            return repaired
+        except Exception as exc:  # noqa: BLE001 - a compat shim must never break a call
+            logger.warning(
+                "Tool-call argument repair failed (%s); using the unrepaired value.", exc
+            )
+            return parsed
+
+    _repairing_parse._sa_tool_args_repair = True  # type: ignore[attr-defined]
+    _repairing_parse._sa_original = original  # type: ignore[attr-defined]
+    lite_llm_module._parse_tool_call_arguments = _repairing_parse
+
+
+def _maybe_install_litellm_tool_args_repair(config: "Config") -> None:
+    """Install the repair above when ``config.repair_tool_call_args`` is on (the
+    default). Silently skipped when ADK's litellm model module isn't importable, so
+    it never affects a backend that doesn't use it or an offline import."""
+    if not getattr(config, "repair_tool_call_args", True):
+        return
+    try:
+        from google.adk.models import lite_llm  # requires litellm
+    except Exception:  # noqa: BLE001 - the shim is best-effort only
+        return
+    _install_litellm_tool_args_repair(lite_llm)
+
+
+def _maybe_install_sage_hooks(config: "Config") -> None:
+    """Install the process-wide hooks the sage backend needs, each behind its own
+    flag: the raw-response diagnostic (opt-in) and the tool-call-args repair (on by
+    default). Grouped so the sage entry points below can't drift on which hooks they
+    install."""
+    _maybe_install_sage_response_diagnostic(config)
+    _maybe_install_litellm_tool_args_repair(config)
+
+
+# ---------------------------------------------------------------------------
+# Retrying a transient sage request failure
+# ---------------------------------------------------------------------------
+
+
+def _apply_request_retries(llm: Any, config: "Config") -> Any:
+    """Give a LiteLlm-based sage model litellm's own retry, and return it.
+
+    A sage request that times out surfaces as ``litellm.APIConnectionError``, which
+    subclasses ``openai.APIError`` -- so litellm's async wrapper retries it as soon
+    as ``num_retries`` is set on the call. ADK's ``LiteLlm`` merges its
+    ``_additional_args`` into the litellm call, so setting the key there is enough;
+    no wrapping or patching is needed.
+
+    Why this is necessary at all: ADK's eval harness *intends* these to be retried
+    -- it registers a plugin that sets ``HttpRetryOptions(attempts=7)`` -- but that
+    is a google-genai construct and ADK's ``LiteLlm`` never reads it. On the sage
+    path the retry was configured and silently ignored, so one transient timeout
+    lost the whole turn.
+
+    Defensive: an unexpected model object (no ``_additional_args`` dict) is logged
+    and returned untouched rather than raising, and an explicit ``num_retries``
+    already set by the SDK is respected.
+    """
+    attempts = int(getattr(config, "sage_request_attempts", 1) or 1)
+    if attempts <= 1:
+        return llm  # retrying disabled -- prior behavior, exactly
+
+    additional = getattr(llm, "_additional_args", None)
+    if not isinstance(additional, dict):
+        logger.warning(
+            "Sage model %s exposes no litellm argument dict; request retries are "
+            "INACTIVE (%d attempts were requested).",
+            type(llm).__name__,
+            attempts,
+        )
+        return llm
+
+    # litellm counts RETRIES, not attempts: it runs the call once itself and then
+    # retries up to num_retries more times (tenacity stop_after_attempt).
+    additional.setdefault("num_retries", attempts - 1)
+    return llm
+
+
+def _build_sage_llm(config: "Config") -> Any:
+    """The configured sage model object: process hooks installed, direct-agent vs
+    gateway sub-path selected, request retries applied. One place, so the three
+    sage entry points below cannot drift on any of it."""
+    _maybe_install_sage_hooks(config)
+    llm = (
+        get_sage_gateway_llm(config.sage_model)
+        if config.use_sage_gateway
+        else get_sage_llm(config.sage_model)
+    )
+    return _apply_request_retries(llm, config)
+
+
+# ---------------------------------------------------------------------------
 # Internal: async content generation through ADK BaseLlm
 # ---------------------------------------------------------------------------
 
@@ -450,10 +636,7 @@ def get_llm(config: "Config") -> Any:
                provider litellm supports, e.g. "openai/gpt-4o-mini")
     """
     if config.llm_backend == "sage":
-        _maybe_install_sage_response_diagnostic(config)
-        if config.use_sage_gateway:
-            return get_sage_gateway_llm(config.sage_model)
-        return get_sage_llm(config.sage_model)
+        return _build_sage_llm(config)
     if _is_litellm_model(config.model):
         from google.adk.models.lite_llm import LiteLlm  # requires the `litellm` extra
 
@@ -544,12 +727,7 @@ def _generate_tool_call_impl(
     tool through the ADK ``BaseLlm`` (direct agent or gateway); every other backend
     has no tool channel yet, so it degrades to plain text generation."""
     if config.llm_backend == "sage":
-        _maybe_install_sage_response_diagnostic(config)
-        llm = (
-            get_sage_gateway_llm(config.sage_model)
-            if config.use_sage_gateway
-            else get_sage_llm(config.sage_model)
-        )
+        llm = _build_sage_llm(config)
         return _run_coro_blocking(_sage_call_async(llm, prompt, _to_genai_tools(tool)))
 
     # No tool channel on the other backends yet -> text only (JSON mode arrives
@@ -561,12 +739,7 @@ def _generate_text_impl(config: "Config", prompt: str) -> str:
     """The backend-routing body of ``generate_text``, kept separate so the public
     function owns the tracing span and this stays pure LLM-dispatch logic."""
     if config.llm_backend == "sage":
-        _maybe_install_sage_response_diagnostic(config)
-        llm = (
-            get_sage_gateway_llm(config.sage_model)
-            if config.use_sage_gateway
-            else get_sage_llm(config.sage_model)
-        )
+        llm = _build_sage_llm(config)
         return _run_coro_blocking(_generate_via_sage_async(llm, prompt))
 
     if _is_litellm_model(config.model):

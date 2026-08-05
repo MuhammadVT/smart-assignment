@@ -9,12 +9,18 @@ judge-verdicts JSON, and prints (and optionally writes) a per-dimension +
 composite agreement report -- Cohen's kappa, a dangerous-cell rate, and a trust
 band. No decision is changed; nothing is gated.
 
-Verdicts file shape (produced by running the judges over the same decisions):
-    {"<decision_id>": {"response_clarity": {"passed": true, "score": 0.9}, ...}}
+Judge verdicts come from either shape, chosen by the file's suffix:
+
+* ``.jsonl`` -- the durable judge log the judges WRITE as they run (see
+  ``eval/judge_log.py``). This is the normal path: run the judges, then point
+  here. It is append-only, so the latest line per (decision_id, dimension) wins.
+* ``.json``  -- a precomputed mapping, for a hand-authored or exported set:
+  ``{"<decision_id>": {"response_clarity": {"passed": true, "score": 0.9}, ...}}``
 
 Run:
+    pytest eval/test_quality.py            # produces the verdicts
     SMART_ASSIGNMENT_USE_JUDGE_CALIBRATION=true python3 scripts/calibrate_judges.py \\
-        --verdicts eval/data/judge_verdicts.json
+        --verdicts feedback_data/judge_verdicts.jsonl
     ... --log feedback_data/annotations.jsonl --out eval/data/calibration.json --min-n 20
 """
 
@@ -30,8 +36,22 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from eval.annotation_sources import load_labels  # noqa: E402
-from eval.judge_calibration import calibrate, verdicts_from_mapping  # noqa: E402
+from eval.judge_calibration import (  # noqa: E402
+    calibrate,
+    verdicts_from_jsonl,
+    verdicts_from_mapping,
+)
 from smart_assignment.shared.config import DEFAULT_CONFIG  # noqa: E402
+
+
+def _load_verdicts(path: str):
+    """Judge verdicts from either supported source, chosen by suffix: the
+    append-only log the judges write (``.jsonl``) or a precomputed mapping
+    (``.json``). See the module docstring."""
+    if path.lower().endswith(".jsonl"):
+        return verdicts_from_jsonl(path)
+    with open(path, "r", encoding="utf-8") as handle:
+        return verdicts_from_mapping(json.load(handle))
 
 
 def _print_report(report: dict) -> None:
@@ -72,7 +92,8 @@ def main() -> None:
     parser.add_argument(
         "--verdicts",
         required=True,
-        help="Precomputed judge-verdicts JSON: {decision_id: {dimension: {passed, score}}}.",
+        help="Judge verdicts: the .jsonl log the judges write (eval/judge_log.py), or a "
+        "precomputed .json mapping {decision_id: {dimension: {passed, score}}}.",
     )
     parser.add_argument("--out", default=None, help="Write the full report JSON here.")
     parser.add_argument(
@@ -101,8 +122,7 @@ def main() -> None:
         return
 
     labels = load_labels(args.source, log=args.log)
-    with open(args.verdicts, "r", encoding="utf-8") as handle:
-        verdicts = verdicts_from_mapping(json.load(handle))
+    verdicts = _load_verdicts(args.verdicts)
 
     note_tagger = None
     if not args.no_note_tagging:

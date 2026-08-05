@@ -40,6 +40,46 @@ from smart_assignment.triage.verifier import collect_grounding, verify_brief
 # the after-model backstop can verify a brief without re-deriving the trace.
 _STATE_TRIAGE_GROUNDING_KEY = "sa_triage_grounding"
 
+# How many times check_brief_grounding will hand back revision feedback within one
+# triage invocation before telling the agent to finalize (see that tool, and
+# _STATE_TRIAGE_CHECK_COUNT_KEY below). Two = the first check plus one revision.
+#
+# Each round costs a FULL regeneration of the brief -- the agent passes the whole
+# brief as the tool's argument, then writes it again as its final answer -- and a
+# brief generation is the only call in this system measured to reach the sage
+# request timeout. So an unbounded revision loop multiplies the chance the whole
+# turn dies, while adding no guarantee: agent.py's _finalize_brief backstop always
+# re-verifies the final brief and appends a caveat naming anything still
+# ungrounded, whether or not the agent ever self-checked.
+MAX_GROUNDING_CHECKS = 2
+_STATE_TRIAGE_CHECK_COUNT_KEY = "sa_triage_check_count"
+
+
+def decision_thresholds(config: Config) -> dict:
+    """The decision bars an escalation brief legitimately needs to name.
+
+    An escalation is *defined* by a threshold it failed to clear, and the brief is
+    explicitly asked to name "the specific gate that tripped ... with the exact
+    numbers". Those bars used to be absent from the context, so the deterministic
+    verifier flagged them as ungrounded even when the context's own
+    ``review_reason`` had handed the agent the number ("No route-slot cleared the
+    55% auto-assign bar"). The agent could only satisfy the check by dropping the
+    figure, which cost it two or three full rewrites to discover.
+
+    Publishing them here fixes that at the source: they are real facts of the
+    decision, so they belong in the evidence packet, and ``collect_grounding``
+    picks them up like any other fact. Fractions (0.55), matching how every other
+    ratio in the context is stored -- the verifier's percent-vs-fraction rule lets
+    a brief write "55%".
+    """
+    return {
+        "auto_assign_score_bar": config.route_slot_score_threshold,
+        "utilization_ceiling": config.max_utilization_after_assignment,
+        "safe_utilization": round(
+            config.max_utilization_after_assignment - config.capacity_buffer_safety_margin, 4
+        ),
+    }
+
 
 def build_escalation_context(
     customer: CustomerProfile,
@@ -64,6 +104,7 @@ def build_escalation_context(
     packet = build_evidence_packet(customer, evaluations, config)
     return {
         "ok": True,
+        "thresholds": decision_thresholds(config),
         "customer": {
             "name": customer.name,
             "address": customer.address,
@@ -158,6 +199,10 @@ def get_escalation_context(tool_context: ToolContext) -> dict:
     # Stash the groundable facts so check_brief_grounding (and the after-model
     # backstop) can verify the brief without re-deriving the whole trace.
     tool_context.state[_STATE_TRIAGE_GROUNDING_KEY] = collect_grounding(context)
+    # Every triage invocation starts here, so this is where the per-invocation
+    # revision budget resets -- a second escalation in the same session gets its
+    # own full budget rather than inheriting the first one's spent count.
+    tool_context.state[_STATE_TRIAGE_CHECK_COUNT_KEY] = 0
     return context
 
 
@@ -170,19 +215,26 @@ def check_brief_grounding(tool_context: ToolContext, brief: str) -> dict:
     do not invent replacements -- then call this again.
 
     Returns:
-      {"ok": true, "message": "..."} when everything is grounded, or
+      {"ok": true, "message": "..."} when everything is grounded;
       {"ok": false, "ungrounded_numbers": [...], "ungrounded_routes": [...],
        "ungrounded_days": [...], "ungrounded_times": [...],
-       "message": "<what to fix>"}. Returns {"ok": false, "error": ...} if
-      get_escalation_context hasn't run yet.
+       "message": "<what to fix>"} when something is not grounded; that payload
+      also carries "stop": true once the revision budget is spent, meaning: do
+      NOT check again -- drop whatever is still flagged and finalize the brief.
+      Returns {"ok": false, "error": ...} if get_escalation_context hasn't run yet.
     """
     grounding = tool_context.state.get(_STATE_TRIAGE_GROUNDING_KEY)
     if not grounding:
         return {"ok": False, "error": "Call get_escalation_context first."}
+
+    checks_used = int(tool_context.state.get(_STATE_TRIAGE_CHECK_COUNT_KEY) or 0) + 1
+    tool_context.state[_STATE_TRIAGE_CHECK_COUNT_KEY] = checks_used
+
     result = verify_brief(brief or "", grounding)
     if result.ok:
         return {"ok": True, "message": "All figures and routes in the brief are grounded."}
-    return {
+
+    payload = {
         "ok": False,
         "ungrounded_numbers": result.ungrounded_numbers,
         "ungrounded_routes": result.ungrounded_routes,
@@ -190,3 +242,16 @@ def check_brief_grounding(tool_context: ToolContext, brief: str) -> dict:
         "ungrounded_times": result.ungrounded_times,
         "message": result.caveat(),
     }
+    if checks_used >= MAX_GROUNDING_CHECKS:
+        # Budget spent. ``ok`` stays honest -- the brief really isn't fully
+        # grounded -- and ``stop`` says what to do about it. Nothing is hidden by
+        # stopping: agent.py's _finalize_brief re-verifies the final brief
+        # deterministically and appends a caveat naming anything still ungrounded,
+        # so the guarantee holds without another costly rewrite round.
+        payload["stop"] = True
+        payload["message"] = (
+            f"{result.caveat()} Revision budget reached ({MAX_GROUNDING_CHECKS} checks) "
+            "-- do NOT call this tool again. Drop or correct the flagged items and "
+            "output your brief now; anything left will be flagged automatically."
+        )
+    return payload

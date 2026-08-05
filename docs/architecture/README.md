@@ -404,7 +404,8 @@ recommend_or_escalate -> requires_human_review?
   escalation_triage   (AgentTool: a second LlmAgent, consult-and-return)
      └─ get_escalation_context (reads session state: the profile + last
         recommendation; re-derives every feasible/infeasible route with its
-        raw facts + any split model opinions)  -> composes a specialist brief
+        raw facts, the decision thresholds it was judged against, + any split
+        model opinions)  -> composes a specialist brief
         in a fixed, scannable layout:
         SITUATION · ROOT CAUSE · OPTIONS (ranked, most-workable first, each with
         its state / action / trade-off) · RECOMMENDATION (advisory starting point)
@@ -573,13 +574,39 @@ Two enforcement points:
 
 ```
 triage agent drafts brief
-   ├─ (cooperative) calls check_brief_grounding(brief) -> revise until ok
+   ├─ (cooperative) calls check_brief_grounding(brief) -> revise
+   │                bounded: MAX_GROUNDING_CHECKS (2) -- see below
    └─ (deterministic) after_model_callback (_finalize_brief):
         1. normalize_brief -> reflow the FINAL brief into the one canonical
            layout (headers/options/labels each on their own line)
         2. verify_brief -> if any figure/route is still ungrounded, append a
            caveat naming them ("⚠ Unverified — figures not found …")
 ```
+
+**The decision thresholds are facts (`decision_thresholds`, `triage/context.py`).**
+An escalation is *defined* by a bar it failed to clear, and the brief's ROOT CAUSE
+section is explicitly asked to name that gate "with the exact numbers". Those bars
+were originally absent from the escalation context, so the verifier flagged them
+as invented — even though the context's own `review_reason` had handed the agent
+the figure ("No route-slot cleared the **55%** auto-assign bar"). The instruction
+was unwinnable: the only way to pass the check was to drop the number, and the
+agent needed two or three **full brief rewrites** to discover that. The context now
+publishes a `thresholds` block (auto-assign score bar, utilization ceiling, safe
+utilization line) as fractions, exactly like every other ratio it carries, and
+`collect_grounding` picks them up like any other fact. Nothing is loosened — a
+fabricated bar ("63%") is still flagged.
+
+**The revision loop is bounded (`MAX_GROUNDING_CHECKS`).** Every grounding round
+costs a *full* regeneration of the brief — the agent passes the whole brief as the
+tool's argument, then writes it again as its final answer — and a brief generation
+is the only call in this system measured to reach the sage request timeout (~10s
+median, with a tail past the 30s `SAGE_TIMEOUT`, versus ~2.5s for a root-agent tool
+call). An unbounded loop therefore multiplies the chance the whole turn dies while
+adding **no** guarantee, because `_finalize_brief` re-verifies the final brief and
+caveats anything ungrounded regardless. After two checks the tool returns
+`"stop": true` alongside the still-flagged items; `ok` stays honest about
+groundedness, and `stop` says what to do about it. The budget resets in
+`get_escalation_context`, so each triage invocation gets its own.
 
 **Layout normalization (`triage/formatting.py`).** The brief is LLM-written, so
 its formatting drifts turn to turn — one escalation comes back tidy and
@@ -639,6 +666,91 @@ logic — `get_llm()` and `generate_text()` dispatch to whichever sibling
 the loop-binding dance below, the response diagnostic) is unchanged. The flag
 is off by default, so the direct-agent path is reproduced exactly unless a
 caller opts in.
+
+### Request timeout (`SAGE_TIMEOUT`, set to 40s)
+
+The Sage SDK applies `SAGE_TIMEOUT` (its own env var, read directly — not through
+this repo's `Config`, same as `LLM_GATEWAY_*`) as an **aiohttp total-request
+timeout**, defaulting to 30s. That default is too tight here, and the reason is
+specific rather than general slowness: measurement showed the only call shape that
+ever reaches the ceiling is the **escalation-triage agent writing its brief**
+(~1000 characters of prose, ~10s median, tail reaching 30–31s). A root-agent tool
+call is ~2.5s and never timed out; the root agent's own ~1000-character narration
+is ~5.3s and never timed out — so it is not output length alone, the triage task
+itself is heavier to reason through.
+
+A timeout there does not degrade one call; it aborts the whole agent run. `.env`
+therefore sets `SAGE_TIMEOUT=40`, clearing the observed tail while still failing a
+genuinely wedged request promptly. This raises the ceiling — it does not make
+anything faster; the latency work itself is the triage changes above.
+
+### Retrying a transient request failure (`Config.sage_request_attempts`, default 2)
+
+Raising the timeout only helps a call that is *slow*. A call that genuinely blows
+past 40s is lost — and it takes the whole agent turn with it, because nothing
+downstream re-issues it.
+
+ADK's eval harness *intends* otherwise: it registers a plugin that sets
+`HttpRetryOptions(attempts=7, …)` on the request. But that is a **google-genai**
+construct, and ADK's `LiteLlm` never reads `retry_options` or `http_options` and
+passes no `num_retries` to litellm — so on the sage path the retry is configured
+and silently ignored. Verified against the installed google-adk: zero references
+to either field in `lite_llm.py`.
+
+litellm's own retry does work here, because a sage request timeout surfaces as
+`litellm.APIConnectionError`, which subclasses `openai.APIError` — one of the
+three types litellm's async wrapper retries once `num_retries` is set. And
+`LiteLlm` merges its `_additional_args` into the litellm call, so setting the key
+there is enough: no wrapping, no patching.
+
+`_apply_request_retries` (`shared/llm.py`) does exactly that, translating
+*attempts* (what a human reasons about) into litellm's *retries* (`attempts - 1`).
+`sage_request_attempts = 1` disables it and reproduces prior behavior exactly.
+The retry is immediate — litellm picks `constant_retry` with no backoff for an
+`APIError`, which is the right shape for a latency spike (a rate-limit error gets
+exponential backoff instead). Bounded on purpose: with `SAGE_TIMEOUT=40` the worst
+case is 2 × 40s on one call; if a second attempt also times out, the backend is
+genuinely unwell and failing is the honest outcome.
+
+### Array-wrapped tool-call arguments (`Config.repair_tool_call_args`, on by default)
+
+A tool call's arguments are a *named mapping* — ADK builds a genai `FunctionCall`
+from them, and pydantic requires a `dict`. The sage backend intermittently emits
+them wrapped in a JSON array beside a stray sibling; observed verbatim on an
+`escalation_triage` call:
+
+```
+[{"request": "{...the decision JSON, including rejected_alternatives...}"},
+ ["RTE-4200 …", "RTE-4110 - Downtown / Midtown (WED): infeasible — truck capacity"]]
+```
+
+The first element is the complete, correct argument object; the second is a
+fragment of the escaped JSON *inside* it that leaked to the top level (those
+strings duplicate the `rejected_alternatives` array within `request`, so nothing
+is lost by dropping them). ADK's own `_parse_tool_call_arguments` repairs several
+malformed payloads, but this one is **valid JSON** — it parses cleanly to a
+`list`, is handed to `types.Part.from_function_call(args=<list>)`, and pydantic
+raises. That exception escapes the entire agent run: in eval the case is silently
+dropped (a green suite that scored fewer cases than it appears to), on a live turn
+the turn dies. No retry helps — a `ValidationError` is not a retryable API error.
+
+`shared/llm.py`'s `_install_litellm_tool_args_repair` wraps that one ADK function.
+The repair is deliberately narrow, because a bare array carries no parameter names
+and so cannot be a valid argument set for *any* tool — it is provably debris, not
+data:
+
+| Payload | Behavior |
+|---|---|
+| A well-formed object | Returned untouched — the same object, not a copy |
+| An array with exactly one object | That object is used; the discarded siblings are logged |
+| Anything else (no object, or several) | Passed through unchanged → ADK raises, loudly, as before |
+
+An argument value is never synthesized, and the wrapper never raises: any
+unexpected failure inside it falls through to the value ADK would have used.
+Unlike the opt-in flags elsewhere in this document it defaults **on**
+(`SMART_ASSIGNMENT_REPAIR_TOOL_CALL_ARGS=false` to disable), because it provably
+cannot change a healthy call — it only ever fires on a payload that would
+otherwise crash.
 
 ## Tracing & observability (`shared/tracing.py`, opt-in)
 
@@ -823,7 +935,29 @@ this just makes the *backend-native* curation path viable too.
 LLM, CODE}` means an LLM-as-judge score or a deterministic code check can flow
 through the *same* record, log, and OTLP span later — so the existing eval
 judges (`eval/deepeval_llm.py`, `eval/sage_judge_llm.py`) can unify with human
-ground truth without a second mechanism. Curation (`feedback/curate.py`) only
+ground truth without a second mechanism.
+
+**The machine half of that ground truth (`eval/judge_log.py`).** The automated
+judges now *record* what they scored, instead of discarding it: every verdict
+from `eval/test_quality.py` and `eval/test_rationale_faithfulness.py` — pass and
+fail — is appended to `Config.judge_log_path` (default
+`feedback_data/judge_verdicts.jsonl`), one self-describing JSONL record per line,
+deliberately mirroring `feedback/store.py`'s format and its defensive-write
+discipline. The two logs are counterparts: human labels and machine verdicts on
+the same quality dimensions, joining on `(decision_id, dimension)` — which is
+exactly the pair `eval/judge_calibration.py` needs, and the input
+`scripts/calibrate_judges.py` documents but nothing previously produced. They
+stay *separate files* on purpose: the annotations log is the production audit
+trail of judgments on real customer decisions, this is eval-run output, and
+merging them would mix provenance domains and let machine rows reach human-label
+curation. Each record separates `judge` (the resolved `ROLE_QUALITY_JUDGE` model
+and backend) from `run` (the dataset + product model provenance
+`eval/dataset.run_provenance` already stamps on captures), so a score change is
+attributable to the agent, the judge, or the data rather than guessed. Recording
+is observational — it changes no score or test result, needs no `use_*` flag
+because it cannot regress behavior, and the path itself is the switch (empty
+records nothing); a failed *write* is swallowed, while a failed *judge call*
+still fails the eval. Curation (`feedback/curate.py`) only
 reads HUMAN records — those are the ground truth the auto-judges calibrate
 against — and emits *candidate* cases for a human to review and promote into
 `eval/golden_cases.py`. A `suggested_expected_outcome` is filled in only when the
@@ -881,6 +1015,23 @@ label, no schema change), **Phoenix** (annotations on the decision trace, today)
 or **Langfuse** (scores, later) — all normalized by the shared parser, with the live
 client calls lazily imported and defensive. No replay and no data source: calibration
 needs only the `(human_label, judge_verdict)` pairs that already exist.
+
+**Where the judge half now comes from.** `verdicts_from_jsonl` reads the durable
+judge log (`eval/judge_log.py`) the judges write as they run, so the harness's
+verdict side is *produced by running the judges* rather than hand-authored:
+`pytest eval/test_quality.py` then `scripts/calibrate_judges.py --verdicts
+feedback_data/judge_verdicts.jsonl`. The CLI picks the reader by suffix, so the
+precomputed `.json` mapping still works unchanged. Because the log is append-only,
+the **latest line per `(decision_id, dimension)` wins** — the same "latest record
+per decision" rule `feedback/curate.py` applies to the human log, so a case
+re-judged five times weighs the same as one judged once rather than five times as
+much. The join itself is `(decision_id, dimension)`, which is why a curated case
+carries `GoldenCase.decision_id` end to end (`eval/case_source.py` lifts it from
+the candidate's `provenance`, and the judge tests pass it to `measure_and_record`):
+the minted `eval_id` only encodes its first 8 characters, so without the field the
+link back to the human's label on that same decision would mean parsing an id out
+of a name. A hand-written fixture has no `decision_id` — no human ever labeled it,
+so there is nothing to join to, and it participates only as its own `eval_id`.
 
 ### Self-contained snapshot datasets — scoring the model, offline, in CI
 

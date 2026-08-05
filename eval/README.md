@@ -17,6 +17,7 @@ live LLM backend** and are kept separate from the hermetic tests.
 | `test_eval.py` | The pytest entry point that runs `AgentEvaluator` (trajectory, full dataset). |
 | `capture.py` | Runs the live agent once per case to record its real final response + whether it escalated (Phase 2b). |
 | `test_response_match.py` | Separate pytest entry point: `response_match_score`, scoped to captured cases known NOT to have escalated. See its module docstring for why escalate cases can't be scored this way at all. |
+| `inference_guard.py` | Fails the run when ADK *drops* an eval case (a crashed inference) instead of scoring it — otherwise a dropped case is indistinguishable from a passing one. Used by `test_eval.py` and `test_response_match.py`. |
 | `case_selection.py` | Owns the `SMART_ASSIGNMENT_EVAL_IDS` subset knob for the **test runners** (`test_eval.py`, `test_quality.py`, `test_rationale_faithfulness.py`): local-only, rejected under CI, warns when it narrows. Also exposes `filter_cases_by_ids` — the explicit-subset primitive `capture.py`'s `--ids` uses (capture does not read the env var). |
 | `deepeval_llm.py` | `SmartAssignmentDeepEvalLLM` — adapts this repo's own `generate_text` (any `SMART_ASSIGNMENT_LLM_BACKEND`) to DeepEval's judge-model interface. |
 | `test_quality.py` | Separate pytest entry point (Phase 3a): DeepEval G-Eval `brief_quality`/`response_clarity`, scored directly against captured `{final_response, escalated}` data — no ADK dataset involved. |
@@ -26,19 +27,88 @@ live LLM backend** and are kept separate from the hermetic tests.
 
 **Phase 2a — trajectory only.** `test_config.json` sets `tool_trajectory_avg_score`
 only. That checks the agent drives the pipeline correctly —
-`intake_customer` → `find_candidate_routes` → `evaluate_and_score_routes` →
-`recommend_or_escalate` — and catches structural regressions (a dropped or
-reordered tool, or the address-resolution branch firing when it shouldn't).
+`intake_customer` → `recommend_or_escalate` — and catches structural regressions
+(a dropped or reordered tool, or the address-resolution branch firing when it
+shouldn't).
 
-That metric runs with `match_type: IN_ORDER`, not ADK's `EXACT` default: those
-four calls must all appear, in that order, with exactly the expected args, but
-**extra trailing calls are tolerated**. That matters because the two escalate
-cases also hand off to a human — `escalation_triage` (when
-`SMART_ASSIGNMENT_USE_ESCALATION_TRIAGE` is on, the default) and ADK's
-`adk_request_input`. Their only arguments are model-authored prose that differs
-every run, so they can't be pinned in the dataset without making the suite
-permanently flaky. Under `EXACT` both escalate cases fail. See the comment on
-`_PIPELINE_AFTER_INTAKE` in `golden_cases.py`.
+Only the **required** steps are pinned. `find_candidate_routes` and
+`evaluate_and_score_routes` are not: `recommend_or_escalate` geocodes,
+constraint-checks and scores internally, so the default flow goes straight from
+intake to the decision and calls neither (see `smart_assignment/prompts.py`).
+They stay available as on-demand tools for a user who asks to see the nearby
+routes or per-route scores first.
+
+That metric runs with `match_type: IN_ORDER`, not ADK's `EXACT` default: the
+pinned calls must appear, in that order, with exactly the expected args, but
+**extra calls are tolerated anywhere**. That matters twice over: for the
+on-demand tools above, and because the two escalate cases also hand off to a
+human — `escalation_triage` (when `SMART_ASSIGNMENT_USE_ESCALATION_TRIAGE` is on,
+the default) and ADK's `adk_request_input`. Their only arguments are
+model-authored prose that differs every run, so they can't be pinned in the
+dataset without making the suite permanently flaky. Under `EXACT` both escalate
+cases fail. See the comment on `_PIPELINE_AFTER_INTAKE` in `golden_cases.py`.
+
+### A dropped case is a failure, not a pass (`inference_guard.py`)
+
+ADK deliberately swallows a per-case inference failure so one bad case can't take
+down the rest of the run: `LocalEvalService` logs ``Inference failed for eval case
+`X` ``, marks that `InferenceResult` `FAILURE`, and returns it. `AgentEvaluator`
+groups results *by eval id*, so a dropped case simply isn't a key — no metric
+result, no failure, no mention in the summary.
+
+That means **a dropped case looks exactly like a case that passed.** A run whose
+two escalate cases both crashed (a backend timeout, a malformed model reply)
+reports `1 passed`, with the score quietly computed over the survivors. Two real
+defects hid behind that, so both live entry points now wrap
+`AgentEvaluator.evaluate()` in `fail_on_dropped_cases()`, which observes each
+`InferenceResult` as it streams past and raises afterwards, naming every dropped
+case and its error.
+
+ADK's behavior is unchanged — cases still don't take each other down and every
+surviving case is scored exactly as before. Only the *verdict* changes: the run
+now fails instead of silently under-scoring. A metric failure raised by
+`AgentEvaluator` itself still wins (it's the more specific failure); the drops are
+logged alongside it.
+
+#### Why cases still get dropped — and what it is *not*
+
+Dropped cases are Sage request timeouts (`SAGE_TIMEOUT`, set to `40` in `.env`;
+see `docs/architecture/README.md`'s "Request timeout" section). Two plausible
+causes have been investigated and closed out, so nobody has to re-run them:
+
+**It is not the triage rewrite loop.** That loop used to burn two or three full
+brief regenerations per escalation because the verifier flagged the very
+thresholds the context handed the agent. Fixed — the bars are published as facts
+and the loop is bounded, so grounding now passes on the first check.
+
+**It is not eval concurrency.** `AgentEvaluator` builds its `InferenceConfig()`
+with defaults and exposes no override, so every case infers concurrently (ADK's
+default is `4`). The obvious hypothesis was that this inflates per-call latency
+until a call crosses the timeout. A sweep of the full golden set at 1 / 2 / 4,
+three runs each, says otherwise:
+
+| parallelism | green | median wall clock |
+|---|---|---|
+| 1 | 1/3 | 226s |
+| 2 | 1/3 | 183s |
+| 4 | 1/3 | 92s |
+
+Identical reliability at 2.5× the wall clock, and the dropped cases span
+**recommend and escalate alike at every setting**. That is the signature of
+backend latency variance, not contention. (An earlier "one case at a time is
+greener" reading was confounded: a single case makes a quarter of the calls, so a
+quarter of the exposure to a spike.)
+
+A `pinned_parallelism()` knob was built to run that sweep and then removed — it
+changed nothing at ADK's default and cost a monkeypatch of ADK internals to keep.
+`git log` has it if a genuinely contended environment ever needs it back.
+
+**What is left** is per-call latency variance on the Sage backend itself. That is
+now handled by *tolerating* it rather than chasing it: `Config.sage_request_attempts`
+(default 2) makes a timed-out sage request retry instead of being lost. ADK's eval
+harness registers a retry plugin, but it configures a google-genai construct that
+ADK's `LiteLlm` never reads — so on this path the retry was silently inactive. See
+`docs/architecture/README.md`'s "Retrying a transient request failure".
 
 `intake_customer`'s expected arguments are the **known ground-truth fields** of
 each mock customer (derived from the fixture, not invented), so the trajectory
@@ -288,6 +358,109 @@ Same `SMART_ASSIGNMENT_EVAL_IDS` cost-control knob as everywhere else;
 resampling — routeslot's own resampling only exists on its grounded-
 *escalation* path, `Config.use_grounded_route_slot_escalation`, off by
 default).
+
+### Recording judge verdicts — `eval/judge_log.py`
+
+A judge score is otherwise **ephemeral**: it lives on the metric object for one
+loop iteration and is gone when the process exits. Only *failures* reach the
+assertion message, so a passing `brief_quality` told you nothing about whether it
+scored 0.55 or 0.95 — and a judge that drifts because the *judge model* changed
+(not the agent) was invisible.
+
+Every verdict from both files above — pass **and** fail — is now appended to a
+durable JSONL log, the machine-verdict sibling of the human-feedback log
+(`feedback_data/annotations.jsonl`). One self-describing record per line:
+
+```jsonc
+{
+  "eval_id": "bayou_city_bistro_recommend",
+  "decision_id": "bayou_city_bistro_recommend",   // what a human label joins on
+  "dimension": "response_clarity",                 // the judge's name
+  "score": 0.4, "threshold": 0.5, "passed": false,
+  "reason": "…the judge's own explanation…",
+  "output_excerpt": "I have successfully analyzed…",
+  "output_ref": "sha256:9f2c…",                    // the full judged text, hashed
+  "judged_at": "2026-08-04T17:31:02+00:00",
+  "judge": {"backend": "standard", "model": "gemini-3.1-flash-lite", "metric": "GEval"},
+  "run":   {"dataset": {"name": "mock", …}, "backend": "…", "model": "…"}
+}
+```
+
+`judge` (who scored) is kept separate from `run` (the dataset + product model the
+judged output came from — the same provenance block `eval/capture.py` records) so
+a score change is *attributable*: did the agent change, or the judge? `output_ref`
+answers the same question for the text itself, which matters most for
+`test_rationale_faithfulness`, whose prose is regenerated every run and stored
+nowhere else.
+
+```bash
+# Where verdicts land. The path IS the switch -- set it empty to record nothing.
+SMART_ASSIGNMENT_JUDGE_LOG_PATH=feedback_data/judge_verdicts.jsonl   # default
+
+# Read the last few verdicts
+python3 -c "from eval.judge_log import read_verdicts; \
+  [print(r.dimension, r.eval_id, r.score, r.passed) for r in read_verdicts()]"
+```
+
+Recording is purely observational — it changes no score, threshold, or test
+result, and a write that fails (bad path, full disk) is logged and swallowed
+rather than turning an advisory eval red. The *judge call* itself is deliberately
+not swallowed: a judge that cannot score is a real failure and stays loud.
+
+#### Feeding calibration — do the judges agree with humans?
+
+The log is what `scripts/calibrate_judges.py` consumes, so the loop runs with no
+hand-authored file in the middle:
+
+```bash
+pytest eval/test_quality.py                       # 1. judges run, verdicts recorded
+SMART_ASSIGNMENT_USE_JUDGE_CALIBRATION=true \
+  python3 scripts/calibrate_judges.py \
+    --verdicts feedback_data/judge_verdicts.jsonl \
+    --log feedback_data/annotations.jsonl          # 2. vs. the human labels
+```
+
+Judging the four built-in golden fixtures produces verdicts that pair with
+*nothing*, because no human ever labeled an invented fixture:
+
+```
+human labels: 8  judge verdicts: 6  aligned pairs: 0
+dimension                n    kappa   danger  trust
+composite                0      n/a      n/a  insufficient
+```
+
+Pairs only form over cases curated from decisions a human actually saw. Judging
+those (they carry the real `decision_id`; see below) is what the report is for:
+
+```
+human labels: 8  judge verdicts: 4  aligned pairs: 0
+dimension                n    kappa   danger  trust
+composite                4     0.00     100%  distrust
+
+composite - top disagreements (judge vs human):
+  [holistic] judge_passed_human_rejected 1210bd3e4a984ff0bfb72a5426af3ed6
+```
+
+Read that as: on all 4 decisions, the judge said "fine" where the human said "no"
+— a 100% dangerous-cell rate, hence `distrust`. (`aligned_pairs` counts only
+*per-dimension* pairs; these are Tier-1 composite pairs, for the reason in the
+next paragraph.)
+
+The `--verdicts` reader is chosen by suffix, so the older precomputed `.json`
+mapping still works unchanged. Since the log is append-only, the **latest line per
+`(decision_id, dimension)` wins** — otherwise a case judged on five runs would
+outvote one judged once.
+
+**What makes a pair.** Verdicts join to human labels on `(decision_id, dimension)`:
+
+* `decision_id` — a curated case carries the production decision it came from
+  (`GoldenCase.decision_id`, lifted from the candidate's `provenance` by
+  `eval/case_source.py`). A hand-written golden fixture has none — no human ever
+  labeled it — so it joins only under its own `eval_id`.
+* `dimension` — a holistic 👍/👎 routes to `brief_quality` (escalate) or
+  `response_clarity` (recommend). `rationale_faithfulness` has **no** human
+  counterpart in the annotation vocabulary, so its verdicts feed only the Tier-1
+  *composite*, never a per-dimension pair. That's expected, not a gap in the wiring.
 
 ## Running locally
 

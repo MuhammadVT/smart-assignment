@@ -40,6 +40,10 @@ already read. ``SMART_ASSIGNMENT_EVAL_NUM_RUNS`` does **not** apply here --
 same reasoning as ``capture.py``: nothing in this file re-runs the live agent,
 only the judge call scores ALREADY-captured text.
 
+Every verdict -- pass AND fail -- is recorded to the durable judge log (see
+``eval/judge_log.py``), because only failures reach the assertion message: a
+passing score would otherwise leave no trace of whether it scored 0.55 or 0.95.
+
 Advisory, needs a live LLM backend + the ``eval-quality`` extra
 (``pip install -e ".[dev,eval-quality]"``), NOT in the hermetic ``tests/`` suite
 (``testpaths`` in ``pyproject.toml``). Each test skips cleanly (not a failure)
@@ -75,6 +79,8 @@ from eval.capture import load_captured_results
 from eval.case_selection import select_cases
 from eval.deepeval_llm import SmartAssignmentDeepEvalLLM
 from eval.golden_cases import GOLDEN_CASES, GoldenCase
+from eval.judge_calibration import DIM_BRIEF_QUALITY, DIM_RESPONSE_CLARITY
+from eval.judge_log import measure_and_record
 from smart_assignment.shared.config import DEFAULT_CONFIG, ROLE_QUALITY_JUDGE
 
 # Starting points, not calibrated -- deepeval's own GEval default (0.5) too.
@@ -146,12 +152,15 @@ async def test_brief_quality_on_escalate_cases():
     failures = []
     for case, final_response in pairs:
         test_case = LLMTestCase(input=case.query, actual_output=final_response)
-        await _BRIEF_QUALITY.a_measure(test_case)
-        if _BRIEF_QUALITY.score < _BRIEF_QUALITY.threshold:
-            failures.append(
-                f"{case.eval_id}: {_BRIEF_QUALITY.score:.2f} < "
-                f"{_BRIEF_QUALITY.threshold} -- {_BRIEF_QUALITY.reason}"
-            )
+        record = await measure_and_record(
+            _BRIEF_QUALITY,
+            test_case,
+            eval_id=case.eval_id,
+            dimension=DIM_BRIEF_QUALITY,
+            decision_id=case.decision_id,
+        )
+        if not record.passed:
+            failures.append(record.failure_line())
     assert not failures, "brief_quality below threshold:\n" + "\n".join(failures)
 
 
@@ -169,10 +178,13 @@ async def test_response_clarity_on_recommend_cases():
     failures = []
     for case, final_response in pairs:
         test_case = LLMTestCase(input=case.query, actual_output=final_response)
-        await _RESPONSE_CLARITY.a_measure(test_case)
-        if _RESPONSE_CLARITY.score < _RESPONSE_CLARITY.threshold:
-            failures.append(
-                f"{case.eval_id}: {_RESPONSE_CLARITY.score:.2f} < "
-                f"{_RESPONSE_CLARITY.threshold} -- {_RESPONSE_CLARITY.reason}"
-            )
+        record = await measure_and_record(
+            _RESPONSE_CLARITY,
+            test_case,
+            eval_id=case.eval_id,
+            dimension=DIM_RESPONSE_CLARITY,
+            decision_id=case.decision_id,
+        )
+        if not record.passed:
+            failures.append(record.failure_line())
     assert not failures, "response_clarity below threshold:\n" + "\n".join(failures)

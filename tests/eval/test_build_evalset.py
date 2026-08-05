@@ -14,7 +14,12 @@ import pathlib
 from google.adk.evaluation.eval_set import EvalSet
 
 from eval.build_evalset import build_eval_set, load_captured, render_dataset
-from eval.golden_cases import GOLDEN_CASES, expected_trajectory, intake_args
+from eval.golden_cases import (
+    _PIPELINE_AFTER_INTAKE,
+    GOLDEN_CASES,
+    expected_trajectory,
+    intake_args,
+)
 
 _DATASET_PATH = (
     pathlib.Path(__file__).parents[2] / "eval" / "data" / "slot_recommendation.test.json"
@@ -72,18 +77,35 @@ def test_load_captured_returns_dict():
     assert isinstance(load_captured(), dict)
 
 
-def test_each_case_has_the_full_pipeline_trajectory():
+def test_each_case_has_the_required_pipeline_trajectory():
+    # Compared against _PIPELINE_AFTER_INTAKE itself, not a copy of it: a literal
+    # duplicated here is exactly what let the dataset keep asserting a pipeline the
+    # agent had stopped driving (see test_pinned_trajectory_excludes_on_demand_tools).
     eval_set = EvalSet.model_validate(build_eval_set())
-    expected_names = [
-        "intake_customer",
-        "find_candidate_routes",
-        "evaluate_and_score_routes",
-        "recommend_or_escalate",
-    ]
+    expected_names = ["intake_customer", *_PIPELINE_AFTER_INTAKE]
     for case in eval_set.eval_cases:
         invocation = case.conversation[0]
         names = [call.name for call in invocation.intermediate_data.tool_uses]
         assert names == expected_names, f"{case.eval_id} trajectory: {names}"
+
+
+def test_pinned_trajectory_excludes_on_demand_tools():
+    """The trajectory may only pin tools the agent is REQUIRED to call.
+
+    ``find_candidate_routes``/``evaluate_and_score_routes`` are on-demand: the
+    prompt sends the agent straight from intake to ``recommend_or_escalate``,
+    which re-derives both internally. Pinning them makes every live eval case
+    score 0.0 -- a failure only a credentialed ``eval/test_eval.py`` run can
+    surface, which is why it went unnoticed once before. This catches it in the
+    hermetic suite instead.
+    """
+    on_demand = {"find_candidate_routes", "evaluate_and_score_routes"}
+    pinned = on_demand.intersection(_PIPELINE_AFTER_INTAKE)
+    assert not pinned, (
+        f"{sorted(pinned)} is/are on-demand, not part of the default flow "
+        "(see smart_assignment/prompts.py). IN_ORDER matching already tolerates "
+        "them when a user asks for them; pinning them fails every case."
+    )
 
 
 def test_intake_args_are_the_ground_truth_customer_fields():

@@ -14,8 +14,9 @@ any score -- you only explain, compare, and advise.
 
 First, call get_escalation_context to load the grounded facts: the customer and
 order, why it escalated, the proposed route (if any), every feasible and
-infeasible route with its raw numbers, and any split automated opinions. If it
-returns "ok": false, relay its "error" message and stop.
+infeasible route with its raw numbers, the decision "thresholds" (the bars a
+route-slot had to clear), and any split automated opinions. If it returns
+"ok": false, relay its "error" message and stop.
 
 Then write the brief using EXACTLY this layout, with these headers, a blank line
 between sections, and real line breaks (never one run-on paragraph):
@@ -26,7 +27,8 @@ SITUATION
 
 ROOT CAUSE
 <one or two sentences naming the specific gate that tripped -- which hard
-constraint, or the proposed route's thin margin -- with the exact numbers.>
+constraint, or the proposed route's thin margin -- with the exact numbers. The
+bar itself is a fact too: quote it from the "thresholds" block.>
 
 OPTIONS (most workable first)
 1) <ROUTE_ID> - <ROUTE_NAME> · <DAY> — <its current state: utilization % and cases of headroom>
@@ -60,11 +62,19 @@ Rules:
   RECOMMENDATION that says so.
 
 Before you finalize, call check_brief_grounding with your drafted brief text.
+If it returns "ok": true, output the brief as your final answer, ready to hand
+to the specialist.
+
 If it returns "ok": false, revise the brief to remove or correct every figure,
 route, day, and time it flags -- do not invent replacements, and do not keep a
 claim whose supporting figure was flagged (drop or correct the claim too) --
-then call it again. Only once it returns "ok": true, output the brief as your
-final answer, ready to hand to the specialist.
+then call it once more. Every check costs a full rewrite, so make that one
+revision count.
+
+If a result carries "stop": true, the revision budget is spent: do NOT call
+check_brief_grounding again. Drop whatever it still flags and output the brief
+immediately -- anything left ungrounded is flagged for the specialist
+automatically, so another rewrite gains nothing.
 """
 
 
@@ -95,7 +105,8 @@ SITUATION
 
 ROOT CAUSE
 <one or two sentences naming the specific gate that tripped -- which hard
-constraint, or the proposed route's thin margin -- with the exact numbers.>
+constraint, or the proposed route's thin margin -- with the exact numbers. The
+bar itself is a fact too: quote it from the "thresholds" block.>
 
 OPTIONS (most workable first)
 1) <ROUTE_ID> - <ROUTE_NAME> · <DAY> — <its current state: utilization % and cases of headroom>

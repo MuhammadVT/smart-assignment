@@ -316,6 +316,37 @@ class Config:
     # standard); the backend itself stays global.
     role_models: dict[str, str] = field(default_factory=dict)
 
+    # --- Backend compatibility (on by default) ---
+    # How many times a single sage request may be ATTEMPTED before it fails, the
+    # first try included (so 1 disables retrying and reproduces prior behavior
+    # exactly). Applied by passing litellm's own `num_retries` (= attempts - 1)
+    # through ADK's LiteLlm; litellm retries an APIConnectionError -- which is what
+    # a sage request timeout surfaces as -- immediately, with no backoff.
+    #
+    # This exists because ADK's eval harness *intends* to retry (it registers a
+    # plugin setting HttpRetryOptions(attempts=7)) but that is a google-genai
+    # construct, and ADK's LiteLlm never reads it -- so on the sage path a request
+    # that times out is simply lost, taking the whole agent turn with it. The
+    # slowest call in this system (the triage agent writing its brief) sits close
+    # enough to the timeout that a single transient spike kills a turn that would
+    # otherwise succeed on a second try.
+    #
+    # Bounded on purpose: with SAGE_TIMEOUT=40 the worst case is 2 x 40s for one
+    # call. If a second attempt also times out, the backend is genuinely unwell and
+    # failing is the honest outcome.
+    sage_request_attempts: int = 2
+    # When True, a tool call whose arguments arrive wrapped in a JSON array -- an
+    # intermittent sage-backend quirk that otherwise raises inside ADK and kills the
+    # entire turn -- is repaired by taking the single argument object out of that
+    # array (see _install_litellm_tool_args_repair in shared/llm.py).
+    #
+    # ON by default, unlike the opt-in flags above, because it provably cannot change
+    # a healthy call: a well-formed arguments object is returned untouched, so the
+    # repair only ever fires on a payload that would otherwise crash, and any shape it
+    # cannot read with certainty is passed through unchanged so that failure stays
+    # loud. Set to False for ADK's raw behavior.
+    repair_tool_call_args: bool = True
+
     # --- Diagnostics (opt-in, off by default) ---
     # When True, wrap the Sage SDK's response extractor so that whenever it would
     # return its generic "Something went wrong" sentinel -- masking the model's real
@@ -380,6 +411,18 @@ class Config:
     # Off by default; flag-off makes the CLI a no-op, so calibration never runs
     # unless explicitly turned on.
     use_judge_calibration: bool = False
+    # Absolute or relative path to the append-only JSONL log of automated
+    # JUDGE verdicts (see ``eval/judge_log.py``) -- the machine-verdict sibling of
+    # ``feedback_log_path``'s human-label log, and the producer of the verdicts
+    # ``scripts/calibrate_judges.py`` consumes. The path IS the switch: set it
+    # empty to record nothing. It needs no ``use_*`` flag of its own because
+    # recording is purely observational -- it changes no decision and cannot fail
+    # a run (writes are swallowed; see judge_log.append_verdict) -- and gating it
+    # off by default would mean an eval run still recorded nothing, which is the
+    # problem this exists to solve. Defaults alongside the human log in the
+    # gitignored feedback_data/, since judge scores are non-deterministic run
+    # output, not source.
+    judge_log_path: str = "feedback_data/judge_verdicts.jsonl"
 
     def tier_harm_weight(self, tier: Optional[str]) -> float:
         """Harm weight for crowding a committed stop of the given Sysco tier --
@@ -467,6 +510,8 @@ class Config:
             sage_model=os.environ.get("SMART_ASSIGNMENT_SAGE_MODEL", "sage-gemini-2.5-flash"),
             use_sage_gateway=_bool_env("SMART_ASSIGNMENT_USE_SAGE_GATEWAY", False),
             role_models=_role_models_from_env(),
+            repair_tool_call_args=_bool_env("SMART_ASSIGNMENT_REPAIR_TOOL_CALL_ARGS", True),
+            sage_request_attempts=_int_env("SMART_ASSIGNMENT_SAGE_REQUEST_ATTEMPTS", 2),
             debug_sage_raw_response=_bool_env("SMART_ASSIGNMENT_DEBUG_SAGE_RESPONSE", False),
             use_tracing=_bool_env("SMART_ASSIGNMENT_USE_TRACING", False),
             use_human_feedback=_bool_env("SMART_ASSIGNMENT_USE_HUMAN_FEEDBACK", False),
@@ -480,6 +525,12 @@ class Config:
                 "SMART_ASSIGNMENT_USE_TRACE_DATASET_PAYLOADS", False
             ),
             use_judge_calibration=_bool_env("SMART_ASSIGNMENT_USE_JUDGE_CALIBRATION", False),
+            # Unlike feedback_log_path above, an explicitly EMPTY value is
+            # meaningful here (it disables recording) rather than falling back to
+            # the default -- so only an unset var takes the default.
+            judge_log_path=os.environ.get(
+                "SMART_ASSIGNMENT_JUDGE_LOG_PATH", "feedback_data/judge_verdicts.jsonl"
+            ).strip(),
         )
 
 

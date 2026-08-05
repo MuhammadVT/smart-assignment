@@ -112,12 +112,19 @@ def candidate_to_case(candidate: Dict[str, Any]) -> GoldenCase:
     customer = _customer_from_context(context)
     eval_id = str(candidate.get("eval_id") or "curated_case")
     note = candidate.get("note") or "Curated from production human feedback."
+    # Carry the originating decision id through. The minted eval_id only encodes
+    # its first 8 characters, so without this the join back to the human's label
+    # on that same decision (eval/judge_calibration.py) would mean string-parsing
+    # an id out of a name -- see GoldenCase.decision_id.
+    provenance = candidate.get("provenance") or {}
+    decision_id = provenance.get("decision_id")
     return GoldenCase(
         eval_id=eval_id,
         query=_query_for(customer),
         customer=customer,
         expected_outcome=_expected_outcome(candidate),
         note=str(note),
+        decision_id=str(decision_id) if decision_id else None,
     )
 
 

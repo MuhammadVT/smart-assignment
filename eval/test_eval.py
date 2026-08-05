@@ -3,7 +3,8 @@ Runs the smart_assignment conversational agent's golden dataset through
 ADK's AgentEvaluator. It REPLAYS each scripted intake conversation against the
 real ``root_agent`` -- so it needs a live LLM backend -- and scores TRAJECTORY
 (did the agent drive the pipeline in the right order: intake_customer ->
-find_candidate_routes -> evaluate_and_score_routes -> recommend_or_escalate).
+recommend_or_escalate; see ``_PIPELINE_AFTER_INTAKE`` in golden_cases.py for the
+tools deliberately left unpinned).
 
 Phase 2a scores trajectory ONLY (see eval/data/test_config.json). The dataset is
 generated deterministically from the repo's mock fixtures by
@@ -58,6 +59,7 @@ from google.adk.evaluation.agent_evaluator import AgentEvaluator
 from eval.build_evalset import render_dataset
 from eval.case_selection import select_cases
 from eval.golden_cases import GOLDEN_CASES
+from eval.inference_guard import fail_on_dropped_cases
 
 REPO_ROOT = pathlib.Path(__file__).parent.parent
 AGENT_MODULE_PATH = "smart_assignment"
@@ -94,8 +96,12 @@ async def test_slot_recommendation_eval():
     if num_runs_raw and num_runs_raw.strip():
         kwargs["num_runs"] = int(num_runs_raw)
 
-    await AgentEvaluator.evaluate(
-        agent_module=AGENT_MODULE_PATH,
-        eval_dataset_file_path_or_dir=_eval_dataset_path(),
-        **kwargs,
-    )
+    # A case whose inference crashes is dropped by ADK, not failed -- so without
+    # this guard the score is silently computed over only the survivors and the
+    # run still reports a pass. See eval/inference_guard.py.
+    with fail_on_dropped_cases():
+        await AgentEvaluator.evaluate(
+            agent_module=AGENT_MODULE_PATH,
+            eval_dataset_file_path_or_dir=_eval_dataset_path(),
+            **kwargs,
+        )

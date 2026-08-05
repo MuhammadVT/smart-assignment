@@ -51,4 +51,8 @@ data/prod/
 
 # Runtime human-feedback log (durable annotation store; not source)
 feedback_data/
+
+# Prospect execution traces (.github/skills/prospect-trace). Generated, and they
+# carry a real customer address -- regenerate rather than commit.
+.trace/
 .venv-test/
