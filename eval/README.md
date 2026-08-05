@@ -103,8 +103,12 @@ A `pinned_parallelism()` knob was built to run that sweep and then removed — i
 changed nothing at ADK's default and cost a monkeypatch of ADK internals to keep.
 `git log` has it if a genuinely contended environment ever needs it back.
 
-**What is left** is per-call latency variance on the Sage backend itself, which
-is where the next investigation belongs.
+**What is left** is per-call latency variance on the Sage backend itself. That is
+now handled by *tolerating* it rather than chasing it: `Config.sage_request_attempts`
+(default 2) makes a timed-out sage request retry instead of being lost. ADK's eval
+harness registers a retry plugin, but it configures a google-genai construct that
+ADK's `LiteLlm` never reads — so on this path the retry was silently inactive. See
+`docs/architecture/README.md`'s "Retrying a transient request failure".
 
 `intake_customer`'s expected arguments are the **known ground-truth fields** of
 each mock customer (derived from the fixture, not invented), so the trajectory

@@ -317,6 +317,24 @@ class Config:
     role_models: dict[str, str] = field(default_factory=dict)
 
     # --- Backend compatibility (on by default) ---
+    # How many times a single sage request may be ATTEMPTED before it fails, the
+    # first try included (so 1 disables retrying and reproduces prior behavior
+    # exactly). Applied by passing litellm's own `num_retries` (= attempts - 1)
+    # through ADK's LiteLlm; litellm retries an APIConnectionError -- which is what
+    # a sage request timeout surfaces as -- immediately, with no backoff.
+    #
+    # This exists because ADK's eval harness *intends* to retry (it registers a
+    # plugin setting HttpRetryOptions(attempts=7)) but that is a google-genai
+    # construct, and ADK's LiteLlm never reads it -- so on the sage path a request
+    # that times out is simply lost, taking the whole agent turn with it. The
+    # slowest call in this system (the triage agent writing its brief) sits close
+    # enough to the timeout that a single transient spike kills a turn that would
+    # otherwise succeed on a second try.
+    #
+    # Bounded on purpose: with SAGE_TIMEOUT=40 the worst case is 2 x 40s for one
+    # call. If a second attempt also times out, the backend is genuinely unwell and
+    # failing is the honest outcome.
+    sage_request_attempts: int = 2
     # When True, a tool call whose arguments arrive wrapped in a JSON array -- an
     # intermittent sage-backend quirk that otherwise raises inside ADK and kills the
     # entire turn -- is repaired by taking the single argument object out of that
@@ -493,6 +511,7 @@ class Config:
             use_sage_gateway=_bool_env("SMART_ASSIGNMENT_USE_SAGE_GATEWAY", False),
             role_models=_role_models_from_env(),
             repair_tool_call_args=_bool_env("SMART_ASSIGNMENT_REPAIR_TOOL_CALL_ARGS", True),
+            sage_request_attempts=_int_env("SMART_ASSIGNMENT_SAGE_REQUEST_ATTEMPTS", 2),
             debug_sage_raw_response=_bool_env("SMART_ASSIGNMENT_DEBUG_SAGE_RESPONSE", False),
             use_tracing=_bool_env("SMART_ASSIGNMENT_USE_TRACING", False),
             use_human_feedback=_bool_env("SMART_ASSIGNMENT_USE_HUMAN_FEEDBACK", False),

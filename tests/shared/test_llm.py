@@ -20,6 +20,7 @@ from pydantic import ValidationError
 from smart_assignment.shared.config import Config
 from smart_assignment.shared.llm import (
     _SAGE_ERROR_SENTINEL,
+    _apply_request_retries,
     _coerce_tool_call_args,
     _install_litellm_tool_args_repair,
     _install_sage_response_diagnostic,
@@ -689,6 +690,66 @@ def test_repair_flag_is_on_by_default():
     # Unlike the opt-in diagnostics, this one ships enabled -- see the field comment
     # in shared/config.py for why that is safe.
     assert Config().repair_tool_call_args is True
+
+
+# --- retrying a transient sage request failure (Config.sage_request_attempts) ---
+#
+# ADK's eval harness registers a plugin setting HttpRetryOptions(attempts=7), but
+# that is a google-genai construct and ADK's LiteLlm never reads it -- so on the
+# sage path a timed-out request was simply lost. litellm's own num_retries does
+# work there, because a sage timeout surfaces as litellm.APIConnectionError, which
+# subclasses openai.APIError.
+
+
+class _FakeLiteLlm:
+    """Stands in for a LiteLlm-based sage model: all the retry needs is the
+    argument dict ADK merges into the litellm call."""
+
+    def __init__(self, **additional):
+        self._additional_args = dict(additional)
+
+
+def test_retries_are_passed_to_litellm_as_num_retries():
+    llm = _FakeLiteLlm()
+    _apply_request_retries(llm, Config(sage_request_attempts=3))
+    # litellm counts RETRIES, not attempts: 3 attempts == 1 call + 2 retries.
+    assert llm._additional_args["num_retries"] == 2
+
+
+def test_a_single_attempt_disables_retrying_entirely():
+    # Flag-off equivalent: nothing is added, so the call is byte-identical to before.
+    llm = _FakeLiteLlm()
+    _apply_request_retries(llm, Config(sage_request_attempts=1))
+    assert "num_retries" not in llm._additional_args
+
+
+def test_an_explicit_num_retries_from_the_sdk_is_respected():
+    llm = _FakeLiteLlm(num_retries=5)
+    _apply_request_retries(llm, Config(sage_request_attempts=2))
+    assert llm._additional_args["num_retries"] == 5
+
+
+def test_an_unexpected_model_object_warns_instead_of_raising(caplog):
+    sentinel = object()  # no _additional_args at all
+    with caplog.at_level("WARNING"):
+        assert _apply_request_retries(sentinel, Config(sage_request_attempts=2)) is sentinel
+    assert "retries are INACTIVE" in caplog.text
+
+
+def test_retry_default_is_two_attempts():
+    assert Config().sage_request_attempts == 2
+
+
+def test_a_sage_timeout_is_the_exception_litellm_retries():
+    """The whole fix rests on this: litellm's async wrapper retries only
+    openai.APIError/Timeout/APIConnectionError, and a sage request timeout arrives
+    as litellm.APIConnectionError. Pinned here so an SDK bump that breaks the
+    hierarchy fails loudly instead of silently disabling retries."""
+    import openai
+    from litellm.exceptions import APIConnectionError
+
+    assert issubclass(APIConnectionError, openai.APIConnectionError)
+    assert issubclass(APIConnectionError, openai.APIError)
 
 
 def test_repaired_payload_builds_a_real_adk_function_call():

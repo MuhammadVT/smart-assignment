@@ -370,6 +370,63 @@ def _maybe_install_sage_hooks(config: "Config") -> None:
 
 
 # ---------------------------------------------------------------------------
+# Retrying a transient sage request failure
+# ---------------------------------------------------------------------------
+
+
+def _apply_request_retries(llm: Any, config: "Config") -> Any:
+    """Give a LiteLlm-based sage model litellm's own retry, and return it.
+
+    A sage request that times out surfaces as ``litellm.APIConnectionError``, which
+    subclasses ``openai.APIError`` -- so litellm's async wrapper retries it as soon
+    as ``num_retries`` is set on the call. ADK's ``LiteLlm`` merges its
+    ``_additional_args`` into the litellm call, so setting the key there is enough;
+    no wrapping or patching is needed.
+
+    Why this is necessary at all: ADK's eval harness *intends* these to be retried
+    -- it registers a plugin that sets ``HttpRetryOptions(attempts=7)`` -- but that
+    is a google-genai construct and ADK's ``LiteLlm`` never reads it. On the sage
+    path the retry was configured and silently ignored, so one transient timeout
+    lost the whole turn.
+
+    Defensive: an unexpected model object (no ``_additional_args`` dict) is logged
+    and returned untouched rather than raising, and an explicit ``num_retries``
+    already set by the SDK is respected.
+    """
+    attempts = int(getattr(config, "sage_request_attempts", 1) or 1)
+    if attempts <= 1:
+        return llm  # retrying disabled -- prior behavior, exactly
+
+    additional = getattr(llm, "_additional_args", None)
+    if not isinstance(additional, dict):
+        logger.warning(
+            "Sage model %s exposes no litellm argument dict; request retries are "
+            "INACTIVE (%d attempts were requested).",
+            type(llm).__name__,
+            attempts,
+        )
+        return llm
+
+    # litellm counts RETRIES, not attempts: it runs the call once itself and then
+    # retries up to num_retries more times (tenacity stop_after_attempt).
+    additional.setdefault("num_retries", attempts - 1)
+    return llm
+
+
+def _build_sage_llm(config: "Config") -> Any:
+    """The configured sage model object: process hooks installed, direct-agent vs
+    gateway sub-path selected, request retries applied. One place, so the three
+    sage entry points below cannot drift on any of it."""
+    _maybe_install_sage_hooks(config)
+    llm = (
+        get_sage_gateway_llm(config.sage_model)
+        if config.use_sage_gateway
+        else get_sage_llm(config.sage_model)
+    )
+    return _apply_request_retries(llm, config)
+
+
+# ---------------------------------------------------------------------------
 # Internal: async content generation through ADK BaseLlm
 # ---------------------------------------------------------------------------
 
@@ -579,10 +636,7 @@ def get_llm(config: "Config") -> Any:
                provider litellm supports, e.g. "openai/gpt-4o-mini")
     """
     if config.llm_backend == "sage":
-        _maybe_install_sage_hooks(config)
-        if config.use_sage_gateway:
-            return get_sage_gateway_llm(config.sage_model)
-        return get_sage_llm(config.sage_model)
+        return _build_sage_llm(config)
     if _is_litellm_model(config.model):
         from google.adk.models.lite_llm import LiteLlm  # requires the `litellm` extra
 
@@ -673,12 +727,7 @@ def _generate_tool_call_impl(
     tool through the ADK ``BaseLlm`` (direct agent or gateway); every other backend
     has no tool channel yet, so it degrades to plain text generation."""
     if config.llm_backend == "sage":
-        _maybe_install_sage_hooks(config)
-        llm = (
-            get_sage_gateway_llm(config.sage_model)
-            if config.use_sage_gateway
-            else get_sage_llm(config.sage_model)
-        )
+        llm = _build_sage_llm(config)
         return _run_coro_blocking(_sage_call_async(llm, prompt, _to_genai_tools(tool)))
 
     # No tool channel on the other backends yet -> text only (JSON mode arrives
@@ -690,12 +739,7 @@ def _generate_text_impl(config: "Config", prompt: str) -> str:
     """The backend-routing body of ``generate_text``, kept separate so the public
     function owns the tracing span and this stays pure LLM-dispatch logic."""
     if config.llm_backend == "sage":
-        _maybe_install_sage_hooks(config)
-        llm = (
-            get_sage_gateway_llm(config.sage_model)
-            if config.use_sage_gateway
-            else get_sage_llm(config.sage_model)
-        )
+        llm = _build_sage_llm(config)
         return _run_coro_blocking(_generate_via_sage_async(llm, prompt))
 
     if _is_litellm_model(config.model):

@@ -684,6 +684,34 @@ therefore sets `SAGE_TIMEOUT=40`, clearing the observed tail while still failing
 genuinely wedged request promptly. This raises the ceiling — it does not make
 anything faster; the latency work itself is the triage changes above.
 
+### Retrying a transient request failure (`Config.sage_request_attempts`, default 2)
+
+Raising the timeout only helps a call that is *slow*. A call that genuinely blows
+past 40s is lost — and it takes the whole agent turn with it, because nothing
+downstream re-issues it.
+
+ADK's eval harness *intends* otherwise: it registers a plugin that sets
+`HttpRetryOptions(attempts=7, …)` on the request. But that is a **google-genai**
+construct, and ADK's `LiteLlm` never reads `retry_options` or `http_options` and
+passes no `num_retries` to litellm — so on the sage path the retry is configured
+and silently ignored. Verified against the installed google-adk: zero references
+to either field in `lite_llm.py`.
+
+litellm's own retry does work here, because a sage request timeout surfaces as
+`litellm.APIConnectionError`, which subclasses `openai.APIError` — one of the
+three types litellm's async wrapper retries once `num_retries` is set. And
+`LiteLlm` merges its `_additional_args` into the litellm call, so setting the key
+there is enough: no wrapping, no patching.
+
+`_apply_request_retries` (`shared/llm.py`) does exactly that, translating
+*attempts* (what a human reasons about) into litellm's *retries* (`attempts - 1`).
+`sage_request_attempts = 1` disables it and reproduces prior behavior exactly.
+The retry is immediate — litellm picks `constant_retry` with no backoff for an
+`APIError`, which is the right shape for a latency spike (a rate-limit error gets
+exponential backoff instead). Bounded on purpose: with `SAGE_TIMEOUT=40` the worst
+case is 2 × 40s on one call; if a second attempt also times out, the backend is
+genuinely unwell and failing is the honest outcome.
+
 ### Array-wrapped tool-call arguments (`Config.repair_tool_call_args`, on by default)
 
 A tool call's arguments are a *named mapping* — ADK builds a genai `FunctionCall`
