@@ -34,8 +34,25 @@ def _candidate(index, customer):
     return {"eval_id": f"case_{index}", "context": ctx}
 
 
+def _deterministic_config() -> Config:
+    """A config whose decisions depend on nothing but the frozen inputs.
+
+    ``use_grounded_route_slot_escalation`` defaults ON, so a plain ``Config()``
+    routes the recommend/escalate call through the LLM -- which makes this test
+    assert reproducibility over a nondeterministic decision. With credentials
+    present it did exactly that and flipped between 'recommend' and 'escalate'.
+
+    Turning both grounded layers off leaves the deterministic pipeline, which is
+    what freeze/replay is actually about. The grounded layers have their own
+    coverage under tests/routeslot/."""
+    return Config(
+        use_grounded_route_slot_escalation=False,
+        use_grounded_route_slot_pick=False,
+    )
+
+
 def test_freeze_mock_then_replay_reproduces_and_anonymizes(tmp_path, monkeypatch):
-    config = Config()
+    config = _deterministic_config()
 
     # 1) Baseline decisions against the mock world, and the candidate inputs.
     monkeypatch.setenv("SMART_ASSIGNMENT_DATA_SOURCE", "mock")
@@ -96,7 +113,7 @@ def test_freeze_mock_then_replay_reproduces_and_anonymizes(tmp_path, monkeypatch
 
 
 def test_freeze_skips_redacted_cases(tmp_path):
-    config = Config()
+    config = _deterministic_config()  # freeze_to_dir runs the pipeline; keep it offline
     candidates = [
         {"eval_id": "ok", "context": {"name": "N", "address": "5 Main St, Houston, TX",
                                       "order_quantity_cases": 10}},
