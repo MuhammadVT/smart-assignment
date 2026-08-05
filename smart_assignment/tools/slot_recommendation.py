@@ -33,6 +33,7 @@ of them can later be lifted into its own sub-agent (wrapped in an
 from __future__ import annotations
 
 import logging
+import re
 from typing import Optional
 
 from google.adk.tools import ToolContext
@@ -66,6 +67,20 @@ _STATE_LAST_RECOMMENDATION_KEY = "sa_last_recommendation"
 # grounded reasoning and must never be reused for a different prospect.
 _STATE_LAST_DECISION_KEY = "sa_last_decision"
 
+# Every state key that belongs to ONE prospect and must never survive into the
+# next. Cleared together whenever intake detects a new prospect (see the guard in
+# `intake_customer`): a stale decision would let `cached_decision_for` re-render --
+# and the triage tool ground a specialist brief on -- the PREVIOUS customer's
+# outcome. The triage keys are declared in triage/context.py; they are spelled as
+# literals here because triage imports this module, so importing them back would
+# be a cycle. tests/tools/test_slot_recommendation.py asserts the spellings match.
+_PROSPECT_SCOPED_STATE_KEYS = (
+    _STATE_LAST_RECOMMENDATION_KEY,
+    _STATE_LAST_DECISION_KEY,
+    "sa_triage_grounding",  # triage.context._STATE_TRIAGE_GROUNDING_KEY
+    "sa_triage_check_count",  # triage.context._STATE_TRIAGE_CHECK_COUNT_KEY
+)
+
 # Geocoder for the conversational path, chosen by SMART_ASSIGNMENT_GEOCODER
 # (census | mock; default census -- see geocoding_client.resolve_geocoder).
 # Every surface resolves through the same factory and both load the same .env,
@@ -75,6 +90,33 @@ _GEOCODER = resolve_geocoder()
 
 def _error(message: str) -> dict:
     return {"ok": False, "error": message}
+
+
+def _normalize_address(address: str) -> str:
+    """Canonical form for deciding whether two intake addresses are THE SAME
+    place: casefolded, punctuation dropped, whitespace collapsed. Deliberately
+    aggressive -- a spurious mismatch here would reset a profile over a formatting
+    difference ("St." vs "St"), while two genuinely different addresses cannot be
+    made equal by dropping punctuation."""
+    return " ".join(re.sub(r"[^\w]+", " ", address).casefold().split())
+
+
+def _has_recorded_decision(state) -> bool:
+    """Whether the profile currently on file has already produced a decision
+    (recommendation or escalation) this conversation."""
+    return bool(
+        state.get(_STATE_LAST_RECOMMENDATION_KEY) or state.get(_STATE_LAST_DECISION_KEY)
+    )
+
+
+def _reset_prospect_state(state) -> None:
+    """Clear every prospect-scoped key (decision snapshot, triage grounding) so
+    nothing from the previous customer can be re-rendered or cited for the next
+    one. Keys are set to None rather than deleted: ADK session state propagates
+    assignments through its state delta, and every reader uses ``.get(...)``, so
+    None reads exactly like absent."""
+    for key in _PROSPECT_SCOPED_STATE_KEYS:
+        state[key] = None
 
 
 def _profile_to_state_dict(customer: CustomerProfile) -> dict:
@@ -191,6 +233,11 @@ def intake_customer(
     already on file from an earlier call in this conversation is kept
     automatically, so you never need to repeat the full profile.
 
+    Exception: once a recommendation or escalation has been made, a DIFFERENT
+    address starts a FRESH prospect -- nothing from the previous customer
+    (order size, preferred slot, prior decision) carries over, so re-collect
+    any detail the new customer hasn't stated.
+
     Args:
       address: The prospect's street address. Required before any other
         step can run -- this is the primary identifier, since most new
@@ -218,6 +265,33 @@ def intake_customer(
       never guess or invent a value yourself.
     """
     profile = dict(tool_context.state.get(_STATE_PROFILE_KEY) or {})
+
+    # A NEW PROSPECT, not a revision: the profile on file already produced a
+    # decision, and this call brings a different address. Merging here is how one
+    # customer's unstated fields (order size, preferred slot) silently became the
+    # next customer's -- observed live as a prospect decided against a delivery
+    # preference its customer never expressed. Start fresh from the passed fields
+    # and drop every prospect-scoped leftover (stale decision snapshot, triage
+    # grounding). Deterministic on purpose: after a decision, a different address
+    # IS a different customer, and no model judgment can override that. An address
+    # CORRECTION is unaffected -- it happens before a decision exists (see the
+    # resolve_address flow), where this guard never fires.
+    stored_address = profile.get("address")
+    if (
+        address is not None
+        and stored_address
+        and _normalize_address(address) != _normalize_address(stored_address)
+        and _has_recorded_decision(tool_context.state)
+    ):
+        logger.info(
+            "Intake received a new address after a concluded decision; starting a "
+            "fresh prospect. Previous address: %r -> new address: %r. The previous "
+            "profile and its decision/triage state were discarded.",
+            stored_address,
+            address,
+        )
+        profile = {}
+        _reset_prospect_state(tool_context.state)
 
     if address is not None:
         profile["address"] = address

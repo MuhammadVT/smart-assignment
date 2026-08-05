@@ -342,3 +342,153 @@ def test_recommend_or_escalate_relays_geocoding_failure_instead_of_crashing():
         result = recommend_or_escalate(tool_context=ctx)
     assert result["ok"] is False
     assert "sa_last_recommendation" not in ctx.state  # nothing half-written on failure
+
+
+# --- New-prospect isolation: the profile belongs to its address ---------------
+#
+# The leak these pin down (observed live): a browser/adk-web conversation runs
+# prospect A to a decision, then starts prospect B in the SAME session. intake's
+# merge -- correct for revisions -- carried A's unstated fields (order size,
+# preferred slot) into B, so B was decided against a delivery preference its
+# customer never expressed. The guard: after a decision, a DIFFERENT address
+# starts a fresh prospect and clears every prospect-scoped state key. Before a
+# decision, merging is unchanged -- that is what the resolve_address correction
+# flow and one-field-at-a-time intake rely on.
+
+
+_ADDR_A = "1200 McKinney St, Houston, TX 77010"
+_ADDR_B = "5000 Katy Mills Cir, Katy, TX 77494"
+
+
+def _concluded_prospect_a(ctx):
+    """Prospect A on file WITH a preferred slot, decided (escalate or recommend)."""
+    intake_customer(
+        address=_ADDR_A,
+        order_quantity_cases=90,
+        preferred_day="TUE",
+        preferred_window_start="07:00",
+        preferred_window_end="10:00",
+        tool_context=ctx,
+    )
+    result = recommend_or_escalate(tool_context=ctx)
+    assert result["ok"] is True  # a decision (either way) is now on file
+    assert ctx.state["sa_last_recommendation"]
+
+
+def test_new_address_after_decision_starts_a_fresh_profile():
+    """THE captured bug: prospect B states no preference and must not inherit A's."""
+    ctx = _FakeToolContext()
+    _concluded_prospect_a(ctx)
+
+    result = intake_customer(
+        address=_ADDR_B, order_quantity_cases=260, tool_context=ctx
+    )
+    assert result["ok"] is True
+    profile = result["profile"]
+    assert profile["address"] == _ADDR_B
+    assert profile["order_quantity_cases"] == 260
+    # The heart of the bug: these were 'TUE'/'07:00'/'10:00' before the guard.
+    assert profile["preferred_day"] is None
+    assert profile["preferred_window_start"] is None
+    assert profile["preferred_window_end"] is None
+
+
+def test_new_address_after_decision_clears_the_decision_and_triage_state():
+    """A stale snapshot would let cached_decision_for re-render -- and the triage
+    tool ground a specialist brief on -- the PREVIOUS customer's outcome."""
+    from smart_assignment.tools.slot_recommendation import _PROSPECT_SCOPED_STATE_KEYS
+
+    ctx = _FakeToolContext()
+    _concluded_prospect_a(ctx)
+    ctx.state["sa_triage_grounding"] = {"figures": [90]}  # as the triage tool would
+
+    intake_customer(address=_ADDR_B, order_quantity_cases=260, tool_context=ctx)
+
+    for key in _PROSPECT_SCOPED_STATE_KEYS:
+        assert not ctx.state.get(key), f"{key} survived into the new prospect"
+
+
+def test_new_address_after_decision_requires_cases_again():
+    """The accepted re-ask: a fresh prospect must not inherit A's order size, so
+    intake without cases fails with the standard ask instead of proceeding."""
+    ctx = _FakeToolContext()
+    _concluded_prospect_a(ctx)
+
+    result = intake_customer(address=_ADDR_B, tool_context=ctx)
+    assert result["ok"] is False
+    assert "order quantity" in result["error"]
+    # And nothing of prospect A is left to leak if the model retries.
+    assert ctx.state["sa_profile"].get("preferred_day") is None
+
+
+def test_address_change_before_any_decision_still_merges():
+    """The resolve_address confirmation flow: a corrected address arrives BEFORE a
+    decision exists and must keep the cases already collected."""
+    ctx = _FakeToolContext()
+    intake_customer(address="1200 McKiney St, Houston, TX", order_quantity_cases=90,
+                    tool_context=ctx)
+    result = intake_customer(address=_ADDR_A, tool_context=ctx)
+    assert result["ok"] is True
+    assert result["profile"]["order_quantity_cases"] == 90  # kept, not reset
+
+
+def test_same_address_reformatted_after_decision_is_not_a_new_prospect():
+    """Case/punctuation/whitespace differences are formatting, not a new customer:
+    a spurious reset would drop fields over 'St.' vs 'St'."""
+    ctx = _FakeToolContext()
+    _concluded_prospect_a(ctx)
+
+    result = intake_customer(
+        address="1200  mckinney st., houston, tx 77010", tool_context=ctx
+    )
+    assert result["ok"] is True
+    assert result["profile"]["order_quantity_cases"] == 90  # merged, not reset
+
+
+def test_revision_without_address_after_decision_still_merges():
+    """'try 20 cases' after a recommendation is a supported revision."""
+    ctx = _FakeToolContext()
+    _concluded_prospect_a(ctx)
+
+    result = intake_customer(order_quantity_cases=20, tool_context=ctx)
+    assert result["ok"] is True
+    assert result["profile"]["address"] == _ADDR_A
+    assert result["profile"]["order_quantity_cases"] == 20
+    assert result["profile"]["preferred_day"] == "TUE"
+
+
+def test_prospect_scoped_keys_stay_in_sync_with_triage():
+    """The triage keys are spelled as literals in _PROSPECT_SCOPED_STATE_KEYS
+    (importing them back would be a cycle); fail loudly if either side renames."""
+    from smart_assignment.tools.slot_recommendation import _PROSPECT_SCOPED_STATE_KEYS
+    from smart_assignment.triage.context import (
+        _STATE_TRIAGE_CHECK_COUNT_KEY,
+        _STATE_TRIAGE_GROUNDING_KEY,
+    )
+
+    assert _STATE_TRIAGE_GROUNDING_KEY in _PROSPECT_SCOPED_STATE_KEYS
+    assert _STATE_TRIAGE_CHECK_COUNT_KEY in _PROSPECT_SCOPED_STATE_KEYS
+
+
+def test_batch_shape_cannot_trigger_the_reset():
+    """Batch seeds a FRESH session per prospect and intake runs before any
+    decision, so the guard's decision-exists condition can never hold there --
+    even if the model re-passes the seeded address reformatted. Pins the property
+    the batch runner's isolation now explicitly relies on."""
+    ctx = _FakeToolContext()
+    # Exactly what batch/agent_runner.create_session seeds: profile, no decision.
+    ctx.state["sa_profile"] = {
+        "name": "Katy Mills",
+        "address": _ADDR_B,
+        "order_quantity_cases": 260,
+        "customer_number": None,
+        "preferred_day": None,
+        "preferred_window_start": None,
+        "preferred_window_end": None,
+    }
+    # The model echoes the address back, reformatted -- and even a DIFFERENT
+    # address must merge here, because no decision exists yet.
+    result = intake_customer(address="5000 katy mills cir, katy tx 77494",
+                             tool_context=ctx)
+    assert result["ok"] is True
+    assert result["profile"]["order_quantity_cases"] == 260
