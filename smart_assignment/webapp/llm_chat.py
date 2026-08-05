@@ -63,6 +63,28 @@ _REQUEST_INPUT_NAME = "adk_request_input"
 _DECISION_TOOLS = ("recommend_or_escalate", "assign_prospect")
 
 
+class AgentTurnUnavailable(RuntimeError):
+    """The agent's turn ended in a *recovered* model failure having produced no
+    decision, so it has nothing to show.
+
+    ``agent_callbacks`` deliberately stops such a failure from unwinding the
+    Runner -- that is what keeps a turn whose pipeline already succeeded from
+    being thrown away. But when nothing was produced, silence would be a
+    regression: before recovery existed the exception reached ``app.chat``, which
+    answered from the deterministic brain. Raising this preserves that floor, so
+    recovery is never worse than the deterministic baseline -- only better when
+    there is real work to protect.
+    """
+
+
+def _event_text(event: Any) -> str:
+    """The aggregated text of an ADK event's parts, stripped ("" when there is
+    none). Keeps the two text-reading branches below reading identically."""
+    content = getattr(event, "content", None)
+    parts = getattr(content, "parts", None) or []
+    return "".join(p.text for p in parts if getattr(p, "text", None)).strip()
+
+
 def _call_key(part: Any) -> str:
     """Correlation key pairing a FunctionCall with its FunctionResponse. ADK sets
     a matching ``id`` on both; fall back to the tool name so a backend that omits
@@ -426,6 +448,10 @@ class LlmChatService:
         # calls recommend_or_escalate this turn), captured so the visualization's
         # "Why the agent chose this" can show the same words as the chat box.
         recommendation_reply: list[str] = []
+        # Set when the turn ended on an error-recovery notice (agent_callbacks)
+        # WITHOUT having reached a decision -- carries the reason so the raise
+        # after the loop is diagnosable. See the branch below for why.
+        unusable_turn: Optional[str] = None
         async for event in runner.run_async(
             user_id=user_id,
             session_id=adk_session_id,
@@ -535,19 +561,48 @@ class LlmChatService:
                         yield frame
                 continue
 
+            # An error-recovery notice from agent_callbacks: the model call failed
+            # and the turn was ended gracefully instead of unwinding the Runner.
+            # ADK's Event subclasses LlmResponse, so the stamped code is readable
+            # here. What to do with it depends entirely on whether this turn had
+            # already produced anything worth keeping:
+            #
+            #   decision reached -> the pipeline result is REAL and already shown.
+            #       Keep it: surface the notice and let the visualization render
+            #       below. Falling back now would replace a correct, audited answer
+            #       with a second one that could contradict it.
+            #   no decision      -> this turn produced nothing at all. Re-raise so
+            #       ``app.chat`` runs the deterministic brain exactly as it did
+            #       before recovery existed -- otherwise the user is told to try
+            #       again where they used to get a real answer, which would be
+            #       WORSE than the deterministic baseline this project guarantees.
+            #
+            # Either way the notice is never appended to ``recommendation_reply``:
+            # an error is not the agent's reasoning for a decision it never made.
+            if getattr(event, "error_code", None):
+                if not saw_recommendation:
+                    unusable_turn = (
+                        getattr(event, "error_message", None) or event.error_code
+                    )
+                    continue
+                text = _event_text(event)
+                if text:
+                    yield {"type": "message", "text": text}
+                continue
+
             # Natural-language text. Emit only the aggregated (non-partial) event
             # so the transcript gets each reply once, not per streamed chunk.
             if event.content and event.content.parts and not getattr(event, "partial", False):
-                text = "".join(p.text for p in event.content.parts if getattr(p, "text", None))
-                if text.strip():
-                    # An error-recovery notice (agent_callbacks) is shown to the user
-                    # like any other reply, but it is NOT the agent's reasoning -- it
-                    # must never become the result card's "Why the agent chose this".
-                    # ADK's Event subclasses LlmResponse, so the error code the
-                    # callback stamped is readable right here.
-                    if saw_recommendation and not getattr(event, "error_code", None):
-                        recommendation_reply.append(text.strip())
-                    yield {"type": "message", "text": text.strip()}
+                text = _event_text(event)
+                if text:
+                    if saw_recommendation:
+                        recommendation_reply.append(text)
+                    yield {"type": "message", "text": text}
+
+        if unusable_turn is not None:
+            # Nothing was produced this turn, so hand the failure to the caller and
+            # let the deterministic brain answer -- the floor this project promises.
+            raise AgentTurnUnavailable(unusable_turn)
 
         if saw_recommendation:
             # This prospect reached a decision/escalation: the NEXT full prospect

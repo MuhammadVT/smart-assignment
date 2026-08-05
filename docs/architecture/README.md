@@ -802,6 +802,21 @@ specialist an apology dressed as an escalation brief. Letting it raise into
 `root_agent`'s tool-error hook turns the same failure into an honest failed-tool
 result instead.
 
+**Recovery must not cost the deterministic floor.** Suppressing the exception also
+stops it reaching `app.chat`, whose `except` clause is what runs the deterministic
+brain. So `stream_turn` splits on whether the turn produced anything:
+
+| Model fails… | Behavior | Why |
+|---|---|---|
+| **after** a decision | notice shown, agent's own result cards still render, no fallback | The pipeline result is real and audited; re-running would replace it with a second answer that could contradict it |
+| **before** a decision | `AgentTurnUnavailable` is raised, nothing is emitted | The turn produced nothing, so `app.chat` answers from the deterministic brain exactly as before — otherwise the user would be told to retry where they used to get a real answer |
+
+Verified live end-to-end against sage by corrupting one real reply into the
+unrepairable two-object array shape and driving `/api/chat`: with the failure
+*before* a decision the user gets deterministic result cards whether recovery is
+on or off (no regression), and with it *after* a decision recovery keeps the
+agent's own decision instead of discarding it for a deterministic re-run.
+
 Safe for an unattended batch run: `batch/agent_runner._run_one_via_agent` keys its
 outcome off the decision stored in session state, so a turn that ends early
 without one still degrades to the deterministic pipeline exactly as before.
