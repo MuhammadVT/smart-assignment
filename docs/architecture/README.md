@@ -768,6 +768,50 @@ Unlike the opt-in flags elsewhere in this document it defaults **on**
 cannot change a healthy call — it only ever fires on a payload that would
 otherwise crash.
 
+### Recovering from a failed model or tool call (`Config.recover_from_agent_errors`, on by default)
+
+The repair above closes the *one* payload shape it can read with certainty. Every
+other shape — and every unrelated model failure — still reached ADK, and ADK
+re-raises: `base_llm_flow` re-raises the model error, `functions` re-raises the
+tool error, and either one unwinds the whole Runner. A single malformed reply
+therefore destroyed an entire turn *whose deterministic pipeline had already
+succeeded*, and the web app replaced the agent's real answer with a deterministic
+result that could contradict what the user had just been shown.
+
+`agent_callbacks.py` installs ADK's two error hooks on `root_agent` and the batch
+agent. They answer differently on purpose:
+
+| Hook | Returns | Effect |
+|---|---|---|
+| `on_model_error_callback` | an `LlmResponse` | The turn ends with a plain reply instead of an exception. It has no function calls, so `Event.is_final_response()` is True and the flow's loop terminates — no retry semantics, no spin |
+| `on_tool_error_callback` | `{"ok": false, "error": …}` | The same result shape every pipeline tool already returns, so `webapp.llm_chat._tool_outcome` marks that step failed with the real reason and the conversation continues |
+
+The model-error response deliberately carries **both** `content` and
+`error_code`. Content is required because the web app only emits a chat frame for
+an event with `content.parts` — an error-code-only response would render a blank
+turn, worse than the failure it replaces. The error code is required because
+`Event` subclasses `LlmResponse`, so it is readable downstream: both
+`webapp/llm_chat.py` and `batch/agent_runner.py` check it before capturing text,
+so a recovery notice is shown to the user but **never** recorded as the agent's
+reasoning for a decision it did not explain.
+
+**The triage sub-agent deliberately gets neither hook.** `AgentTool` returns the
+sub-agent's last content as the tool result, and the root instruction relays the
+brief *verbatim* to a specialist — a model-error callback there would hand that
+specialist an apology dressed as an escalation brief. Letting it raise into
+`root_agent`'s tool-error hook turns the same failure into an honest failed-tool
+result instead.
+
+Safe for an unattended batch run: `batch/agent_runner._run_one_via_agent` keys its
+outcome off the decision stored in session state, so a turn that ends early
+without one still degrades to the deterministic pipeline exactly as before.
+
+Defaults **on** for the same reason as the repair above: it can only fire on a
+path that is already an unhandled exception. With
+`SMART_ASSIGNMENT_RECOVER_FROM_AGENT_ERRORS=false` the agents are constructed with
+no callbacks at all and ADK raises exactly as it used to. The exception is always
+logged with its traceback; no decision is suppressed and no value is invented.
+
 ## Tracing & observability (`shared/tracing.py`, opt-in)
 
 The grounded decision layers already produce an auditable *record* of every

@@ -540,7 +540,12 @@ class LlmChatService:
             if event.content and event.content.parts and not getattr(event, "partial", False):
                 text = "".join(p.text for p in event.content.parts if getattr(p, "text", None))
                 if text.strip():
-                    if saw_recommendation:
+                    # An error-recovery notice (agent_callbacks) is shown to the user
+                    # like any other reply, but it is NOT the agent's reasoning -- it
+                    # must never become the result card's "Why the agent chose this".
+                    # ADK's Event subclasses LlmResponse, so the error code the
+                    # callback stamped is readable right here.
+                    if saw_recommendation and not getattr(event, "error_code", None):
                         recommendation_reply.append(text.strip())
                     yield {"type": "message", "text": text.strip()}
 

@@ -38,6 +38,7 @@ import functools
 from google.adk.agents import LlmAgent
 from google.adk.tools import FunctionTool, request_input
 
+from smart_assignment.agent_callbacks import error_callbacks
 from smart_assignment.prompts import build_batch_instruction, build_instruction
 from smart_assignment.shared import tracing
 from smart_assignment.shared.config import DEFAULT_CONFIG, ROLE_ROOT_AGENT, Config
@@ -142,6 +143,11 @@ def _build_root_agent() -> LlmAgent:
             include_address_resolution=address_resolution_enabled,
         ),
         tools=tools,
+        # A failed model call ends the turn with a plain reply, and a raised tool
+        # becomes an ordinary {"ok": false} result, instead of ADK unwinding the
+        # whole Runner and discarding a turn whose pipeline already succeeded.
+        # Empty (agent built exactly as before) when the flag is off.
+        **error_callbacks(DEFAULT_CONFIG),
     )
 
 
@@ -205,6 +211,11 @@ def build_batch_agent(config: Config = DEFAULT_CONFIG) -> LlmAgent:
         ),
         instruction=build_batch_instruction(include_triage=triage_enabled),
         tools=_batch_agent_tools(config),
+        # Same error recovery as root_agent. Safe for an unattended run: the driver
+        # keys its outcome off the DECISION stored in session state, so a turn that
+        # ends early without one still degrades to the deterministic pipeline
+        # exactly as it does today (see batch/agent_runner._run_one_via_agent).
+        **error_callbacks(config),
     )
 
 
