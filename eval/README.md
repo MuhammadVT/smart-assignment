@@ -18,6 +18,7 @@ live LLM backend** and are kept separate from the hermetic tests.
 | `capture.py` | Runs the live agent once per case to record its real final response + whether it escalated (Phase 2b). |
 | `test_response_match.py` | Separate pytest entry point: `response_match_score`, scoped to captured cases known NOT to have escalated. See its module docstring for why escalate cases can't be scored this way at all. |
 | `inference_guard.py` | Fails the run when ADK *drops* an eval case (a crashed inference) instead of scoring it — otherwise a dropped case is indistinguishable from a passing one. Used by `test_eval.py` and `test_response_match.py`. |
+| `run_budget.py` | A wall-clock ceiling on a live run (`SMART_ASSIGNMENT_EVAL_BUDGET_SECONDS`, default 20 min), so a hung backend fails promptly instead of running for hours. |
 | `case_selection.py` | Owns the `SMART_ASSIGNMENT_EVAL_IDS` subset knob for the **test runners** (`test_eval.py`, `test_quality.py`, `test_rationale_faithfulness.py`): local-only, rejected under CI, warns when it narrows. Also exposes `filter_cases_by_ids` — the explicit-subset primitive `capture.py`'s `--ids` uses (capture does not read the env var). |
 | `deepeval_llm.py` | `SmartAssignmentDeepEvalLLM` — adapts this repo's own `generate_text` (any `SMART_ASSIGNMENT_LLM_BACKEND`) to DeepEval's judge-model interface. |
 | `test_quality.py` | Separate pytest entry point (Phase 3a): DeepEval G-Eval `brief_quality`/`response_clarity`, scored directly against captured `{final_response, escalated}` data — no ADK dataset involved. |
@@ -102,6 +103,28 @@ quarter of the exposure to a spike.)
 A `pinned_parallelism()` knob was built to run that sweep and then removed — it
 changed nothing at ADK's default and cost a monkeypatch of ADK internals to keep.
 `git log` has it if a genuinely contended environment ever needs it back.
+
+### A run has a wall-clock ceiling (`run_budget.py`)
+
+Nothing else bounds a run. `SAGE_TIMEOUT` bounds one request in principle, but a
+request has been seen running far past it, and retries multiply whatever that
+costs — with the network down overnight, one full run took **9.8 hours** before
+failing. Both live entry points now await `AgentEvaluator.evaluate()` inside
+`run_within_budget()`, which aborts at `SMART_ASSIGNMENT_EVAL_BUDGET_SECONDS`
+(default **1200s / 20 min**) and fails with an explanation naming what to check
+and how to raise it.
+
+The default is deliberately loose — healthy full runs measure 77–161s, so it
+carries roughly an order of magnitude of headroom and should never fire on a run
+that is merely slow. If you hit it on a working backend, investigate rather than
+raise it.
+
+`.github/workflows/ci.yml` sets `timeout-minutes` per job (20 / 30 / 30) as a
+coarser backstop for the one case this cannot catch: if the event loop itself is
+wedged, `asyncio.wait_for` never fires. The job caps sit *above* the in-test
+budget on purpose, so the readable failure is what you normally see.
+
+This is damage control, not a fix — it makes no run greener.
 
 **What is left** is per-call latency variance on the Sage backend itself. That is
 now handled by *tolerating* it rather than chasing it: `Config.sage_request_attempts`
