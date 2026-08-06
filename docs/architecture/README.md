@@ -17,6 +17,15 @@ recommend_or_escalate      (code — rank + total-score gate -> decision + reaso
   -> requires_human_review? -> agent calls request_input (ADK built-in, human input)
 ```
 
+Alongside those steps the interactive agent carries one **on-demand lookup**,
+`geocode_prospect_address` (code -- the coordinates of the address on file, and
+nothing else). It is a sibling of `find_candidate_routes`, not a split of it: it
+answers a side question ("where is this customer?") with a single geocode instead
+of running step 2's fetch-and-rank over the whole route set. It writes no session
+state, is not a pipeline step (so it draws no live breadcrumb -- see
+`webapp/narration.py`), and never substitutes for `recommend_or_escalate`. Batch
+does not get it (see `_batch_agent_tools`): unattended runs ask no side questions.
+
 The agent (the LLM) decides *when* to call which tool and narrates the
 result in conversation; it never computes a distance, a constraint check, or
 a score itself -- every number comes back from the tool call. See

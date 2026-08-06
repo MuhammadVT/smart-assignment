@@ -7,6 +7,7 @@ needed.
 
 from __future__ import annotations
 
+import copy
 from unittest.mock import patch
 
 import pytest
@@ -19,6 +20,7 @@ from smart_assignment.tools.slot_recommendation import (
     assign_prospect,
     evaluate_and_score_routes,
     find_candidate_routes,
+    geocode_prospect_address,
     intake_customer,
     recommend_or_escalate,
     start_new_prospect,
@@ -297,6 +299,93 @@ def test_assign_prospect_relays_geocoding_failure_without_half_writing_state():
     assert result["ok"] is False
     assert "temporarily unavailable" in result["error"]
     assert "sa_last_recommendation" not in ctx.state
+
+
+# --- geocode_prospect_address (on-demand location lookup) --------------------
+#
+# A sibling of find_candidate_routes, not a split of it: it answers "where is
+# this address?" without fetching or ranking routes, and it must never touch
+# session state.
+
+
+def test_geocode_prospect_address_requires_an_address_on_file():
+    ctx = _FakeToolContext()
+    result = geocode_prospect_address(tool_context=ctx)
+    assert result["ok"] is False
+    assert "intake_customer" in result["error"]
+
+
+def test_geocode_prospect_address_returns_the_coordinates():
+    ctx = _FakeToolContext()
+    intake_customer(
+        address="1200 McKinney St, Houston, TX 77010", order_quantity_cases=90, tool_context=ctx
+    )
+    result = geocode_prospect_address(tool_context=ctx)
+    assert result["ok"] is True
+    assert result["address"] == "1200 McKinney St, Houston, TX 77010"
+    assert isinstance(result["geocoded_location"]["latitude"], float)
+    assert isinstance(result["geocoded_location"]["longitude"], float)
+    # The same point find_candidate_routes reports, so the two tools can never
+    # give the user two different answers for one address.
+    routes = find_candidate_routes(tool_context=ctx)
+    assert result["geocoded_location"] == routes["geocoded_location"]
+    # A location lookup answers a side question -- it must not do step 2's work.
+    assert "candidate_routes" not in result
+
+
+def test_geocode_prospect_address_works_before_intake_is_complete():
+    # Geocoding needs only the address. An address-only first call leaves intake
+    # incomplete (no order quantity), and the user can still ask where it is.
+    ctx = _FakeToolContext()
+    first = intake_customer(address="1200 McKinney St, Houston, TX 77010", tool_context=ctx)
+    assert first["ok"] is False  # still needs the order quantity
+    result = geocode_prospect_address(tool_context=ctx)
+    assert result["ok"] is True
+    assert result["geocoded_location"]["latitude"]
+
+
+def test_geocode_prospect_address_writes_no_session_state():
+    # It is a read-only lookup: nothing about the prospect, the decision snapshot,
+    # or triage grounding may change because the user asked where the address is.
+    ctx = _FakeToolContext()
+    intake_customer(
+        address="1200 McKinney St, Houston, TX 77010", order_quantity_cases=90, tool_context=ctx
+    )
+    before = copy.deepcopy(ctx.state)
+    assert geocode_prospect_address(tool_context=ctx)["ok"] is True
+    assert ctx.state == before
+
+
+def test_geocode_prospect_address_relays_address_not_found():
+    # Same failure shape and wording as find_candidate_routes, so a geocode miss
+    # routes to resolve_address identically no matter which tool hit it.
+    ctx = _FakeToolContext()
+    intake_customer(address="not a real place", order_quantity_cases=90, tool_context=ctx)
+    with patch.object(
+        tools_module._GEOCODER,
+        "geocode",
+        side_effect=AddressNotFoundError("not a real place", "no match"),
+    ):
+        result = geocode_prospect_address(tool_context=ctx)
+        expected = find_candidate_routes(tool_context=ctx)
+    assert result["ok"] is False
+    assert "not a real place" in result["error"]
+    assert result["error"] == expected["error"]
+
+
+def test_geocode_prospect_address_relays_service_error():
+    ctx = _FakeToolContext()
+    intake_customer(
+        address="1200 McKinney St, Houston, TX 77010", order_quantity_cases=90, tool_context=ctx
+    )
+    with patch.object(
+        tools_module._GEOCODER,
+        "geocode",
+        side_effect=GeocodingServiceError("1200 McKinney St, Houston, TX 77010", "timed out"),
+    ):
+        result = geocode_prospect_address(tool_context=ctx)
+    assert result["ok"] is False
+    assert "temporarily unavailable" in result["error"]
 
 
 # --- Geocoding failure handling ----------------------------------------------
@@ -609,3 +698,59 @@ def test_instruction_scopes_the_boundary_to_switching_customers():
     assert "call start_new_prospect FIRST" in text
     assert "DIFFERENT customer" in text
     assert "Never call it for a correction or revision" in text
+
+
+# --- geocode_prospect_address wiring -----------------------------------------
+
+
+def test_interactive_agent_offers_the_location_lookup(monkeypatch):
+    """It must be offered on the conversational surfaces -- adk web/run and the
+    webapp all build _build_root_agent's tool list -- under the name the
+    instruction uses."""
+    from smart_assignment import agent as agent_module
+    from smart_assignment.shared.config import Config
+
+    monkeypatch.setattr(agent_module, "get_llm", lambda cfg: "fake-model")
+    monkeypatch.setattr(
+        agent_module,
+        "DEFAULT_CONFIG",
+        Config(use_escalation_triage=False, use_address_resolution=False),
+    )
+    root = agent_module._build_root_agent()
+    assert "geocode_prospect_address" in {t.name for t in root.tools}
+
+
+def test_batch_agent_does_not_get_the_location_lookup():
+    """Batch runs unattended over CRM-sourced prospects and asks no side
+    questions, so its tool surface stays byte-identical."""
+    from smart_assignment.agent import _batch_agent_tools
+    from smart_assignment.shared.config import Config
+
+    tools = _batch_agent_tools(Config(use_escalation_triage=False))
+    names = {getattr(t, "name", None) or getattr(t.func, "__name__", None) for t in tools}
+    assert "geocode_prospect_address" not in names
+
+
+def test_instruction_keeps_the_location_lookup_optional_and_non_terminal():
+    """It must be named as on-demand, and must NOT read as a way to finish a
+    prospect -- the risk of a cheap side-question tool is the agent answering it
+    and stopping short of the decision."""
+    from smart_assignment.prompts import build_instruction
+
+    text = " ".join(build_instruction().split())  # collapse line breaks
+    assert "geocode_prospect_address" in text
+    assert "OPTIONAL, on-demand" in text
+    assert "does NOT complete the workflow" in text
+
+
+def test_address_correction_guidance_covers_the_location_lookup():
+    """A geocode miss must route to resolve_address whichever tool hit it -- the
+    lookup shares find_candidate_routes' exact error wording, so the correction
+    flow has to name it too. Only appended when address resolution is wired in."""
+    from smart_assignment.prompts import build_instruction
+
+    text = " ".join(build_instruction(include_address_resolution=True).split())
+    assert "geocode_prospect_address, if you called them) returns an error" in text
+    # Absent when the tool isn't wired in -- the instruction never names a tool
+    # that isn't in the agent's tool list.
+    assert "resolve_address" not in build_instruction(include_address_resolution=False)

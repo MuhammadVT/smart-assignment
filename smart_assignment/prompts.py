@@ -59,10 +59,13 @@ Workflow, in strict order, for each prospect (repeat step 2 on revision):
      You may lightly adapt wording, but never change a number, route, window, or
      the decision itself -- those came straight from the tool.
 
-find_candidate_routes and evaluate_and_score_routes are OPTIONAL, on-demand
-tools: call one only if the user explicitly asks to see the nearby routes or the
-per-route scores before the decision. They are never required and are not part of
-the default flow -- recommend_or_escalate already re-derives both internally.
+find_candidate_routes, evaluate_and_score_routes and geocode_prospect_address are
+OPTIONAL, on-demand tools: call one only if the user explicitly asks to see the
+nearby routes, the per-route scores, or where the address sits on the map. They
+are never required and are not part of the default flow -- recommend_or_escalate
+already geocodes and scores internally. Answering a location question with
+geocode_prospect_address does NOT complete the workflow: if the user still wants
+a route and slot, go on and call recommend_or_escalate.
 
 Escalation is AUTOMATIC -- never ask the user for permission to escalate, and
 never end your turn with a question like "Would you like me to escalate this?".
@@ -97,9 +100,10 @@ own.
 # exists in the agent's tool list when that flag is on.
 ADDRESS_RESOLUTION_GUIDANCE = """
 Address correction: if recommend_or_escalate (or find_candidate_routes /
-evaluate_and_score_routes, if you called them) returns an error saying the address
-could not be found or geocoded, call resolve_address. It looks up the geocoder's
-real candidate matches and suggests the closest one -- it never invents an address.
+evaluate_and_score_routes / geocode_prospect_address, if you called them) returns
+an error saying the address could not be found or geocoded, call resolve_address.
+It looks up the geocoder's real candidate matches and suggests the closest one --
+it never invents an address.
  - If it returns "needs_confirmation": true, DO NOT proceed on your own. Show the
    "message" (the suggested address, plus any alternatives), and ask the customer
    to confirm, pick an alternative, or give a corrected address. This is an

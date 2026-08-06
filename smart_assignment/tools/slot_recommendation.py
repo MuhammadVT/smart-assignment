@@ -439,6 +439,63 @@ def find_candidate_routes(tool_context: ToolContext) -> dict:
     }
 
 
+# --- On-demand lookup: where is the prospect? (NOT a pipeline step) ---------
+#
+# Deliberately a SIBLING of find_candidate_routes, not a split of it. Step 2 owns
+# "geocode AND rank the nearest routes" and stays exactly as it was; this answers
+# the side question "where is this address?" on its own, without fetching and
+# ranking the route set or filling the model's context with candidates the user
+# never asked about.
+#
+# Two properties keep it safe to call at any point in a conversation:
+#   * It reads only the ADDRESS, so it works before the order quantity has been
+#     given -- geocoding needs nothing else to be on file.
+#   * It writes NO state. The geocoder caches successful lookups process-wide
+#     (see the module docstring), so a repeat costs no extra request, and staying
+#     stateless preserves the "recompute fresh from the profile" invariant: a
+#     corrected address can never be answered with a stale point.
+
+
+def geocode_prospect_address(tool_context: ToolContext) -> dict:
+    """
+    Return the map coordinates (latitude/longitude) of the prospect's address
+    currently on file -- e.g. "where is this customer located?", "what are the
+    coordinates?", "did that address resolve?".
+
+    This is a lookup, not a workflow step: it does NOT check routes, capacity, or
+    availability, and it never replaces recommend_or_escalate for a route/slot
+    decision. Call it when the user asks about the LOCATION itself.
+
+    Call this after intake_customer has recorded an address.
+
+    Returns:
+      {"ok": true, "address": "...",
+       "geocoded_location": {"latitude": .., "longitude": ..}}
+      or {"ok": false, "error": "..."} if there's no address on file yet, or if
+      the address couldn't be geocoded. The result carries the coordinates and
+      the address only -- never state a city, county, or neighborhood that a tool
+      didn't return.
+    """
+    profile = tool_context.state.get(_STATE_PROFILE_KEY)
+    address = (profile or {}).get("address")
+    if not address:
+        return _error("Call intake_customer first -- there's no address on file yet.")
+    try:
+        location = _GEOCODER.geocode(address)
+    except GeocodingError as exc:
+        # Same failure shape and wording as every other tool here, so an address
+        # miss routes to resolve_address identically no matter who hit it first.
+        return _geocoding_error_result(exc)
+    return {
+        "ok": True,
+        "address": address,
+        "geocoded_location": {
+            "latitude": location.latitude,
+            "longitude": location.longitude,
+        },
+    }
+
+
 # --- Step 2b: address resolution (grounded typo/ambiguity correction) -------
 
 

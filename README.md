@@ -88,6 +88,11 @@ recommend_or_escalate      -> rank + total-score gate -> decision + reasoning
                                 (pauses, waits for a specialist's reply)
 ```
 
+One extra tool sits outside that order: `geocode_prospect_address` answers
+"where is this customer?" with just the coordinates of the address on file, so a
+side question costs one geocode instead of the whole geo-lookup step. It is
+read-only and never replaces the decision.
+
 Each tool is a thin wrapper around the same pipeline functions (see
 `tools/slot_recommendation.py`) — the agent's system instruction (see
 `prompts.py`) tells it the order to call them in and bans it from stating

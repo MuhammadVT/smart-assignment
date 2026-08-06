@@ -47,6 +47,7 @@ from smart_assignment.tools import (
     assign_prospect,
     evaluate_and_score_routes,
     find_candidate_routes,
+    geocode_prospect_address,
     intake_customer,
     recommend_or_escalate,
     resolve_address,
@@ -107,6 +108,13 @@ def _build_root_agent() -> LlmAgent:
         # its tool surface byte-identical (see _batch_agent_tools).
         FunctionTool(_offloaded_tool(start_new_prospect)),
         FunctionTool(_offloaded_tool(find_candidate_routes)),
+        # A read-only "where is this address?" lookup, so a side question about
+        # the prospect's location is answered with one geocode instead of the
+        # whole Geo-Lookup step (fetch + rank the route set). It writes no state
+        # and is not a pipeline step -- interactive surfaces only, for the same
+        # reason as start_new_prospect: batch never asks side questions and its
+        # tool surface stays byte-identical (see _batch_agent_tools).
+        FunctionTool(_offloaded_tool(geocode_prospect_address)),
         FunctionTool(_offloaded_tool(evaluate_and_score_routes)),
         FunctionTool(_offloaded_tool(recommend_or_escalate)),
         request_input,
