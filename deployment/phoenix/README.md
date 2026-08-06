@@ -60,18 +60,31 @@ same eval run at either, or swap later, with zero code changes.
 
 ## Prerequisites
 
-- Python 3.9+ (same interpreter the repo already uses).
-- The repo installed with the observability extra so the exporter is present:
+- Python 3.13+ for the project (`requires-python` in `pyproject.toml`).
+- The repo installed **with the observability extra**, so the OTLP exporter is
+  present:
   ```bash
-  pip install -e ".[observability]"
+  uv pip install -e ".[observability]"      # or: pip install -e ".[observability]"
   ```
-- Phoenix itself, in its **own** virtualenv — it's an external observability
-  backend, not a `smart_assignment` dependency, so keep it out of the project
-  venv and `pyproject.toml`. On Windows+uv, `phoenix.ps1` (below) creates this
-  venv for you, so you can skip this step entirely:
-  ```bash
-  python3 -m venv ~/.venvs/phoenix && ~/.venvs/phoenix/bin/pip install arize-phoenix
-  ```
+  > **This is the single most common reason traces stop arriving — read on.**
+  > `observability` is an *optional* extra, deliberately excluded from the
+  > default dependency set (see `pyproject.toml`), and there is no
+  > `default-extras` under `[tool.uv]`. So a plain **`uv sync`** — or a `uv run`
+  > **without** `--no-sync` — resolves the environment back to the default set
+  > and **uninstalls the extra again.** The symptom is not an error: tracing
+  > logs one warning at startup and then silently exports nothing, while the app
+  > keeps working perfectly. If traces ever stop, re-run the install line above
+  > *before* debugging anything else, then see *Verify it's actually working*.
+- Phoenix itself, in its **own** virtualenv on **Python 3.13** — it's an external
+  observability backend, not a `smart_assignment` dependency, so keep it out of
+  the project venv and `pyproject.toml`.
+  - **Windows:** skip this — `phoenix.ps1 up` (below) creates the venv and
+    installs Phoenix for you on first run.
+  - **macOS/Linux:** `phoenix.sh` does **not** auto-install; it only resolves an
+    already-installed binary and errors out otherwise. Create the venv first:
+    ```bash
+    python3 -m venv ~/.venvs/phoenix && ~/.venvs/phoenix/bin/pip install arize-phoenix
+    ```
 
 > **Windows + Python 3.14 gotcha.** Phoenix needs `sqlean-py` (import name
 > `sqlean`), which has **no Windows wheel for Python 3.14** — installing Phoenix
@@ -91,7 +104,7 @@ same eval run at either, or swap later, with zero code changes.
 cd deployment/phoenix
 ./phoenix.sh up        # starts `phoenix serve` in the background
 ./phoenix.sh status    # check it's running + show the data dir
-./phoenix.sh logs      # follow server logs
+./phoenix.sh logs      # last 200 log lines (add -f to follow)
 ./phoenix.sh down      # stop; add --purge to also delete local trace data
 ```
 
@@ -100,18 +113,25 @@ cd deployment/phoenix
 cd deployment\phoenix
 .\phoenix.ps1 up               # creates a dedicated Phoenix venv (Python 3.13, via uv) if missing, then starts it
 .\phoenix.ps1 status            # check it's running + show the data dir
+.\phoenix.ps1 logs              # last 200 log lines (+ stderr, if any)
 .\phoenix.ps1 logs -Follow      # follow server logs
 .\phoenix.ps1 down              # stop; add -Purge to also delete local trace data
 ```
 `phoenix.ps1` needs no container runtime and no manual `pip install` step —
-`up` resolves `phoenix` from `$env:PHOENIX_BIN`, then a dedicated Phoenix venv
-(`.venvs\phoenix` beside the project `.venv`), then `PATH`, then the repo
-`.venv`; if none exist it runs `uv venv --python 3.13 .venvs\phoenix` + `uv pip
-install arize-phoenix` for you. It installs into that **dedicated 3.13 venv, not
-the project `.venv`** — see
-the Windows+3.14 gotcha above for why. Re-running `up` reuses the install.
-Override the venv location, its Python, or the binary with `$env:PHOENIX_VENV`,
-`$env:PHOENIX_PYTHON`, or `$env:PHOENIX_BIN`.
+`up` resolves `phoenix` from `$env:PHOENIX_BIN`, then the dedicated Phoenix venv,
+then `PATH`, then the repo `.venv`; if none exist it runs `uv venv --python 3.13`
++ `uv pip install arize-phoenix` for you. It installs into that **dedicated 3.13
+venv, not the project `.venv`** — see the Windows+3.14 gotcha above for why.
+Re-running `up` reuses the install, so only the first `up` is slow (it downloads
+Python 3.13 and Phoenix).
+
+That dedicated venv lives at **`%USERPROFILE%\venvs\<repo-name>-phoenix`** —
+i.e. `C:\Users\<you>\venvs\EAT_smart_assignment-phoenix` — *not* inside the repo.
+This is deliberate: the repo tree is OneDrive-synced, and a venv there hits the
+same cloud-sync/hardlink problems that push the project's own `.venv` out to
+`%USERPROFILE%\venvs\` via `UV_PROJECT_ENVIRONMENT`. Override the venv location,
+its Python, or the binary with `$env:PHOENIX_VENV`, `$env:PHOENIX_PYTHON`, or
+`$env:PHOENIX_BIN`.
 
 Prefer to do it by hand? That's all the scripts do:
 
@@ -120,9 +140,9 @@ source ~/.venvs/phoenix/bin/activate
 PHOENIX_WORKING_DIR=./deployment/phoenix/.data phoenix serve
 ```
 ```powershell
-# from the repo root, with .venvs\phoenix already created (see the gotcha above)
+# with the dedicated Phoenix venv already created (see the gotcha above)
 $env:PHOENIX_WORKING_DIR = ".\deployment\phoenix\.data"
-& ".\.venvs\phoenix\Scripts\phoenix.exe" serve
+& "$env:USERPROFILE\venvs\EAT_smart_assignment-phoenix\Scripts\phoenix.exe" serve
 ```
 
 When it's up, the **UI is at http://localhost:6006**. No sign-up, org, or API
@@ -165,9 +185,57 @@ Do **not** also set the `LANGFUSE_*` trio — `OTEL_EXPORTER_OTLP_ENDPOINT` take
 precedence over it in `shared/tracing.py`, but leaving both around invites
 confusion about which backend is actually receiving spans.
 
+> **Start Phoenix and install the extra *before* the app — then restart the app.**
+> `configure_tracing()` caches its outcome in module-level state and runs the real
+> setup **exactly once per process** (`_INIT_DONE` / `_TRACER` in
+> `shared/tracing.py`). A process that starts while the exporter is missing caches
+> "tracing unavailable" and will never emit a span again, no matter what you fix
+> underneath. Installing the extra or starting Phoenix does **not** retroactively
+> fix an already-running server — restart it.
+
 ---
 
-## 3. Run eval so traces land in Phoenix
+## 3. Verify it's actually working
+
+Every failure mode in this stack is **silent by design**: tracing only ever
+observes, so `shared/tracing.py` degrades to a no-op rather than risk breaking a
+decision. The absence of errors therefore proves nothing. Check positively.
+
+**a) Watch the app's startup log** for these two lines, emitted on the first
+agent build / LLM call. Their presence is the success signal:
+
+```
+INFO  Installed a global TracerProvider for smart-assignment tracing.
+INFO  Installed the Google ADK OpenTelemetry instrumentor.
+```
+
+A `WARNING` instead is the failure signal, and it names its own fix:
+
+| Warning | Cause |
+|---|---|
+| `...the OTLP HTTP exporter is unavailable; install the 'observability' extra` | the extra is missing (or was pruned by `uv sync`) — see *Prerequisites* |
+| `...the OpenTelemetry SDK is not installed` | same, more severe |
+| `...no exporter endpoint is configured` | `OTEL_EXPORTER_OTLP_ENDPOINT` unset in `.env` |
+
+**b) Confirm a span reached Phoenix.** Send one real request, then ask Phoenix
+directly rather than eyeballing the UI (spans are batched, hence the sleep):
+
+```powershell
+$body = @{ message = "1200 McKinney St, Houston, TX 77010, 90 cases, TUE 07:00-10:00" } | ConvertTo-Json
+Invoke-WebRequest -Uri "http://127.0.0.1:8000/api/recommend" -Method POST -Body $body -ContentType "application/json" -UseBasicParsing | Out-Null
+Start-Sleep 8
+$q = '{"query":"{ projects { edges { node { name traceCount } } } }"}'
+(Invoke-WebRequest -Uri "http://localhost:6006/graphql" -Method POST -Body $q -ContentType "application/json" -UseBasicParsing).Content
+```
+
+A rising `traceCount` on the `smart-assignment-eval` project means the whole
+chain — exporter installed, endpoint correct, Phoenix ingesting — is live. If the
+project shows `traceCount: 0` while the app logs the two INFO lines above, suspect
+the `/v1/traces` double-suffix described in step 2.
+
+---
+
+## 4. Run eval so traces land in Phoenix
 
 The eval harness replays the golden intake conversations against the **real**
 agent, which builds `root_agent` → `configure_tracing()` → installs the
@@ -186,7 +254,7 @@ see the tracing module.)
 
 ---
 
-## 4. Add human feedback (the point)
+## 5. Add human feedback (the point)
 
 Phoenix stores human judgments as **annotations** on spans/traces, tagged
 `annotator_kind=HUMAN` (as opposed to `LLM` or `CODE` annotators), so they're
@@ -247,11 +315,12 @@ cd deployment\phoenix
   shared network — no auth, no HA, no backups by default. Fine for
   human-in-the-loop review; follow Phoenix's self-hosting docs (Postgres
   backend, Docker/Kubernetes deployment) before any shared production use.
-- The helper script and instructions here have **not** been executed against a
-  live host as part of building this repo (same convention as
-  `deployment/deploy.py`) — verify the `phoenix serve` invocation and default
-  ports against the `arize-phoenix` version you install. The exporter path
-  they drive, however, is exercised by `tests/shared/test_tracing.py`.
+- **Verified live on Windows** against `arize-phoenix` **19.2.0** (Phoenix venv on
+  Python 3.13, project venv on 3.14): `phoenix.ps1 up` → `.env` as in step 2 →
+  webapp → spans ingested into the `smart-assignment-eval` project. `phoenix.sh`
+  (macOS/Linux) has **not** been exercised the same way — verify the `phoenix
+  serve` invocation and default ports against the version you install. The
+  exporter path both drive is covered by `tests/shared/test_tracing.py`.
 
 ### Sources
 - Phoenix self-hosting: <https://arize.com/docs/phoenix/self-hosting>
