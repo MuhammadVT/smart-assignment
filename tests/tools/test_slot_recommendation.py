@@ -14,6 +14,7 @@ import pytest
 
 from smart_assignment.integrations.geocoding_client import MockGeocoder
 from smart_assignment.shared.geo import AddressNotFoundError, GeocodingServiceError
+from smart_assignment.shared.models import GeoPoint
 from smart_assignment.tools import slot_recommendation as tools_module
 from smart_assignment.tools.slot_recommendation import (
     _STATE_PROFILE_KEY,
@@ -331,6 +332,45 @@ def test_geocode_prospect_address_returns_the_coordinates():
     assert result["geocoded_location"] == routes["geocoded_location"]
     # A location lookup answers a side question -- it must not do step 2's work.
     assert "candidate_routes" not in result
+
+
+def test_geocoded_coordinates_are_rounded_for_display_only():
+    """The agent reads these out loud, so they carry 4 dp (~11 m) rather than the
+    geocoder's raw sub-micrometer float -- and BOTH tools round identically, so one
+    address never gets two different answers. The rounding is display-only: the
+    distances reported alongside them are still computed from the full-precision
+    point, which is why an 11 m rounding cannot move a mile figure."""
+    ctx = _FakeToolContext()
+    intake_customer(
+        address="1200 McKinney St, Houston, TX 77010", order_quantity_cases=90, tool_context=ctx
+    )
+    lookup = geocode_prospect_address(tool_context=ctx)["geocoded_location"]
+    routes = find_candidate_routes(tool_context=ctx)
+    assert lookup == routes["geocoded_location"]
+    for value in lookup.values():
+        assert value == round(value, 4)
+
+    # The point the pipeline actually computes with is untouched -- rounding
+    # happens on the way out, never on the GeoPoint.
+    raw = tools_module._GEOCODER.geocode("1200 McKinney St, Houston, TX 77010")
+    assert lookup["latitude"] == round(raw.latitude, 4)
+    assert lookup["longitude"] == round(raw.longitude, 4)
+
+
+def test_a_raw_geocoder_float_is_shortened_before_the_agent_sees_it():
+    """The reported case: a real CensusGeocoder point reached the chat as
+    "latitude 29.740667796002". Pinned with that exact value so the assertion
+    can't go vacuous on a mock that happens to return short floats."""
+    ctx = _FakeToolContext()
+    intake_customer(
+        address="1200 McKinney St, Houston, TX 77010", order_quantity_cases=90, tool_context=ctx
+    )
+    raw = GeoPoint(latitude=29.740667796002, longitude=-95.462287027565)
+    with patch.object(tools_module._GEOCODER, "geocode", return_value=raw):
+        result = geocode_prospect_address(tool_context=ctx)
+    assert result["geocoded_location"] == {"latitude": 29.7407, "longitude": -95.4623}
+    # The geocoder's own point is untouched -- only the copy going out is short.
+    assert raw.latitude == 29.740667796002
 
 
 def test_geocode_prospect_address_works_before_intake_is_complete():
