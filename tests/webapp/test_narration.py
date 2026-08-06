@@ -95,6 +95,42 @@ def test_tool_steps_empty_for_non_pipeline_tool():
     assert tool_steps("some_other_tool") == []
 
 
+# --- the on-demand location lookup -------------------------------------------
+#
+# It gets its own step, NOT a second route into Geo-Lookup. Geo-Lookup means
+# "geocode AND rank the nearest routes"; settling it off a geocode-only call
+# would claim work that never ran, and the caller's per-turn dedupe would then
+# swallow the real Geo-Lookup breadcrumb later in the same turn.
+
+
+def test_location_lookup_is_its_own_narrated_step():
+    assert tool_steps("geocode_prospect_address") == ["geocode_prospect_address"]
+    assert step_label("geocode_prospect_address") == "Locating"
+    assert step_detail("geocode_prospect_address")
+
+
+def test_location_lookup_does_not_claim_the_geo_lookup_step():
+    # The two must not share a step name, or one would settle the other.
+    assert "find_candidate_routes" not in tool_steps("geocode_prospect_address")
+    assert "geocode_prospect_address" not in tool_steps("find_candidate_routes")
+    assert step_label("geocode_prospect_address") != step_label("find_candidate_routes")
+    # And its wording must not promise the routes half of Geo-Lookup.
+    assert "route" not in step_detail("geocode_prospect_address").lower()
+
+
+def test_location_lookup_never_pre_empts_a_later_decision_step():
+    """A turn that asks "where are they?" and then wants a decision must still
+    show every assignment step: the lookup's step name appears in no other
+    tool's list, so the caller's dedupe can never suppress one."""
+    for tool in ("find_candidate_routes", "evaluate_and_score_routes",
+                 "recommend_or_escalate", "assign_prospect"):
+        assert "geocode_prospect_address" not in tool_steps(tool)
+
+
+def test_location_lookup_is_an_assignment_step_not_a_handoff():
+    assert step_phase("geocode_prospect_address") is None
+
+
 # --- the handoff phase (escalation) ------------------------------------------
 #
 # Composing the specialist brief is the longest call in an escalation turn. It is

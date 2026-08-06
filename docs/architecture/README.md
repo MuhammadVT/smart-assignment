@@ -22,9 +22,14 @@ Alongside those steps the interactive agent carries one **on-demand lookup**,
 nothing else). It is a sibling of `find_candidate_routes`, not a split of it: it
 answers a side question ("where is this customer?") with a single geocode instead
 of running step 2's fetch-and-rank over the whole route set. It writes no session
-state, is not a pipeline step (so it draws no live breadcrumb -- see
-`webapp/narration.py`), and never substitutes for `recommend_or_escalate`. Batch
-does not get it (see `_batch_agent_tools`): unattended runs ask no side questions.
+state and never substitutes for `recommend_or_escalate`. Batch does not get it
+(see `_batch_agent_tools`): unattended runs ask no side questions.
+
+In the live stepper it carries its own breadcrumb, **Locating** -- deliberately
+not a second way to light up Geo-Lookup. That step means "geocode *and* rank the
+nearest routes", so settling it off a geocode-only call would claim work that
+never ran, and the per-turn dedupe would then swallow the real Geo-Lookup
+breadcrumb if the same turn goes on to a decision (see `webapp/narration.py`).
 
 The agent (the LLM) decides *when* to call which tool and narrates the
 result in conversation; it never computes a distance, a constraint check, or

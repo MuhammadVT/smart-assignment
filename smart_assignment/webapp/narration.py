@@ -34,6 +34,12 @@ from typing import Any, Mapping, Optional
 STEP_LABELS = {
     "intake_customer": "Intake",
     "find_candidate_routes": "Geo-Lookup",
+    # The on-demand location lookup. Deliberately its OWN step rather than a
+    # second way to light up Geo-Lookup: that step means "geocode AND rank the
+    # nearest routes", so settling it off a geocode-only call would claim work
+    # that never ran -- and the per-turn dedupe would then swallow the real
+    # Geo-Lookup breadcrumb if the same turn goes on to a decision.
+    "geocode_prospect_address": "Locating",
     "evaluate_and_score_routes": "Score & Rank",
     "recommend_or_escalate": "Recommend / Decide",
     # The handoff phase (see HANDOFF_STEPS): only reached on an escalation.
@@ -44,6 +50,8 @@ STEP_LABELS = {
 _STEP_DETAIL = {
     "intake_customer": "Reading the address, order size, and preferred window.",
     "find_candidate_routes": "Placing the address on the map and finding the nearest routes.",
+    # The geocode half only -- no routes are fetched or ranked here.
+    "geocode_prospect_address": "Placing the address on the map.",
     "evaluate_and_score_routes": "Scoring each open slot on distance, capacity, and timing.",
     "recommend_or_escalate": "Checking the top slot against the auto-assign bar and deciding.",
     "escalation_triage": "Summarizing why this needs a human, and what the options are.",
@@ -80,6 +88,9 @@ _PHASE_HANDOFF = "handoff"
 TOOL_STEPS = {
     "intake_customer": ["intake_customer"],
     "find_candidate_routes": ["find_candidate_routes"],
+    # Its own single step (see the comment on its label above), so it never
+    # settles -- or is suppressed by -- a Geo-Lookup breadcrumb.
+    "geocode_prospect_address": ["geocode_prospect_address"],
     "evaluate_and_score_routes": ["find_candidate_routes", "evaluate_and_score_routes"],
     "recommend_or_escalate": [
         "find_candidate_routes",
