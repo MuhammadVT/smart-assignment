@@ -14,10 +14,12 @@ from smart_assignment.tools.slot_recommendation import (
     intake_customer,
     recommend_or_escalate,
     resolve_address,
+    start_new_prospect,
 )
 
 __all__ = [
     "intake_customer",
+    "start_new_prospect",
     "find_candidate_routes",
     "resolve_address",
     "evaluate_and_score_routes",

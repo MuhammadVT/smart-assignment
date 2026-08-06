@@ -35,6 +35,12 @@ Workflow, in strict order, for each prospect (repeat step 2 on revision):
      the missing/corrected value -- do not guess, and do not call any
      other tool until intake_customer returns {"ok": true}. This is the
      only step that may pause for the user before the decision.
+     When a customer is ALREADY on file from earlier in this conversation and
+     the user moves on to a DIFFERENT customer ("new customer", "next
+     prospect", "another one"), call start_new_prospect FIRST -- before
+     intake_customer -- so nothing from the previous customer carries over.
+     Never call it for a correction or revision of the current customer, and
+     there is no need to call it for the first customer of a conversation.
   2. Call recommend_or_escalate for the final decision. It geocodes the
      address, checks the hard constraints, and scores every route INTERNALLY,
      so you do NOT need to call find_candidate_routes or
@@ -105,17 +111,35 @@ real candidate matches and suggests the closest one -- it never invents an addre
 Never adopt a suggested address without the customer's explicit confirmation.
 """
 
+# The exact value the agent must pass as escalation_triage's ``request`` argument.
+#
+# ADK's AgentTool declares ``request`` as a REQUIRED string, so the model always has
+# to send something -- but the triage agent ignores it entirely and loads its facts
+# from session state via get_escalation_context. Left unspecified, the model fills
+# that hole unpredictably: observed live as both "" and a verbatim paste of the whole
+# recommend_or_escalate result. The paste is the dangerous one -- a large escaped-JSON
+# blob is what produced the array-wrapped tool-call arguments that crash ADK's
+# argument parser (see the repair in shared/llm.py). Naming one short, fixed line
+# removes the blob at the source. Shared by both guidance blocks below so the
+# conversational and batch instructions cannot drift apart.
+TRIAGE_REQUEST_LINE = "Compose the escalation brief for this prospect."
+
 # Appended to INSTRUCTION only when the escalation-triage sub-agent is enabled
 # (Config.use_escalation_triage). It tells root_agent to consult the
 # escalation_triage AgentTool before the human handoff. The tool name here must
 # match triage.agent.TRIAGE_AGENT_NAME.
-ESCALATION_TRIAGE_GUIDANCE = """
+ESCALATION_TRIAGE_GUIDANCE = f"""
 Escalation triage: whenever recommend_or_escalate returns
 "requires_human_review": true, handle it AUTOMATICALLY -- do NOT ask the user
 whether to escalate and do NOT wait for their go-ahead. In the SAME turn:
-  1. Call the escalation_triage tool FIRST. It reads the full evaluation trace
-     and returns a scannable specialist brief (situation, root cause, ranked
-     remediation options, a suggested starting point, and the decision to make).
+  1. Call the escalation_triage tool FIRST, passing exactly
+     request="{TRIAGE_REQUEST_LINE}"
+     That one short line is all it needs: the tool reads the full evaluation
+     trace from session state itself, and returns a scannable specialist brief
+     (situation, root cause, ranked remediation options, a suggested starting
+     point, and the decision to make). NEVER put the recommend_or_escalate
+     result -- or any other tool output, JSON, or route list -- in request. It
+     is ignored, and pasting one is a known cause of a failed call.
   2. Present that brief to the user on screen as the escalation message, relaying
      it verbatim -- keep its section layout and line breaks intact, and never
      alter a number, route, or the decision.
@@ -200,12 +224,17 @@ not come back from a tool call. Do not invent or recompute values.
 # triage brief. The tool name here must match triage.agent.TRIAGE_AGENT_NAME, and
 # it references assign_prospect (the batch agent's decision tool) rather than
 # recommend_or_escalate.
-BATCH_ESCALATION_TRIAGE_GUIDANCE = """
+BATCH_ESCALATION_TRIAGE_GUIDANCE = f"""
 Escalation triage: whenever assign_prospect returns "requires_human_review": true,
 do NOT hand off with a bare reason. In the SAME turn:
-  1. Call the escalation_triage tool FIRST. It reads the full evaluation trace and
-     returns a scannable specialist brief (situation, root cause, ranked
-     remediation options, a suggested starting point, and the decision to make).
+  1. Call the escalation_triage tool FIRST, passing exactly
+     request="{TRIAGE_REQUEST_LINE}"
+     That one short line is all it needs: the tool reads the full evaluation trace
+     from session state itself, and returns a scannable specialist brief (situation,
+     root cause, ranked remediation options, a suggested starting point, and the
+     decision to make). NEVER put the assign_prospect result -- or any other tool
+     output, JSON, or route list -- in request. It is ignored, and pasting one is a
+     known cause of a failed call.
   2. Call request_input, passing that SAME brief verbatim as the message, to record
      the escalation for a specialist to review asynchronously -- keep its section
      layout and line breaks intact, and never alter a number, route, or the

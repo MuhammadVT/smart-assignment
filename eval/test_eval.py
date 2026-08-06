@@ -60,6 +60,7 @@ from eval.build_evalset import render_dataset
 from eval.case_selection import select_cases
 from eval.golden_cases import GOLDEN_CASES
 from eval.inference_guard import fail_on_dropped_cases
+from eval.run_budget import run_budget
 
 REPO_ROOT = pathlib.Path(__file__).parent.parent
 AGENT_MODULE_PATH = "smart_assignment"
@@ -98,10 +99,13 @@ async def test_slot_recommendation_eval():
 
     # A case whose inference crashes is dropped by ADK, not failed -- so without
     # this guard the score is silently computed over only the survivors and the
-    # run still reports a pass. See eval/inference_guard.py.
+    # run still reports a pass. See eval/inference_guard.py. The budget is the
+    # outer ceiling: nothing else stops a hung backend running for hours (see
+    # eval/run_budget.py).
     with fail_on_dropped_cases():
-        await AgentEvaluator.evaluate(
-            agent_module=AGENT_MODULE_PATH,
-            eval_dataset_file_path_or_dir=_eval_dataset_path(),
-            **kwargs,
-        )
+        async with run_budget():
+            await AgentEvaluator.evaluate(
+                agent_module=AGENT_MODULE_PATH,
+                eval_dataset_file_path_or_dir=_eval_dataset_path(),
+                **kwargs,
+            )

@@ -19,7 +19,24 @@ import sys
 # A clean environment: no backend override (so it defaults to "sage") and no
 # credentials for any backend.
 _STRIP_PREFIXES = ("SAGE_", "GOOGLE_", "OPENAI_", "SMART_ASSIGNMENT_LLM", "SMART_ASSIGNMENT_MODEL")
+
+# Stripping alone does not survive the subprocess. ``smart_assignment/__init__.py``
+# loads the repo-root .env by an absolute, cwd-independent path, so on a configured
+# machine every credential removed above is put straight back -- and
+# ``test_root_agent_access_still_requires_sage_credentials`` then watched the agent
+# build happily instead of raising. Blank them instead: ``load_dotenv`` never
+# overrides a key already present in the environment, and every credential check
+# reads an empty value as absent.
+_BLANKED_CREDENTIALS = (
+    "SAGE_CLIENT_ID",
+    "SAGE_CLIENT_SECRET",
+    "SAGE_ENVIRONMENT",
+    "GOOGLE_API_KEY",
+    "OPENAI_API_KEY",
+)
+
 _BASE_ENV = {k: v for k, v in os.environ.items() if not k.startswith(_STRIP_PREFIXES)}
+_BASE_ENV.update(dict.fromkeys(_BLANKED_CREDENTIALS, ""))
 
 
 def _run(code: str, extra_env: dict | None = None) -> subprocess.CompletedProcess:

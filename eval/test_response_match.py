@@ -70,6 +70,7 @@ from eval.build_evalset import render_dataset
 from eval.capture import load_captured_outcomes
 from eval.golden_cases import GOLDEN_CASES
 from eval.inference_guard import fail_on_dropped_cases
+from eval.run_budget import run_budget
 from smart_assignment.shared.config import DEFAULT_CONFIG
 
 AGENT_MODULE_PATH = "smart_assignment"
@@ -154,9 +155,11 @@ async def test_response_match_on_recommend_cases():
     )
 
     # Same blind spot as eval/test_eval.py: a crashed case is dropped by ADK, not
-    # failed, so it would silently vanish from the score. See eval/inference_guard.py.
+    # failed, so it would silently vanish from the score (eval/inference_guard.py),
+    # and nothing else bounds a hung run (eval/run_budget.py).
     with fail_on_dropped_cases():
-        await AgentEvaluator.evaluate(
-            agent_module=AGENT_MODULE_PATH,
-            eval_dataset_file_path_or_dir=str(dataset_path),
-        )
+        async with run_budget():
+            await AgentEvaluator.evaluate(
+                agent_module=AGENT_MODULE_PATH,
+                eval_dataset_file_path_or_dir=str(dataset_path),
+            )

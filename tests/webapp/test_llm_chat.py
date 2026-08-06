@@ -9,6 +9,8 @@ and the mode/credential resolution. No network, no key.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from smart_assignment.integrations.geocoding_client import MockGeocoder
@@ -752,3 +754,107 @@ async def test_cached_decision_is_reused_under_every_grounded_config(
     assert payload is not None
     assert not calls, f"step 5 ran again with pick={pick}, escalation={escalation}"
     assert payload["_decision"]["outcome"] == "recommend"
+
+
+# --- Recovered model failures and the deterministic floor -------------------
+#
+# agent_callbacks stops a failed model call from unwinding the Runner. That is
+# right when the turn already produced a decision (the pipeline result is real
+# and must not be replaced), and WRONG when it produced nothing -- silence there
+# would leave the user worse off than the deterministic baseline this project
+# guarantees. stream_turn therefore re-raises only in the second case, so
+# app.chat falls back exactly as it did before recovery existed.
+
+
+class _FakeErrorEvent(_FakeEvent):
+    """The event ADK builds from the LlmResponse agent_callbacks returns."""
+
+    def __init__(self, text, error_code="AGENT_MODEL_ERROR", error_message="boom"):
+        super().__init__(text=text)
+        self.error_code = error_code
+        self.error_message = error_message
+
+
+def _service(events, state=None):
+    return LlmChatService(
+        runner=_FakeRunner([events]),
+        session_service=_FakeSessionService(state if state is not None else {}),
+        geocoder=MockGeocoder(),
+    )
+
+
+def test_recovered_failure_with_no_decision_raises_so_the_app_falls_back():
+    import asyncio
+
+    from smart_assignment.webapp.llm_chat import AgentTurnUnavailable
+
+    service = _service([_FakeErrorEvent("Sorry -- something went wrong.")])
+    with pytest.raises(AgentTurnUnavailable) as caught:
+        asyncio.run(_collect(service.stream_turn("s", "5000 Katy Mills Cir, 260 cases")))
+    # The reason travels with it, so the app's notice names a real cause.
+    assert "boom" in str(caught.value)
+
+
+def test_recovered_failure_with_no_decision_emits_no_misleading_reply():
+    """It must not yield the apology and THEN let the app append a deterministic
+    result -- the user would see a contradiction. Nothing is emitted at all."""
+    import asyncio
+
+    from smart_assignment.webapp.llm_chat import AgentTurnUnavailable
+
+    service = _service([_FakeErrorEvent("Sorry -- something went wrong.")])
+    frames = []
+
+    async def drain():
+        async for frame in service.stream_turn("s", "5000 Katy Mills Cir, 260 cases"):
+            frames.append(frame)
+
+    with pytest.raises(AgentTurnUnavailable):
+        asyncio.run(drain())
+    assert frames == []
+
+
+def test_recovered_failure_after_a_decision_keeps_the_agents_own_result():
+    """The opposite branch: the pipeline already decided, so that work is kept and
+    the turn ends normally -- no exception, no deterministic re-run."""
+    import asyncio
+
+    events = [
+        *_tool_pair("recommend_or_escalate"),
+        _FakeErrorEvent("Sorry -- something went wrong."),
+    ]
+    service = _service(events, state=_SAMPLE_STATE)
+    frames = asyncio.run(_collect(service.stream_turn("s", "any revision")))
+
+    kinds = [f["type"] for f in frames]
+    assert "visualization" in kinds, "the agent's own decision must still render"
+    assert kinds[-1] == "done"
+    assert any(f["type"] == "message" for f in frames), "the notice is still shown"
+
+
+def test_a_recovery_notice_is_never_used_as_the_agents_reasoning():
+    """The notice reaches the chat box but must not become the result card's
+    'Why the agent chose this'."""
+    import asyncio
+
+    notice = "Sorry -- something went wrong."
+    events = [*_tool_pair("recommend_or_escalate"), _FakeErrorEvent(notice)]
+    service = _service(events, state=_SAMPLE_STATE)
+    frames = asyncio.run(_collect(service.stream_turn("s", "any revision")))
+
+    viz = next(f["payload"] for f in frames if f["type"] == "visualization")
+    assert notice not in json.dumps(viz)
+
+
+def test_a_normal_reply_after_a_decision_is_still_used_as_the_reasoning():
+    """Control for the test above: an ordinary reply (no error code) must still be
+    captured, so the guard didn't break the feature it protects."""
+    import asyncio
+
+    reasoning = "I chose route 2041 because it is closest."
+    events = [*_tool_pair("recommend_or_escalate"), _FakeEvent(text=reasoning)]
+    service = _service(events, state=_SAMPLE_STATE)
+    frames = asyncio.run(_collect(service.stream_turn("s", "any revision")))
+
+    viz = next(f["payload"] for f in frames if f["type"] == "visualization")
+    assert reasoning in json.dumps(viz)

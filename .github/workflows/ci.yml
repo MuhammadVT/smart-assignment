@@ -30,6 +30,7 @@ concurrency:
 
 jobs:
   test:
+    timeout-minutes: 20
     # Runner is configurable so CI works under an org IP allow list. Standard
     # GitHub-hosted runners use ephemeral IPs; if the org enables an IP allow
     # list, actions/checkout is rejected with "403 ... IP allow list enabled,
@@ -100,6 +101,7 @@ jobs:
   # runner a read-only PAT/SSO for the SDK repo, or switch this job to
   # SMART_ASSIGNMENT_LLM_BACKEND=standard + a GOOGLE_API_KEY secret (no private SDK).
   agent-eval:
+    timeout-minutes: 30
     # See the note on the `test` job above; CI_RUNNER is shared repo-wide.
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
@@ -207,6 +209,7 @@ jobs:
   # evidence packet, no capture step needed. Same eval-quality install covers
   # both; see that file's module docstring.
   quality-eval:
+    timeout-minutes: 30
     # See the note on the `test` job above; CI_RUNNER is shared repo-wide.
     # Same red-vs-non-blocking model as agent-eval: continue-on-error is unset so a
     # can't-run failure (Sage SDK install with creds present) goes RED; the metrics
