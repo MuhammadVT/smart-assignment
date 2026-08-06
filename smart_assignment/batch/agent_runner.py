@@ -318,7 +318,10 @@ class AgentBatchRunner:
             # and only what the agent says AFTER the decision, as the narration.
             if event.content and event.content.parts and not getattr(event, "partial", False):
                 text = "".join(p.text for p in event.content.parts if getattr(p, "text", None))
-                if text.strip() and saw_decision:
+                # An error-recovery notice (agent_callbacks) carries an error code and
+                # is not narration -- it must never be written to the record as the
+                # agent's reasoning for a decision it did not explain.
+                if text.strip() and saw_decision and not getattr(event, "error_code", None):
                     narration_parts.append(text.strip())
 
         narration = "\n\n".join(narration_parts) or None

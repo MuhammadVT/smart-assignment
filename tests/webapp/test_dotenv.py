@@ -15,6 +15,13 @@ from pathlib import Path
 
 _CLEAN_ENV = {"PATH": os.environ["PATH"], "HOME": os.environ.get("HOME", "/root")}
 
+# Windows needs SystemRoot to initialize Winsock; without it the child cannot even
+# `import asyncio` ("[WinError 10106] The requested service provider could not be
+# loaded or initialized"), which google.adk does on import. It carries no
+# configuration, so "credentials can only arrive via .env" still holds.
+if "SystemRoot" in os.environ:
+    _CLEAN_ENV["SystemRoot"] = os.environ["SystemRoot"]
+
 _ENV_FILE = """\
 SMART_ASSIGNMENT_WEBAPP_MODE=llm
 SMART_ASSIGNMENT_LLM_BACKEND=sage

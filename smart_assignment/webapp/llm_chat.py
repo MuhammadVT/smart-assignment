@@ -63,6 +63,28 @@ _REQUEST_INPUT_NAME = "adk_request_input"
 _DECISION_TOOLS = ("recommend_or_escalate", "assign_prospect")
 
 
+class AgentTurnUnavailable(RuntimeError):
+    """The agent's turn ended in a *recovered* model failure having produced no
+    decision, so it has nothing to show.
+
+    ``agent_callbacks`` deliberately stops such a failure from unwinding the
+    Runner -- that is what keeps a turn whose pipeline already succeeded from
+    being thrown away. But when nothing was produced, silence would be a
+    regression: before recovery existed the exception reached ``app.chat``, which
+    answered from the deterministic brain. Raising this preserves that floor, so
+    recovery is never worse than the deterministic baseline -- only better when
+    there is real work to protect.
+    """
+
+
+def _event_text(event: Any) -> str:
+    """The aggregated text of an ADK event's parts, stripped ("" when there is
+    none). Keeps the two text-reading branches below reading identically."""
+    content = getattr(event, "content", None)
+    parts = getattr(content, "parts", None) or []
+    return "".join(p.text for p in parts if getattr(p, "text", None)).strip()
+
+
 def _call_key(part: Any) -> str:
     """Correlation key pairing a FunctionCall with its FunctionResponse. ADK sets
     a matching ``id`` on both; fall back to the tool name so a backend that omits
@@ -185,15 +207,25 @@ class LlmChatService:
         self._known_sessions: set[str] = set()
         # browser session_id -> {"id", "name"} of a pending request_input to resume.
         self._pending_input: dict[str, dict] = {}
-        # A browser session can hold many prospects one after another. Each new
-        # prospect gets its own *underlying* ADK conversation so the model and the
-        # session state start clean -- otherwise the previous prospect's history,
-        # profile, and any pending escalation bleed into the next one (stale
-        # numbers, a misrouted request_input resume). We rotate a generation
-        # counter and suffix the ADK session id; the browser session_id the client
-        # sends never changes. ``_concluded`` marks a browser session whose current
-        # prospect already reached a recommendation/escalation, so the NEXT full
-        # prospect triggers a rotation (a mid-prospect revision does not).
+        # A browser session can hold many prospects one after another. When the
+        # NEXT full prospect arrives after the current one concluded/escalated,
+        # the underlying ADK conversation is rotated (a generation counter
+        # suffixes the ADK session id; the browser session_id never changes) so
+        # the transcript starts clean and any pending request_input can't
+        # misroute the new prospect as the specialist's reply.
+        #
+        # Rotation is HYGIENE, not the correctness boundary. Cross-prospect
+        # contamination is prevented one level down, in the tools every surface
+        # shares: intake_customer resets the profile deterministically when a new
+        # address arrives after a decision, and start_new_prospect lets the model
+        # declare a switch rotation's parser can't see (see
+        # tools/slot_recommendation.py -- adk web has no rotation at all and is
+        # covered by the same guards). What rotation still buys here: a bounded,
+        # per-prospect transcript (the sage backend folds recent history into its
+        # system prompt), and clean pending-escalation bookkeeping.
+        # ``_concluded`` marks a browser session whose current prospect already
+        # reached a recommendation/escalation, so the NEXT full prospect triggers
+        # a rotation (a mid-prospect revision does not).
         self._generation: dict[str, int] = {}
         self._concluded: set[str] = set()
 
@@ -258,7 +290,14 @@ class LlmChatService:
         prospect after the current one already concluded/escalated. A new prospect
         is a message that carries a street address; a revision (e.g. "try 20
         cases", "make it Tuesday") carries none and stays in the same session so
-        multi-turn context is preserved."""
+        multi-turn context is preserved.
+
+        Best-effort by design: the address regex misses many natural phrasings
+        ("new customer at <address> - 260 cases" does not rotate), and that is
+        acceptable because this is NOT what prevents cross-prospect
+        contamination -- the intake-level guards do that on every surface (see
+        the note on ``_generation`` in ``__init__``). Widening the trigger would
+        only tidy transcripts sooner; failing to rotate must never leak data."""
         has_address = parse_intake(message).address is not None
         concluded = session_id in self._concluded or session_id in self._pending_input
         if has_address and concluded:
@@ -426,6 +465,10 @@ class LlmChatService:
         # calls recommend_or_escalate this turn), captured so the visualization's
         # "Why the agent chose this" can show the same words as the chat box.
         recommendation_reply: list[str] = []
+        # Set when the turn ended on an error-recovery notice (agent_callbacks)
+        # WITHOUT having reached a decision -- carries the reason so the raise
+        # after the loop is diagnosable. See the branch below for why.
+        unusable_turn: Optional[str] = None
         async for event in runner.run_async(
             user_id=user_id,
             session_id=adk_session_id,
@@ -535,14 +578,48 @@ class LlmChatService:
                         yield frame
                 continue
 
+            # An error-recovery notice from agent_callbacks: the model call failed
+            # and the turn was ended gracefully instead of unwinding the Runner.
+            # ADK's Event subclasses LlmResponse, so the stamped code is readable
+            # here. What to do with it depends entirely on whether this turn had
+            # already produced anything worth keeping:
+            #
+            #   decision reached -> the pipeline result is REAL and already shown.
+            #       Keep it: surface the notice and let the visualization render
+            #       below. Falling back now would replace a correct, audited answer
+            #       with a second one that could contradict it.
+            #   no decision      -> this turn produced nothing at all. Re-raise so
+            #       ``app.chat`` runs the deterministic brain exactly as it did
+            #       before recovery existed -- otherwise the user is told to try
+            #       again where they used to get a real answer, which would be
+            #       WORSE than the deterministic baseline this project guarantees.
+            #
+            # Either way the notice is never appended to ``recommendation_reply``:
+            # an error is not the agent's reasoning for a decision it never made.
+            if getattr(event, "error_code", None):
+                if not saw_recommendation:
+                    unusable_turn = (
+                        getattr(event, "error_message", None) or event.error_code
+                    )
+                    continue
+                text = _event_text(event)
+                if text:
+                    yield {"type": "message", "text": text}
+                continue
+
             # Natural-language text. Emit only the aggregated (non-partial) event
             # so the transcript gets each reply once, not per streamed chunk.
             if event.content and event.content.parts and not getattr(event, "partial", False):
-                text = "".join(p.text for p in event.content.parts if getattr(p, "text", None))
-                if text.strip():
+                text = _event_text(event)
+                if text:
                     if saw_recommendation:
-                        recommendation_reply.append(text.strip())
-                    yield {"type": "message", "text": text.strip()}
+                        recommendation_reply.append(text)
+                    yield {"type": "message", "text": text}
+
+        if unusable_turn is not None:
+            # Nothing was produced this turn, so hand the failure to the caller and
+            # let the deterministic brain answer -- the floor this project promises.
+            raise AgentTurnUnavailable(unusable_turn)
 
         if saw_recommendation:
             # This prospect reached a decision/escalation: the NEXT full prospect

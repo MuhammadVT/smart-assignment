@@ -426,6 +426,22 @@ newlines) so the specialist can scan and compare options at a glance. The
 prompt-driven layout stays fully grounded — the same `verify_brief` prose scan
 (below) still rejects any figure not in the escalation context.
 
+**The `request` argument is a fixed label, not a payload
+(`prompts.TRIAGE_REQUEST_LINE`).** ADK's `AgentTool` declares `request` as a
+*required* string, so the model must always send one — but the triage agent
+ignores it and loads every fact from session state via `get_escalation_context`.
+Left unspecified, the model filled that hole differently from run to run:
+measured live against sage over 15 escalations of the same prospect, it sent
+four different values, and on 4 of the 15 it pasted the entire
+`recommend_or_escalate` result (805 chars of escaped JSON). With the argument
+pinned, the same 15 runs all sent the one 47-char line.
+That paste is what makes the call fragile — the oversized nested
+blob is where the array-wrapped tool-call arguments come from that ADK's
+argument parser rejects (see `Config.repair_tool_call_args` below). Both
+instructions therefore name one exact short line, and forbid pasting tool
+output into `request`. The repair stays as the backstop; this removes the input
+that triggers it.
+
 **Why an `AgentTool` (consult-and-return), not a peer agent with control
 transfer:** `root_agent` stays in control of the conversation and keeps
 ownership of the `request_input` pause/resume; triage is a bounded call that
@@ -751,6 +767,65 @@ Unlike the opt-in flags elsewhere in this document it defaults **on**
 (`SMART_ASSIGNMENT_REPAIR_TOOL_CALL_ARGS=false` to disable), because it provably
 cannot change a healthy call — it only ever fires on a payload that would
 otherwise crash.
+
+### Recovering from a failed model or tool call (`Config.recover_from_agent_errors`, on by default)
+
+The repair above closes the *one* payload shape it can read with certainty. Every
+other shape — and every unrelated model failure — still reached ADK, and ADK
+re-raises: `base_llm_flow` re-raises the model error, `functions` re-raises the
+tool error, and either one unwinds the whole Runner. A single malformed reply
+therefore destroyed an entire turn *whose deterministic pipeline had already
+succeeded*, and the web app replaced the agent's real answer with a deterministic
+result that could contradict what the user had just been shown.
+
+`agent_callbacks.py` installs ADK's two error hooks on `root_agent` and the batch
+agent. They answer differently on purpose:
+
+| Hook | Returns | Effect |
+|---|---|---|
+| `on_model_error_callback` | an `LlmResponse` | The turn ends with a plain reply instead of an exception. It has no function calls, so `Event.is_final_response()` is True and the flow's loop terminates — no retry semantics, no spin |
+| `on_tool_error_callback` | `{"ok": false, "error": …}` | The same result shape every pipeline tool already returns, so `webapp.llm_chat._tool_outcome` marks that step failed with the real reason and the conversation continues |
+
+The model-error response deliberately carries **both** `content` and
+`error_code`. Content is required because the web app only emits a chat frame for
+an event with `content.parts` — an error-code-only response would render a blank
+turn, worse than the failure it replaces. The error code is required because
+`Event` subclasses `LlmResponse`, so it is readable downstream: both
+`webapp/llm_chat.py` and `batch/agent_runner.py` check it before capturing text,
+so a recovery notice is shown to the user but **never** recorded as the agent's
+reasoning for a decision it did not explain.
+
+**The triage sub-agent deliberately gets neither hook.** `AgentTool` returns the
+sub-agent's last content as the tool result, and the root instruction relays the
+brief *verbatim* to a specialist — a model-error callback there would hand that
+specialist an apology dressed as an escalation brief. Letting it raise into
+`root_agent`'s tool-error hook turns the same failure into an honest failed-tool
+result instead.
+
+**Recovery must not cost the deterministic floor.** Suppressing the exception also
+stops it reaching `app.chat`, whose `except` clause is what runs the deterministic
+brain. So `stream_turn` splits on whether the turn produced anything:
+
+| Model fails… | Behavior | Why |
+|---|---|---|
+| **after** a decision | notice shown, agent's own result cards still render, no fallback | The pipeline result is real and audited; re-running would replace it with a second answer that could contradict it |
+| **before** a decision | `AgentTurnUnavailable` is raised, nothing is emitted | The turn produced nothing, so `app.chat` answers from the deterministic brain exactly as before — otherwise the user would be told to retry where they used to get a real answer |
+
+Verified live end-to-end against sage by corrupting one real reply into the
+unrepairable two-object array shape and driving `/api/chat`: with the failure
+*before* a decision the user gets deterministic result cards whether recovery is
+on or off (no regression), and with it *after* a decision recovery keeps the
+agent's own decision instead of discarding it for a deterministic re-run.
+
+Safe for an unattended batch run: `batch/agent_runner._run_one_via_agent` keys its
+outcome off the decision stored in session state, so a turn that ends early
+without one still degrades to the deterministic pipeline exactly as before.
+
+Defaults **on** for the same reason as the repair above: it can only fire on a
+path that is already an unhandled exception. With
+`SMART_ASSIGNMENT_RECOVER_FROM_AGENT_ERRORS=false` the agents are constructed with
+no callbacks at all and ADK raises exactly as it used to. The exception is always
+logged with its traceback; no decision is suppressed and no value is invented.
 
 ## Tracing & observability (`shared/tracing.py`, opt-in)
 
@@ -1233,11 +1308,50 @@ look at this?" is answered by the model's own confidence plus cross-sample
 agreement, not a fixed cutoff. The bar remains in the packet as a reference and
 remains the deterministic fallback.
 
+### Prospect isolation: the profile belongs to its address
+
+`intake_customer` merges by design — a revision supplies only the fields that
+changed. But the same merge once ran when a conversation moved on to a
+**different customer** in the same session, so the previous prospect's unstated
+fields followed the new one — observed live: a prospect who stated no delivery
+preference was decided with the previous prospect's `TUE 07:00-10:00`, and a
+phantom preferred day changes the candidate set, so it changes the decision.
+`adk web`/`adk run` were worst off (one eternal session, no rotation layer at
+all). The guards live in the tools every conversational surface shares
+(`tools/slot_recommendation.py`), so no surface depends on a wrapper for
+correctness:
+
+- **Deterministic reset.** When intake receives an address that differs from
+  the one on file (normalized compare) *and* that profile already produced a
+  decision, the profile starts fresh from the passed fields and every
+  prospect-scoped state key is cleared — the decision snapshot (else
+  `cached_decision_for` could re-render the previous customer's outcome) and
+  the triage grounding (else a brief could cite it). After a decision, a
+  different address IS a different customer; no model judgment overrides this.
+  Pre-decision address changes still merge, which is what the
+  `resolve_address` confirmation flow relies on. Accepted trade-off:
+  correcting an address *after* a recommendation re-asks for the order size —
+  a visible re-ask over silently deciding with another customer's data.
+- **`start_new_prospect`** — a no-argument tool the model calls when the user
+  switches customers ("another one, 40 cases" is byte-identical to a revision
+  at the tool level; only the model sees the words). It only *discards* state,
+  so a spurious call costs a re-ask, never contamination — model judgment is
+  never load-bearing for correctness. It is deliberately a separate tool, not
+  an `intake_customer` parameter: the golden eval pins intake's argument dict
+  exactly (an extra argument flaked it, measured live), while the `IN_ORDER`
+  trajectory matcher tolerates extra tool *calls*. Interactive surfaces only —
+  batch seeds a fresh session per prospect (its isolation rests on that, since
+  `assign_prospect` reuses `intake_customer`'s merge internally) and keeps its
+  tool surface byte-identical.
+
+`tests/test_prospect_isolation.py` replays the leak through a real ADK Runner +
+real tools with a scripted model (the `adk web` shape, no rotation anywhere);
+neutering the guard makes it fail exactly as the pre-fix code did.
+
 ### Prospect rotation and session memory (opt-in)
 
-A browser session can walk through many prospects in a row. To stop one
-prospect's numbers, profile, or a pending `request_input` from bleeding into the
-next, `webapp/llm_chat._maybe_rotate_prospect` starts a **fresh underlying ADK
+A browser session can walk through many prospects in a row.
+`webapp/llm_chat._maybe_rotate_prospect` starts a **fresh underlying ADK
 conversation** whenever a new *address* arrives after the current prospect
 concluded/escalated: it bumps a generation counter and suffixes the ADK session
 id (`s1`, `s1#1`, …) while the browser's own `session_id` never changes. A
@@ -1245,6 +1359,13 @@ id (`s1`, `s1#1`, …) while the browser's own `session_id` never changes. A
 same conversation and keeps its context. This is why `adk web` (one eternal
 session) remembers an earlier aside but the web app, by default, does not: the
 rotation deliberately drops the prior transcript.
+
+Rotation is **hygiene, not the correctness boundary**: its address parser
+misses many natural phrasings ("new customer at `<address>` - 260 cases" does
+not rotate), and that is fine because cross-prospect contamination is prevented
+in the tools (see *Prospect isolation* above). What rotation still buys is a
+bounded per-prospect transcript (the sage backend folds recent history into its
+system prompt) and clean pending-escalation bookkeeping.
 
 `Config.use_session_memory` (env `SMART_ASSIGNMENT_USE_SESSION_MEMORY`, **off by
 default**) restores cross-prospect recall *without* touching rotation. It is
