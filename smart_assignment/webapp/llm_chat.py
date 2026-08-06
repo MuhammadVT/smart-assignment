@@ -207,15 +207,25 @@ class LlmChatService:
         self._known_sessions: set[str] = set()
         # browser session_id -> {"id", "name"} of a pending request_input to resume.
         self._pending_input: dict[str, dict] = {}
-        # A browser session can hold many prospects one after another. Each new
-        # prospect gets its own *underlying* ADK conversation so the model and the
-        # session state start clean -- otherwise the previous prospect's history,
-        # profile, and any pending escalation bleed into the next one (stale
-        # numbers, a misrouted request_input resume). We rotate a generation
-        # counter and suffix the ADK session id; the browser session_id the client
-        # sends never changes. ``_concluded`` marks a browser session whose current
-        # prospect already reached a recommendation/escalation, so the NEXT full
-        # prospect triggers a rotation (a mid-prospect revision does not).
+        # A browser session can hold many prospects one after another. When the
+        # NEXT full prospect arrives after the current one concluded/escalated,
+        # the underlying ADK conversation is rotated (a generation counter
+        # suffixes the ADK session id; the browser session_id never changes) so
+        # the transcript starts clean and any pending request_input can't
+        # misroute the new prospect as the specialist's reply.
+        #
+        # Rotation is HYGIENE, not the correctness boundary. Cross-prospect
+        # contamination is prevented one level down, in the tools every surface
+        # shares: intake_customer resets the profile deterministically when a new
+        # address arrives after a decision, and start_new_prospect lets the model
+        # declare a switch rotation's parser can't see (see
+        # tools/slot_recommendation.py -- adk web has no rotation at all and is
+        # covered by the same guards). What rotation still buys here: a bounded,
+        # per-prospect transcript (the sage backend folds recent history into its
+        # system prompt), and clean pending-escalation bookkeeping.
+        # ``_concluded`` marks a browser session whose current prospect already
+        # reached a recommendation/escalation, so the NEXT full prospect triggers
+        # a rotation (a mid-prospect revision does not).
         self._generation: dict[str, int] = {}
         self._concluded: set[str] = set()
 
@@ -280,7 +290,14 @@ class LlmChatService:
         prospect after the current one already concluded/escalated. A new prospect
         is a message that carries a street address; a revision (e.g. "try 20
         cases", "make it Tuesday") carries none and stays in the same session so
-        multi-turn context is preserved."""
+        multi-turn context is preserved.
+
+        Best-effort by design: the address regex misses many natural phrasings
+        ("new customer at <address> - 260 cases" does not rotate), and that is
+        acceptable because this is NOT what prevents cross-prospect
+        contamination -- the intake-level guards do that on every surface (see
+        the note on ``_generation`` in ``__init__``). Widening the trigger would
+        only tidy transcripts sooner; failing to rotate must never leak data."""
         has_address = parse_intake(message).address is not None
         concluded = session_id in self._concluded or session_id in self._pending_input
         if has_address and concluded:
