@@ -1308,11 +1308,50 @@ look at this?" is answered by the model's own confidence plus cross-sample
 agreement, not a fixed cutoff. The bar remains in the packet as a reference and
 remains the deterministic fallback.
 
+### Prospect isolation: the profile belongs to its address
+
+`intake_customer` merges by design — a revision supplies only the fields that
+changed. But the same merge once ran when a conversation moved on to a
+**different customer** in the same session, so the previous prospect's unstated
+fields followed the new one — observed live: a prospect who stated no delivery
+preference was decided with the previous prospect's `TUE 07:00-10:00`, and a
+phantom preferred day changes the candidate set, so it changes the decision.
+`adk web`/`adk run` were worst off (one eternal session, no rotation layer at
+all). The guards live in the tools every conversational surface shares
+(`tools/slot_recommendation.py`), so no surface depends on a wrapper for
+correctness:
+
+- **Deterministic reset.** When intake receives an address that differs from
+  the one on file (normalized compare) *and* that profile already produced a
+  decision, the profile starts fresh from the passed fields and every
+  prospect-scoped state key is cleared — the decision snapshot (else
+  `cached_decision_for` could re-render the previous customer's outcome) and
+  the triage grounding (else a brief could cite it). After a decision, a
+  different address IS a different customer; no model judgment overrides this.
+  Pre-decision address changes still merge, which is what the
+  `resolve_address` confirmation flow relies on. Accepted trade-off:
+  correcting an address *after* a recommendation re-asks for the order size —
+  a visible re-ask over silently deciding with another customer's data.
+- **`start_new_prospect`** — a no-argument tool the model calls when the user
+  switches customers ("another one, 40 cases" is byte-identical to a revision
+  at the tool level; only the model sees the words). It only *discards* state,
+  so a spurious call costs a re-ask, never contamination — model judgment is
+  never load-bearing for correctness. It is deliberately a separate tool, not
+  an `intake_customer` parameter: the golden eval pins intake's argument dict
+  exactly (an extra argument flaked it, measured live), while the `IN_ORDER`
+  trajectory matcher tolerates extra tool *calls*. Interactive surfaces only —
+  batch seeds a fresh session per prospect (its isolation rests on that, since
+  `assign_prospect` reuses `intake_customer`'s merge internally) and keeps its
+  tool surface byte-identical.
+
+`tests/test_prospect_isolation.py` replays the leak through a real ADK Runner +
+real tools with a scripted model (the `adk web` shape, no rotation anywhere);
+neutering the guard makes it fail exactly as the pre-fix code did.
+
 ### Prospect rotation and session memory (opt-in)
 
-A browser session can walk through many prospects in a row. To stop one
-prospect's numbers, profile, or a pending `request_input` from bleeding into the
-next, `webapp/llm_chat._maybe_rotate_prospect` starts a **fresh underlying ADK
+A browser session can walk through many prospects in a row.
+`webapp/llm_chat._maybe_rotate_prospect` starts a **fresh underlying ADK
 conversation** whenever a new *address* arrives after the current prospect
 concluded/escalated: it bumps a generation counter and suffixes the ADK session
 id (`s1`, `s1#1`, …) while the browser's own `session_id` never changes. A
@@ -1320,6 +1359,13 @@ id (`s1`, `s1#1`, …) while the browser's own `session_id` never changes. A
 same conversation and keeps its context. This is why `adk web` (one eternal
 session) remembers an earlier aside but the web app, by default, does not: the
 rotation deliberately drops the prior transcript.
+
+Rotation is **hygiene, not the correctness boundary**: its address parser
+misses many natural phrasings ("new customer at `<address>` - 260 cases" does
+not rotate), and that is fine because cross-prospect contamination is prevented
+in the tools (see *Prospect isolation* above). What rotation still buys is a
+bounded per-prospect transcript (the sage backend folds recent history into its
+system prompt) and clean pending-escalation bookkeeping.
 
 `Config.use_session_memory` (env `SMART_ASSIGNMENT_USE_SESSION_MEMORY`, **off by
 default**) restores cross-prospect recall *without* touching rotation. It is
