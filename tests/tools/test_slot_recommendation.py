@@ -21,6 +21,7 @@ from smart_assignment.tools.slot_recommendation import (
     find_candidate_routes,
     intake_customer,
     recommend_or_escalate,
+    start_new_prospect,
 )
 
 
@@ -492,3 +493,119 @@ def test_batch_shape_cannot_trigger_the_reset():
                              tool_context=ctx)
     assert result["ok"] is True
     assert result["profile"]["order_quantity_cases"] == 260
+
+
+# --- The explicit start_new_prospect boundary (phase 2) -----------------------
+#
+# The deterministic guard above cannot fire when no address is passed, or before
+# a decision exists -- "another customer, 40 cases" is byte-identical at the tool
+# level to the revision "try 40 cases". Only the model sees the words, so it
+# declares the switch by calling start_new_prospect. A dedicated NO-ARG tool, not
+# an intake_customer parameter, deliberately: the golden eval pins intake's
+# argument dict exactly (an extra argument flaked it, measured live), while the
+# IN_ORDER trajectory matcher tolerates extra tool CALLS -- so even a spurious
+# boundary call cannot flake the eval. And it is safe in exactly one direction:
+# it only DISCARDS state (worst case: a re-ask), never carries state over.
+
+
+def test_start_new_prospect_resets_even_before_any_decision():
+    """Mid-intake switch: prospect A never concluded, so the deterministic guard
+    stays out of it -- the boundary tool is the only thing that can reset here."""
+    ctx = _FakeToolContext()
+    intake_customer(
+        address=_ADDR_A, order_quantity_cases=90,
+        preferred_day="TUE", preferred_window_start="07:00",
+        preferred_window_end="10:00", tool_context=ctx,
+    )
+    assert start_new_prospect(tool_context=ctx)["ok"] is True
+    result = intake_customer(address=_ADDR_B, order_quantity_cases=260,
+                             tool_context=ctx)
+    assert result["ok"] is True
+    assert result["profile"]["preferred_day"] is None
+
+
+def test_start_new_prospect_then_no_address_asks_for_one():
+    """'Another customer, 40 cases' -- no address given. The boundary discards A's
+    profile, so intake asks for the address instead of silently deciding the NEW
+    customer's order against the OLD customer's address."""
+    ctx = _FakeToolContext()
+    _concluded_prospect_a(ctx)
+
+    start_new_prospect(tool_context=ctx)
+    result = intake_customer(order_quantity_cases=40, tool_context=ctx)
+    assert result["ok"] is False
+    assert "address" in result["error"]
+    assert ctx.state["sa_profile"].get("address") is None  # A is gone
+    assert not ctx.state.get("sa_last_recommendation")  # A's decision too
+
+
+def test_start_new_prospect_clears_triage_state_too():
+    ctx = _FakeToolContext()
+    _concluded_prospect_a(ctx)
+    ctx.state["sa_triage_grounding"] = {"figures": [90]}
+
+    start_new_prospect(tool_context=ctx)
+    from smart_assignment.tools.slot_recommendation import _PROSPECT_SCOPED_STATE_KEYS
+
+    for key in _PROSPECT_SCOPED_STATE_KEYS:
+        assert not ctx.state.get(key)
+    assert not ctx.state.get("sa_profile")
+
+
+def test_start_new_prospect_on_empty_state_is_a_harmless_no_op():
+    """A spurious call on the first customer of a conversation (the model
+    following the words "new prospect") must cost nothing."""
+    ctx = _FakeToolContext()
+    assert start_new_prospect(tool_context=ctx)["ok"] is True
+    result = intake_customer(address=_ADDR_A, order_quantity_cases=90,
+                             tool_context=ctx)
+    assert result["ok"] is True
+    assert result["profile"]["address"] == _ADDR_A
+
+
+def test_intake_customer_signature_matches_the_golden_eval_pin():
+    """The golden eval pins intake's argument dict exactly, so intake must not
+    grow model-visible parameters (that is what start_new_prospect is for -- an
+    extra CALL is tolerated by the IN_ORDER matcher; an extra ARGUMENT is not)."""
+    import inspect
+
+    params = set(inspect.signature(intake_customer).parameters)
+    assert params == {
+        "tool_context", "address", "order_quantity_cases", "preferred_day",
+        "preferred_window_start", "preferred_window_end", "customer_number",
+        "name", "clear_preferred_slot",
+    }
+
+
+def test_batch_agent_does_not_get_the_boundary_tool():
+    """Batch seeds a fresh session per prospect; a boundary tool there could only
+    spuriously discard the CRM-seeded profile. Its tool surface stays identical."""
+    from smart_assignment.agent import _batch_agent_tools
+    from smart_assignment.shared.config import Config
+
+    tools = _batch_agent_tools(Config(use_escalation_triage=False))
+    names = {getattr(t, "name", None) or getattr(t.func, "__name__", None) for t in tools}
+    assert "start_new_prospect" not in names
+
+
+def test_interactive_agent_wires_the_boundary_tool():
+    """The tool must actually be offered on the conversational surfaces -- adk
+    web/run and the webapp all build _build_root_agent's tool list."""
+    import inspect
+
+    from smart_assignment import agent as agent_module
+
+    source = inspect.getsource(agent_module._build_root_agent)
+    assert "start_new_prospect" in source
+
+
+def test_instruction_scopes_the_boundary_to_switching_customers():
+    """The guidance must exist and must scope the call to a SWITCH -- the golden
+    eval cases are single-prospect, so the model has no reason to call it there
+    (and a spurious call is tolerated by the matcher anyway)."""
+    from smart_assignment.prompts import build_instruction
+
+    text = " ".join(build_instruction().split())  # collapse line breaks
+    assert "call start_new_prospect FIRST" in text
+    assert "DIFFERENT customer" in text
+    assert "Never call it for a correction or revision" in text

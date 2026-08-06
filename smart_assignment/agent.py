@@ -50,6 +50,7 @@ from smart_assignment.tools import (
     intake_customer,
     recommend_or_escalate,
     resolve_address,
+    start_new_prospect,
 )
 
 # Cached after first access so repeated lookups return the same agent instance.
@@ -98,6 +99,13 @@ def _build_root_agent() -> LlmAgent:
     # server's event loop free, so it must not run inline on that loop.
     tools = [
         FunctionTool(_offloaded_tool(intake_customer)),
+        # The model-declared boundary between customers in one conversation: it
+        # only discards state (worst case a spurious re-ask, never contamination),
+        # and the deterministic address guard inside intake_customer still covers
+        # the post-decision case when the model forgets to call it. Interactive
+        # surfaces only -- batch seeds a fresh session per prospect and must keep
+        # its tool surface byte-identical (see _batch_agent_tools).
+        FunctionTool(_offloaded_tool(start_new_prospect)),
         FunctionTool(_offloaded_tool(find_candidate_routes)),
         FunctionTool(_offloaded_tool(evaluate_and_score_routes)),
         FunctionTool(_offloaded_tool(recommend_or_escalate)),

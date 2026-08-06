@@ -233,10 +233,8 @@ def intake_customer(
     already on file from an earlier call in this conversation is kept
     automatically, so you never need to repeat the full profile.
 
-    Exception: once a recommendation or escalation has been made, a DIFFERENT
-    address starts a FRESH prospect -- nothing from the previous customer
-    (order size, preferred slot, prior decision) carries over, so re-collect
-    any detail the new customer hasn't stated.
+    Exception: a DIFFERENT address after a completed recommendation or
+    escalation starts a fresh prospect automatically (nothing is kept).
 
     Args:
       address: The prospect's street address. Required before any other
@@ -255,8 +253,10 @@ def intake_customer(
         only if the account already has one -- most prospects do not, and
         omitting it is the default, expected case.
       name: The business/contact name, if known. Not required to proceed.
-      clear_preferred_slot: Set true if the customer says they no longer
-        have a day/time preference, to remove one recorded earlier.
+      clear_preferred_slot: Set true ONLY to REMOVE a preferred slot recorded
+        EARLIER in this conversation, when the customer changes their mind
+        ("actually, any day works"). If a customer simply has no preference,
+        do not pass this -- just omit the preferred_* fields.
 
     Returns:
       On success: {"ok": true, "profile": {...the full current profile...}}.
@@ -352,6 +352,48 @@ def intake_customer(
     profile = _profile_to_state_dict(customer)
     tool_context.state[_STATE_PROFILE_KEY] = profile
     return {"ok": True, "profile": profile}
+
+
+def start_new_prospect(tool_context: ToolContext) -> dict:
+    """
+    Discard the customer currently on file and start fresh for a DIFFERENT one.
+
+    Call this FIRST -- before intake_customer -- whenever the user moves on to
+    another customer in the same conversation ("new customer", "next prospect",
+    "another one"), so nothing from the previous customer carries over. It
+    works even when the new customer's message has no address yet. Never call
+    it for a correction or revision of the CURRENT customer -- that would throw
+    away details the user already gave and force them to repeat everything.
+
+    Returns:
+      {"ok": true, "message": "..."} -- then proceed with intake_customer for
+      the new customer's details as usual.
+    """
+    # Model-declared boundary between customers. Trustworthy in exactly one
+    # direction: a spurious call costs a re-ask, never contamination -- it only
+    # ever DISCARDS state. The deterministic guard in intake_customer still fires
+    # on its own whenever this call was forgotten but the address changed after a
+    # decision, so correctness never rests on the model remembering it. A separate
+    # no-arg tool rather than an intake_customer parameter, deliberately: the
+    # golden eval pins intake's argument dict exactly, and the IN_ORDER trajectory
+    # matcher tolerates extra tool CALLS -- so even a spuriously-called boundary
+    # can never flake the eval, while an extra argument did (measured live).
+    profile = dict(tool_context.state.get(_STATE_PROFILE_KEY) or {})
+    if profile:
+        logger.info(
+            "start_new_prospect: discarding the profile on file (address %r) and "
+            "its decision/triage state.",
+            profile.get("address"),
+        )
+    tool_context.state[_STATE_PROFILE_KEY] = None
+    _reset_prospect_state(tool_context.state)
+    return {
+        "ok": True,
+        "message": (
+            "Started a fresh prospect; nothing from the previous customer is on "
+            "file. Collect the new customer's address and order size."
+        ),
+    }
 
 
 # --- Step 2: geo-lookup ------------------------------------------------------

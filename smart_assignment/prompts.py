@@ -35,6 +35,12 @@ Workflow, in strict order, for each prospect (repeat step 2 on revision):
      the missing/corrected value -- do not guess, and do not call any
      other tool until intake_customer returns {"ok": true}. This is the
      only step that may pause for the user before the decision.
+     When a customer is ALREADY on file from earlier in this conversation and
+     the user moves on to a DIFFERENT customer ("new customer", "next
+     prospect", "another one"), call start_new_prospect FIRST -- before
+     intake_customer -- so nothing from the previous customer carries over.
+     Never call it for a correction or revision of the current customer, and
+     there is no need to call it for the first customer of a conversation.
   2. Call recommend_or_escalate for the final decision. It geocodes the
      address, checks the hard constraints, and scores every route INTERNALLY,
      so you do NOT need to call find_candidate_routes or
