@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
-from smart_assignment.shared.config import Config
+from smart_assignment.shared.config import FACTOR_CAPACITY_BUFFER, Config
 from smart_assignment.routeslot.evidence import NUMERIC_FACT_KEYS, build_route_slot_packet
 from smart_assignment.routeslot.schema import (
     RouteSlotChoiceParseError,
@@ -123,6 +125,61 @@ def test_verifier_rejects_ungrounded_number_in_prose():
     result = verify_choice(liar, packet)
     assert not result.ok
     assert "42.7" in result.as_feedback()
+
+
+def _evals_with_detail(detail: str):
+    """The same menu as ``_evals()``, but with the chosen option's capacity factor
+    carrying a real-world ``detail`` string -- the shape the real scorer produces
+    ("440 cases of headroom left, putting the truck at about 58% full")."""
+    evals = _evals()
+    slot = evals[0].scored_slots[0]
+    factors = [
+        replace(fs, detail=detail) if fs.name == FACTOR_CAPACITY_BUFFER else fs
+        for fs in slot.factor_scores
+    ]
+    patched = replace(slot, factor_scores=factors)
+    first = replace(
+        evals[0],
+        scored_slots=[patched, *evals[0].scored_slots[1:]],
+        factor_scores=factors,
+    )
+    return [first, evals[1]]
+
+
+def test_customer_language_figures_quoted_from_a_factor_detail_are_grounded():
+    """The prompt asks for reasons in the CUSTOMER's language -- "440 cases of
+    headroom" rather than "capacity_buffer: 1.0" -- and those real-world figures
+    live in each factor's ``detail``, not in ``facts``. The prose scan must accept
+    them, or every plain-language reason would fail verification and silently drop
+    the grounded narrative for the deterministic one.
+
+    This is the guarantee smart_assignment/routeslot/prompts.py now leans on; it
+    was already true (``_packet_numbers`` walks ``detail``), and this pins it."""
+    packet = build_route_slot_packet(
+        customer(), _evals_with_detail("440 cases of headroom left, truck about 58% full"), Config()
+    )
+    choice = parse_route_slot_choice(choice_dict(
+        0,
+        runner_up_index=1,
+        primary_reasons=["Leaves 440 cases of headroom, so the truck stays about 58% full."],
+    ))
+    assert verify_choice(choice, packet).ok
+
+
+def test_a_figure_not_in_any_detail_is_still_rejected():
+    """The flip side: relaxing prose to detail-quoted figures must not become a
+    licence to invent one. 999 appears in no fact and no detail."""
+    packet = build_route_slot_packet(
+        customer(), _evals_with_detail("440 cases of headroom left, truck about 58% full"), Config()
+    )
+    choice = parse_route_slot_choice(choice_dict(
+        0,
+        runner_up_index=1,
+        primary_reasons=["Leaves 999 cases of headroom."],
+    ))
+    result = verify_choice(choice, packet)
+    assert not result.ok
+    assert "999" in result.as_feedback()
 
 
 def test_faithfully_quoted_zero_factor_is_grounded():

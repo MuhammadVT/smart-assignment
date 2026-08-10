@@ -46,14 +46,14 @@ your reasoning in prose (it goes inside the fields). The fields:
   "chosen_index": <index of the route-slot you pick>,
   "decision_summary": "<one action line: assign <route> · <day> · <window>>",
   "primary_reasons": [
-    "<geographic_clustering: your read of the neighborhood fit, WITH its number>",
-    "<capacity_buffer: how much truck headroom is left, with its number>",
-    "<window_match: how well the slot honors the stated preference, with its number \
--- INCLUDE this line only when the option has a window_match fact>",
-    "<slot_availability: how open this slot is (who else holds it), with its number>"
+    "<neighborhood fit: how close this is to stops the truck already serves>",
+    "<truck headroom: how much room is left after this order>",
+    "<preferred time: how well the slot honors the stated preference -- INCLUDE this \
+line only when the option has a window_match fact>",
+    "<slot openness: how busy this window already is>"
   ],
   "key_tradeoff": "<what the winner gives up vs. the next-best option and why it is \
-still the better overall pick -- reference BOTH options' numbers>",
+still the better overall pick>",
   "runner_up": {{
     "index": <index of the next-best option>,
     "why_not": "<the specific fact that tips the pick away from it>"
@@ -70,21 +70,36 @@ still the better overall pick -- reference BOTH options' numbers>",
 Rules (STRICT):
 - chosen_index MUST be one of the enumerated option indices. NEVER invent a route,
   a slot, or a time.
+- WRITE FOR THE CUSTOMER. `decision_summary`, `primary_reasons`, `key_tradeoff` and
+  `runner_up.why_not` are read out to the person placing the order, so they must read
+  like a delivery scheduler explaining a choice -- not like a scoring report. In those
+  four fields NEVER write an internal factor name ({fields}) and NEVER write its 0-1
+  score. Say what the number MEANS in the world instead, using that option's own
+  `factor_breakdown[].detail` wording: "about 1.6 miles from stops the truck already
+  makes", "440 cases of headroom, leaving the truck about 58% full", "covers 160 of
+  your 180 preferred minutes on Tuesday", "5 other stops already share this window".
 - `primary_reasons` MUST comprehensively cover EVERY scored factor the chosen
-  option carries -- geographic_clustering, capacity_buffer, slot_availability,
-  and window_match (only when the option has a window_match fact) -- one short line
-  each, in that order, each citing that factor's own value. Never drop
-  slot_availability, and never drop window_match when a preference was stated.
+  option carries -- neighborhood fit, truck headroom, slot openness, and preferred-time
+  match (only when the option has a window_match fact) -- one short line each, in that
+  order. Never drop slot openness, and never drop the preferred-time line when a
+  preference was stated.
 - verdict is AGREE only when chosen_index == deterministic_choice_index, else DIVERGE
-  (and then `note` must justify the divergence).
+  (and then `note` must justify the divergence). `vs_deterministic_default` is an
+  internal audit note, NOT customer prose -- it is the one field where naming the
+  weighted default is correct.
 - When two or more options are offered, `key_tradeoff` and `runner_up` are REQUIRED
   and runner_up.index must be a real option other than your pick. With a single
   option, use key_tradeoff to say why it is the clear choice and set runner_up to null.
-- EVERY number you state in any field must be a real fact from the option you
-  attribute it to, and must appear in `citations`. Do not state a number you cannot
-  cite -- and a figure YOU computed (a sum, difference, average, or projection over
-  option facts) counts as a number you cannot cite: state the option's own numbers
-  instead. Days and time windows must be quoted verbatim from the options.
+- EVERY number you state in any field must be a real figure from the option you
+  attribute it to -- either one of its `facts` values or a figure quoted verbatim from
+  that SAME option's `factor_breakdown[].detail`. A figure YOU computed (a sum,
+  difference, average, or projection over option facts) counts as invented: state the
+  option's own numbers instead. Days and time windows must be quoted verbatim from the
+  options.
+- `citations` MUST still list the factor values your reasoning rests on (index, fact
+  key, value). That list is the audit trail -- it is how a human checks your reasoning
+  against the evidence -- and it is precisely BECAUSE the raw scores are recorded
+  there that the customer-facing fields do not need to print them.
 - Whenever you name a route (in decision_summary, key_tradeoff, or anywhere),
   write it as "<route_id> - <route_name>" using that option's own route_id and
   route_name -- always both together, never one alone.
@@ -145,14 +160,13 @@ your reasoning in prose (it goes inside the fields). The fields:
   "decision_summary": "<one action line: assign <route> · <day> · <window>, OR why
                         this is being escalated>",
   "primary_reasons": [
-    "<geographic_clustering: your read of the neighborhood fit, WITH its number>",
-    "<capacity_buffer: how much truck headroom is left, with its number>",
-    "<window_match: how well the slot honors the stated preference, with its number \
--- INCLUDE this line only when the option has a window_match fact>",
-    "<slot_availability: how open this slot is (who else holds it), with its number>"
+    "<neighborhood fit: how close this is to stops the truck already serves>",
+    "<truck headroom: how much room is left after this order>",
+    "<preferred time: how well the slot honors the stated preference -- INCLUDE this \
+line only when the option has a window_match fact>",
+    "<slot openness: how busy this window already is>"
   ],
-  "key_tradeoff": "<what the pick gives up vs. the next-best option and why -- \
-reference BOTH options' numbers>",
+  "key_tradeoff": "<what the pick gives up vs. the next-best option and why>",
   "runner_up": {{
     "index": <index of the next-best option>,
     "why_not": "<the specific fact that tips the pick away from it>"
@@ -169,22 +183,36 @@ reference BOTH options' numbers>",
 Rules (STRICT):
 - chosen_index MUST be one of the enumerated option indices. NEVER invent a route,
   a slot, or a time.
+- WRITE FOR THE CUSTOMER. `decision_summary`, `primary_reasons`, `key_tradeoff` and
+  `runner_up.why_not` are read out to the person placing the order, so they must read
+  like a delivery scheduler explaining a choice -- not like a scoring report. In those
+  four fields NEVER write an internal factor name ({fields}) and NEVER write its 0-1
+  score. Say what the number MEANS in the world instead, using that option's own
+  `factor_breakdown[].detail` wording: "about 1.6 miles from stops the truck already
+  makes", "440 cases of headroom, leaving the truck about 58% full", "covers 160 of
+  your 180 preferred minutes on Tuesday", "5 other stops already share this window".
 - `primary_reasons` MUST comprehensively cover EVERY scored factor the chosen
-  option carries -- geographic_clustering, capacity_buffer, slot_availability,
-  and window_match (only when the option has a window_match fact) -- one short line
-  each, in that order, each citing that factor's own value. Never drop
-  slot_availability, and never drop window_match when a preference was stated.
+  option carries -- neighborhood fit, truck headroom, slot openness, and preferred-time
+  match (only when the option has a window_match fact) -- one short line each, in that
+  order. Never drop slot openness, and never drop the preferred-time line when a
+  preference was stated.
 - verdict is AGREE only when chosen_index == deterministic_choice_index, else DIVERGE
-  (and then `note` must justify the divergence).
+  (and then `note` must justify the divergence). `vs_deterministic_default` is an
+  internal audit note, NOT customer prose -- it is the one field where naming the
+  weighted default is correct.
 - When two or more options are offered, `key_tradeoff` and `runner_up` are REQUIRED
   and runner_up.index must be a real option other than your pick. With a single
   option, use key_tradeoff to say why it is (or is not) good enough and set runner_up
   to null.
-- EVERY number you state in any field must be a real fact from the option you
-  attribute it to, and must appear in `citations`. Do not state a number you cannot
-  cite -- a figure YOU computed (a sum, difference, average, or projection) counts as
-  one you cannot cite: state the option's own numbers instead. Days and time windows
-  must be quoted verbatim from the options.
+- EVERY number you state in any field must be a real figure from the option you
+  attribute it to -- either one of its `facts` values or a figure quoted verbatim from
+  that SAME option's `factor_breakdown[].detail`. A figure YOU computed (a sum,
+  difference, average, or projection) counts as invented: state the option's own
+  numbers instead. Days and time windows must be quoted verbatim from the options.
+- `citations` MUST still list the factor values your reasoning rests on (index, fact
+  key, value). That list is the audit trail -- it is how a human checks your reasoning
+  against the evidence -- and it is precisely BECAUSE the raw scores are recorded
+  there that the customer-facing fields do not need to print them.
 - Whenever you name a route, write it as "<route_id> - <route_name>" using that
   option's own route_id and route_name -- always both together, never one alone.
 - Citable fact keys are exactly: {fields}.
@@ -224,8 +252,12 @@ ROUTE_SLOT_DECISION_TOOL = {
     "name": "submit_route_slot_decision",
     "description": (
         "Submit your final route-slot decision and its grounded rationale. Call this "
-        "exactly once. Every number you state must be a real fact from the option you "
-        "attribute it to and must also appear in `citations`."
+        "exactly once. Every number you state must be a real figure from the option you "
+        "attribute it to -- one of its facts, or a figure quoted verbatim from that "
+        "option's own factor_breakdown detail. decision_summary, primary_reasons, "
+        "key_tradeoff and runner_up.why_not are read out to the CUSTOMER: write them in "
+        "plain language, and keep internal factor names and their 0-1 scores out of them "
+        "-- those belong in `citations`, which is the audit trail."
     ),
     "parameters": {
         "type": "object",
@@ -256,16 +288,20 @@ ROUTE_SLOT_DECISION_TOOL = {
                 "type": "array",
                 "items": {"type": "string"},
                 "description": (
-                    "One short line per scored factor the chosen option carries "
-                    "(geographic_clustering, capacity_buffer, window_match when present, "
-                    "slot_availability), each citing that factor's own value."
+                    "One short, customer-readable line per scored factor the chosen option "
+                    "carries -- neighborhood fit, truck headroom, preferred-time match when "
+                    "present, slot openness -- in that order. Say what each factor means in "
+                    "the world, in the option's own factor_breakdown detail wording (e.g. "
+                    "'about 1.6 miles from stops the truck already makes', '440 cases of "
+                    "headroom'), never the internal factor name or its 0-1 score."
                 ),
             },
             "key_tradeoff": {
                 "type": "string",
                 "description": (
                     "What the pick gives up vs. the next-best option and why it is still "
-                    "the better call -- reference BOTH options' numbers."
+                    "the better call, in plain customer language -- compare what the two "
+                    "options mean for this delivery, not their scores."
                 ),
             },
             "runner_up": {
@@ -275,8 +311,8 @@ ROUTE_SLOT_DECISION_TOOL = {
                     "why_not": {"type": "string"},
                 },
                 "description": (
-                    "The next-best option and the fact that tips the pick away from it; "
-                    "omit with a single option."
+                    "The next-best option and the fact that tips the pick away from it, "
+                    "stated in plain customer language; omit with a single option."
                 ),
             },
             "vs_deterministic_default": {
@@ -287,7 +323,8 @@ ROUTE_SLOT_DECISION_TOOL = {
                 },
                 "description": (
                     "AGREE only when chosen_index equals the deterministic default, else "
-                    "DIVERGE with a justifying note."
+                    "DIVERGE with a justifying note. An internal audit note, not customer "
+                    "prose -- the one field where naming the weighted default is correct."
                 ),
             },
             "citations": {

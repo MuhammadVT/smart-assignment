@@ -310,14 +310,27 @@ weighted total per route-slot is the reference and the deterministic fallback.
 carry the *trade-off* an ops manager needs to trust an auto-assign, so on a
 RECOMMENDED pick the model returns a decomposed explanation rather than a
 sentence: `decision_summary` (the action line), `primary_reasons[]` (a
-comprehensive read — one line per scored factor, each with its number:
-geographic fit, capacity headroom, preferred-window match when a preference was
-stated, and slot openness — so no factor is silently dropped), `key_tradeoff`
+comprehensive read — one line per scored factor: geographic fit, capacity
+headroom, preferred-window match when a preference was stated, and slot openness
+— so no factor is silently dropped), `key_tradeoff`
 (what the winner gives up vs. the
 runner-up and why that's acceptable), `runner_up {index, why_not}`, and
 `vs_deterministic_default {verdict, note}` (an explicit AGREE/DIVERGE against the
 weighted blend). Only `chosen_index` is *actionable* — a real index from the
-enumerated menu; every other field is grounded explanation. These land on
+enumerated menu; every other field is grounded explanation.
+
+**Two audiences, one packet.** The first four of those fields are read out to the
+*customer*, so the prompt requires them in plain language: what a number means in
+the world ("440 cases of headroom, leaving the truck about 58% full"), taken from
+that option's own `factor_breakdown[].detail`, never the internal factor name or
+its 0–1 score. The raw scores are not lost — they go to `citations`, which is what
+the verifier checks, and the workflow report renders every factor's value, weight,
+contribution and formula in its own panel. `vs_deterministic_default` is the one
+field that is *not* customer prose: an internal AGREE/DIVERGE audit note, shown on
+the report and never narrated in chat. Before this split, the prompt asked for a
+number on every reason line and the agent duly read scoring vocabulary out to
+customers, which `response_clarity` scored 0.20; stating the same facts in the
+customer's language scored 0.80–0.90 with no change to any decision. These land on
 `SlotRecommendation` as their own fields, and `reasoning` is still set so existing
 consumers keep working. `page.py` renders each as its own section, falling back to
 the flat `reasoning` line when the structured fields are absent.
