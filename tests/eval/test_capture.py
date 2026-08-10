@@ -90,10 +90,14 @@ def test_a_plain_string_entry_raises_instead_of_loading_as_unknown(tmp_path, mon
 
 def test_entry_shape_written_by_capture(tmp_path, monkeypatch):
     # Pins the on-disk record so a field can't be dropped silently: the text, the
-    # outcome, the join key, when it was captured, and what produced it.
-    entry = capture_mod._entry(
+    # outcome, the join key, when it was captured, and what produced it. The SAME
+    # shape eval/capture_harvest.py writes for a live run -- one record shape,
+    # one reader (read_records), so a field can't reach one file's consumers and
+    # not the other's.
+    provenance = {"dataset": {"name": "mock"}, "backend": "sage", "model": "m"}
+    entry = capture_mod.response_record(
         CaptureResult("text", escalated=False, decision_id="abc"),
-        provenance={"dataset": {"name": "mock"}, "backend": "sage", "model": "m"},
+        provenance=provenance,
         captured_at="2026-08-10T03:00:00+00:00",
     )
     assert entry == {
@@ -101,10 +105,16 @@ def test_entry_shape_written_by_capture(tmp_path, monkeypatch):
         "escalated": False,
         "decision_id": "abc",
         "captured_at": "2026-08-10T03:00:00+00:00",
-        "captured_with": {"dataset": {"name": "mock"}, "backend": "sage", "model": "m"},
+        "captured_with": provenance,
     }
     # ...and round-trips back through the reader unchanged.
     path = tmp_path / "captured.json"
     path.write_text(json.dumps({"c": entry}), encoding="utf-8")
     monkeypatch.setattr(capture_mod, "_CAPTURED_PATH", path)
-    assert load_captured_results()["c"] == CaptureResult("text", False, "abc")
+    assert load_captured_results()["c"] == CaptureResult(
+        final_response="text",
+        escalated=False,
+        decision_id="abc",
+        captured_at="2026-08-10T03:00:00+00:00",
+        captured_with=provenance,
+    )

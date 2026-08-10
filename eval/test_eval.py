@@ -21,6 +21,11 @@ This file is NOT part of the hermetic unit suite (pyproject sets
 ``testpaths = ["tests"]``); it runs only when explicitly targeted -- locally, or
 in the advisory ``agent-eval`` CI job -- because it requires model credentials.
 
+This run also HARVESTS what the agent said, to
+``feedback_data/latest_run_responses.json`` (see eval/capture_harvest.py) -- the
+prose eval/test_quality.py then judges. Free: no extra LLM calls, just keeping
+output the run already produced instead of discarding it.
+
 Run with (needs a configured LLM backend): pytest eval/test_eval.py
 
 --- Cost knobs ---
@@ -59,6 +64,7 @@ from google.adk.evaluation.agent_evaluator import AgentEvaluator
 
 from eval.build_evalset import render_dataset
 from eval.case_selection import select_cases
+from eval.capture_harvest import RunHarvester
 from eval.case_set import resolve_case_set
 from eval.inference_guard import fail_on_dropped_cases
 from eval.run_budget import run_budget
@@ -109,15 +115,26 @@ def _eval_dataset_path() -> str:
 
 @pytest.mark.asyncio
 async def test_slot_recommendation_eval():
+    # Constructed BEFORE the run: it snapshots the run's provenance, and replaying
+    # a case mutates the in-memory fixtures (see eval/capture_harvest.py).
+    harvester = RunHarvester()
+
     # A case whose inference crashes is dropped by ADK, not failed -- so without
     # this guard the score is silently computed over only the survivors and the
     # run still reports a pass. See eval/inference_guard.py. The budget is the
     # outer ceiling: nothing else stops a hung backend running for hours (see
     # eval/run_budget.py).
-    with fail_on_dropped_cases():
-        async with run_budget():
-            await AgentEvaluator.evaluate(
-                agent_module=AGENT_MODULE_PATH,
-                eval_dataset_file_path_or_dir=_eval_dataset_path(),
-                num_runs=resolve_num_runs(),
-            )
+    try:
+        with fail_on_dropped_cases(observers=[harvester.observe]):
+            async with run_budget():
+                await AgentEvaluator.evaluate(
+                    agent_module=AGENT_MODULE_PATH,
+                    eval_dataset_file_path_or_dir=_eval_dataset_path(),
+                    num_runs=resolve_num_runs(),
+                )
+    finally:
+        # In `finally` on purpose: a trajectory failure still ran the agent, and
+        # its prose is exactly what you want to read when asking why it failed.
+        # Writing here also means a partial run leaves a truthful partial file
+        # rather than a stale one from a previous run.
+        harvester.write()

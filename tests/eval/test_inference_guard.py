@@ -45,20 +45,19 @@ def _stub_perform_inference(results):
     return _perform_inference
 
 
-def _drain(monkeypatch, results):
+def _drain(monkeypatch, results, observers=()):
     """Run the guard over a stubbed inference stream; return the collected drops.
 
-    Raises whatever the guard raises, so a test can assert on it.
+    Raises whatever the guard raises, so a test can assert on it. ``observers``
+    is passed straight through -- the seam eval/capture_harvest.py rides on.
     """
-    monkeypatch.setattr(
-        LocalEvalService, "perform_inference", _stub_perform_inference(results)
-    )
+    monkeypatch.setattr(LocalEvalService, "perform_inference", _stub_perform_inference(results))
 
     async def _consume():
         async for _ in LocalEvalService.perform_inference(None, inference_request=None):
             pass
 
-    with fail_on_dropped_cases() as dropped:
+    with fail_on_dropped_cases(observers=observers) as dropped:
         asyncio.run(_consume())
     return dropped
 
@@ -121,15 +120,11 @@ def test_results_stream_through_unchanged(monkeypatch):
         _result("b", InferenceStatus.FAILURE, "boom"),
         _result("c", InferenceStatus.SUCCESS),
     ]
-    monkeypatch.setattr(
-        LocalEvalService, "perform_inference", _stub_perform_inference(results)
-    )
+    monkeypatch.setattr(LocalEvalService, "perform_inference", _stub_perform_inference(results))
     seen = []
 
     async def _consume():
-        async for result in LocalEvalService.perform_inference(
-            None, inference_request=None
-        ):
+        async for result in LocalEvalService.perform_inference(None, inference_request=None):
             seen.append(result)
 
     with pytest.raises(DroppedEvalCasesError):
@@ -146,10 +141,9 @@ def test_the_patch_is_always_undone(monkeypatch):
 
     with pytest.raises(DroppedEvalCasesError):
         with fail_on_dropped_cases():
+
             async def _consume():
-                async for _ in LocalEvalService.perform_inference(
-                    None, inference_request=None
-                ):
+                async for _ in LocalEvalService.perform_inference(None, inference_request=None):
                     pass
 
             asyncio.run(_consume())
@@ -167,12 +161,53 @@ def test_a_failure_inside_the_block_is_not_masked(monkeypatch):
         with fail_on_dropped_cases():
 
             async def _consume():
-                async for _ in LocalEvalService.perform_inference(
-                    None, inference_request=None
-                ):
+                async for _ in LocalEvalService.perform_inference(None, inference_request=None):
                     pass
 
             asyncio.run(_consume())
             raise AssertionError("tool_trajectory_avg_score Failed")
 
     assert LocalEvalService.perform_inference is stub  # still restored
+
+
+# --------------------------------------------------------------------------
+# The observer seam (eval/capture_harvest.py rides on this)
+# --------------------------------------------------------------------------
+
+
+def test_observers_see_every_result_including_successes(monkeypatch):
+    # The harvester needs the SUCCESSES -- that is where the agent's prose is --
+    # so observation must not be limited to the failures this module reports.
+    results = [
+        _result("ok_1", InferenceStatus.SUCCESS),
+        _result("boom", InferenceStatus.FAILURE, "crashed"),
+        _result("ok_2", InferenceStatus.SUCCESS),
+    ]
+    seen = []
+    with pytest.raises(DroppedEvalCasesError):
+        _drain(monkeypatch, results, observers=[seen.append])
+
+    assert [r.eval_case_id for r in seen] == ["ok_1", "boom", "ok_2"]
+
+
+def test_no_observer_is_the_default(monkeypatch):
+    # Structural, not advisory: eval/test_response_match.py passes no observer,
+    # so it CANNOT harvest into the very reference file it scores against.
+    assert _drain(monkeypatch, [_result("ok", InferenceStatus.SUCCESS)]) == []
+
+
+def test_an_observer_that_raises_does_not_abort_the_run(monkeypatch):
+    # It runs inside ADK's async generator: letting it escape would kill the eval
+    # and turn an additive concern into a total failure. Later results, and later
+    # observers, must still be delivered.
+    def _explode(_result_):
+        raise RuntimeError("observer is broken")
+
+    seen = []
+    _drain(
+        monkeypatch,
+        [_result("a", InferenceStatus.SUCCESS), _result("b", InferenceStatus.SUCCESS)],
+        observers=[_explode, seen.append],
+    )
+
+    assert [r.eval_case_id for r in seen] == ["a", "b"]

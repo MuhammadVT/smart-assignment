@@ -15,7 +15,8 @@ live LLM backend** and are kept separate from the hermetic tests.
 | `data/test_config.json` | The scoring criteria ADK auto-discovers from this folder. |
 | `data/golden_responses.json` | The committed, human-reviewed reference response per golden case, written by `capture.py` (Phase 2b). One `{final_response, escalated, decision_id, captured_at, captured_with}` record per `eval_id`. |
 | `test_eval.py` | The pytest entry point that runs `AgentEvaluator` (trajectory, full dataset). |
-| `capture.py` | Runs the live agent once per case to record its real final response + whether it escalated (Phase 2b). |
+| `capture.py` | Runs the live agent once per case to record its real final response + whether it escalated (Phase 2b), into the committed **reference**. |
+| `capture_harvest.py` | Keeps what the agent said during a `test_eval.py` run, to the uncommitted `feedback_data/latest_run_responses.json` — the prose `test_quality.py` judges. Free: no extra LLM calls. |
 | `test_response_match.py` | Separate pytest entry point: `response_match_score`, scoped to captured cases known NOT to have escalated. See its module docstring for why escalate cases can't be scored this way at all. |
 | `inference_guard.py` | Fails the run when ADK *drops* an eval case (a crashed inference) instead of scoring it — otherwise a dropped case is indistinguishable from a passing one. Used by `test_eval.py` and `test_response_match.py`. |
 | `run_budget.py` | A wall-clock ceiling on a live run (`SMART_ASSIGNMENT_EVAL_BUDGET_SECONDS`, default 20 min), so a hung backend fails promptly instead of running for hours. |
@@ -240,6 +241,33 @@ shape or behavior may move under future ADK versions.
 > `golden_cases.py`'s comments), run capture with
 > `SMART_ASSIGNMENT_DATA_SOURCE=mock` set.
 
+### Two response files, two jobs
+
+| | `eval/data/golden_responses.json` | `feedback_data/latest_run_responses.json` |
+|---|---|---|
+| What | The approved **reference** | What the agent said in **this run** |
+| Committed | yes, reviewed in PR diffs | no (`feedback_data/` is gitignored) |
+| Written by | `python3 -m eval.capture` (deliberate, manual) | `pytest eval/test_eval.py` (automatic, free) |
+| Feeds | reference-**based** metrics: `response_match_score`, `final_response_match_v2` | reference-**free** judges: `brief_quality`, `response_clarity` |
+| Answers | "Does the agent still say what we approved?" | "Is this commit's prose any good?" |
+
+Both hold the same record shape (`final_response`, `escalated`, `decision_id`,
+`captured_at`, `captured_with`) and are read by the same parser, so a field
+added to one reaches both.
+
+The judges have **no fallback** to the reference. Judging approved text answers
+"was the reference any good?", never the question those rubrics exist to ask —
+and it would report green over prose the commit never produced. So a missing
+harvest **skips** locally (run `pytest eval/test_eval.py` first) and **fails**
+under CI, where the eval job runs first and an empty harvest means it broke.
+That local-vs-CI asymmetry is the same one `case_selection.py` applies to
+`SMART_ASSIGNMENT_EVAL_IDS`.
+
+```bash
+pytest eval/test_eval.py      # replays the agent, harvests what it said
+pytest eval/test_quality.py   # judges that
+```
+
 ### `eval/test_quality.py` — Phase 3a: DeepEval G-Eval quality metrics
 
 `response_match_score`/`final_response_match_v2` are similarity-to-reference
@@ -248,9 +276,9 @@ leaving the highest-stakes prose (the escalation/handoff brief a human
 specialist acts on) with zero automated signal. `test_quality.py` closes that
 gap with two **reference-free** DeepEval G-Eval rubrics (no `expected_output`
 set — the judge rates the response on its own merits, not fidelity to a
-captured reference), scored **directly against captured text** — no ADK
-`EvalSet`/`AgentEvaluator` involved at all, so there's no scratch dataset file
-to render; this file only *reads* `eval/data/golden_responses.json`.
+captured reference), scored **directly against the prose this run produced** —
+no ADK `EvalSet`/`AgentEvaluator` involved at all, so there's no scratch dataset
+file to render; this file only *reads* `feedback_data/latest_run_responses.json`.
 
 Both rubrics are drawn from the human-annotation dimensions in
 [`deployment/phoenix/README.md`](../deployment/phoenix/README.md)'s feedback

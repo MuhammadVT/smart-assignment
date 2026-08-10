@@ -86,14 +86,18 @@ class CaptureResult(NamedTuple):
     final_response: str
     escalated: bool
     decision_id: Optional[str] = None
+    captured_at: Optional[str] = None
+    captured_with: Optional[Dict[str, object]] = None
 
 
-def load_captured_results() -> Dict[str, CaptureResult]:
-    """Existing captures as ``{eval_id: CaptureResult}``.
+def read_records(path: pathlib.Path) -> Dict[str, CaptureResult]:
+    """Parse a response file -- ``{eval_id: CaptureResult}``, or ``{}`` when the
+    file is absent.
 
-    Public so callers needing the full result (not just the outcome bool -- e.g.
-    ``eval/test_quality.py`` scoring the captured text itself) don't have to
-    duplicate the file read.
+    Shared by both response files, which have the same record shape on purpose:
+    the committed golden reference here, and the per-run harvest written by
+    ``eval/capture_harvest.py``. One reader means a field added to
+    :func:`response_record` cannot reach one file's consumers and not the other's.
 
     A non-dict entry raises rather than being coerced. The pre-outcome-tracking
     format was a plain ``{eval_id: text}`` map, whose ``escalated`` had to be
@@ -101,14 +105,14 @@ def load_captured_results() -> Dict[str, CaptureResult]:
     ``golden_responses.json`` -- an old file is simply a different filename and
     is never read -- so the only way to see one now is a hand-edit, which is
     worth a loud error rather than a silently unscoreable case."""
-    if not _CAPTURED_PATH.exists():
+    if not path.exists():
         return {}
-    raw = json.loads(_CAPTURED_PATH.read_text(encoding="utf-8"))
+    raw = json.loads(path.read_text(encoding="utf-8"))
     results: Dict[str, CaptureResult] = {}
     for eval_id, entry in raw.items():
         if not isinstance(entry, dict):
             raise ValueError(
-                f"{_CAPTURED_PATH.name}: entry {eval_id!r} is {type(entry).__name__}, not an "
+                f"{path.name}: entry {eval_id!r} is {type(entry).__name__}, not an "
                 "object. Expected {'final_response': ..., 'escalated': ...}. Re-run "
                 "`python3 -m eval.capture` to regenerate it."
             )
@@ -116,8 +120,19 @@ def load_captured_results() -> Dict[str, CaptureResult]:
             final_response=entry["final_response"],
             escalated=entry["escalated"],
             decision_id=entry.get("decision_id"),
+            captured_at=entry.get("captured_at"),
+            captured_with=entry.get("captured_with"),
         )
     return results
+
+
+def load_captured_results() -> Dict[str, CaptureResult]:
+    """The committed GOLDEN reference responses (see the module docstring).
+
+    Public so callers needing the full result (not just the outcome bool -- e.g.
+    ``eval/test_response_match.py`` filtering to clean recommends) don't have to
+    duplicate the file read."""
+    return read_records(_CAPTURED_PATH)
 
 
 def load_captured_outcomes() -> Dict[str, bool]:
@@ -236,7 +251,7 @@ def _load_raw() -> Dict[str, dict]:
     return json.loads(_CAPTURED_PATH.read_text(encoding="utf-8"))
 
 
-def _entry(result: CaptureResult, provenance: Dict[str, object], captured_at: str) -> dict:
+def response_record(result: CaptureResult, provenance: Dict[str, object], captured_at: str) -> dict:
     """One captured record.
 
     ``captured_at`` is per-entry rather than per-file because a ``--ids`` run
@@ -262,7 +277,7 @@ def _entry(result: CaptureResult, provenance: Dict[str, object], captured_at: st
     }
 
 
-def _serialize(entries: Dict[str, dict]) -> str:
+def serialize_records(entries: Dict[str, dict]) -> str:
     """Sorted keys + trailing newline so the committed file is stable and diffs are
     readable."""
     ordered = {key: entries[key] for key in sorted(entries)}
@@ -350,11 +365,12 @@ def main() -> None:
     captured_at = utc_now_iso()
     captured = asyncio.run(_capture_all(cases))
     fresh_entries = {
-        eval_id: _entry(result, provenance, captured_at) for eval_id, result in captured.items()
+        eval_id: response_record(result, provenance, captured_at)
+        for eval_id, result in captured.items()
     }
 
     if args.check:
-        print(_serialize(fresh_entries))
+        print(serialize_records(fresh_entries))
         for eval_id, result in sorted(captured.items()):
             print(f"[capture]   {eval_id}: escalated={result.escalated}")
         print(
@@ -368,7 +384,7 @@ def main() -> None:
     # already-committed cases' final_response back to null (see module docstring).
     # Merging raw dicts preserves untouched entries' own provenance.
     merged = {**_load_raw(), **fresh_entries}
-    _CAPTURED_PATH.write_text(_serialize(merged), encoding="utf-8")
+    _CAPTURED_PATH.write_text(serialize_records(merged), encoding="utf-8")
     # Regenerate the dataset so final_response is populated from the captured file.
     from eval.build_evalset import main as build_dataset
 
