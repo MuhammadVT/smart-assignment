@@ -17,6 +17,20 @@ recommend_or_escalate      (code — rank + total-score gate -> decision + reaso
   -> requires_human_review? -> agent calls request_input (ADK built-in, human input)
 ```
 
+Alongside those steps the interactive agent carries one **on-demand lookup**,
+`geocode_prospect_address` (code -- the coordinates of the address on file, and
+nothing else). It is a sibling of `find_candidate_routes`, not a split of it: it
+answers a side question ("where is this customer?") with a single geocode instead
+of running step 2's fetch-and-rank over the whole route set. It writes no session
+state and never substitutes for `recommend_or_escalate`. Batch does not get it
+(see `_batch_agent_tools`): unattended runs ask no side questions.
+
+In the live stepper it carries its own breadcrumb, **Locating** -- deliberately
+not a second way to light up Geo-Lookup. That step means "geocode *and* rank the
+nearest routes", so settling it off a geocode-only call would claim work that
+never ran, and the per-turn dedupe would then swallow the real Geo-Lookup
+breadcrumb if the same turn goes on to a decision (see `webapp/narration.py`).
+
 The agent (the LLM) decides *when* to call which tool and narrates the
 result in conversation; it never computes a distance, a constraint check, or
 a score itself -- every number comes back from the tool call. See
@@ -296,14 +310,27 @@ weighted total per route-slot is the reference and the deterministic fallback.
 carry the *trade-off* an ops manager needs to trust an auto-assign, so on a
 RECOMMENDED pick the model returns a decomposed explanation rather than a
 sentence: `decision_summary` (the action line), `primary_reasons[]` (a
-comprehensive read — one line per scored factor, each with its number:
-geographic fit, capacity headroom, preferred-window match when a preference was
-stated, and slot openness — so no factor is silently dropped), `key_tradeoff`
+comprehensive read — one line per scored factor: geographic fit, capacity
+headroom, preferred-window match when a preference was stated, and slot openness
+— so no factor is silently dropped), `key_tradeoff`
 (what the winner gives up vs. the
 runner-up and why that's acceptable), `runner_up {index, why_not}`, and
 `vs_deterministic_default {verdict, note}` (an explicit AGREE/DIVERGE against the
 weighted blend). Only `chosen_index` is *actionable* — a real index from the
-enumerated menu; every other field is grounded explanation. These land on
+enumerated menu; every other field is grounded explanation.
+
+**Two audiences, one packet.** The first four of those fields are read out to the
+*customer*, so the prompt requires them in plain language: what a number means in
+the world ("440 cases of headroom, leaving the truck about 58% full"), taken from
+that option's own `factor_breakdown[].detail`, never the internal factor name or
+its 0–1 score. The raw scores are not lost — they go to `citations`, which is what
+the verifier checks, and the workflow report renders every factor's value, weight,
+contribution and formula in its own panel. `vs_deterministic_default` is the one
+field that is *not* customer prose: an internal AGREE/DIVERGE audit note, shown on
+the report and never narrated in chat. Before this split, the prompt asked for a
+number on every reason line and the agent duly read scoring vocabulary out to
+customers, which `response_clarity` scored 0.20; stating the same facts in the
+customer's language scored 0.80–0.90 with no change to any decision. These land on
 `SlotRecommendation` as their own fields, and `reasoning` is still set so existing
 consumers keep working. `page.py` renders each as its own section, falling back to
 the flat `reasoning` line when the structured fields are absent.
@@ -538,37 +565,69 @@ The two functions that actually talk to a backend (`shared/llm.get_llm` and
 `generate_text`) are unchanged — each caller simply hands them
 `config.for_role(<its role>)`.
 
+#### One loop owns the backend session (`shared/async_bridge.py`)
+
 `generate_text` is a **synchronous** API, but the sage backend it fronts is async
-and its aiohttp `ClientSession` (inside the Sage SDK's process-global litellm
-handler) is **bound to the first event loop that touches it** — under the web app
-that is uvicorn's server loop, where the agent's own turns run. Two facts collide
-there:
+and keeps **one HTTP session for the whole process**. [VERIFIED against the
+installed SDK] `SageLlmRegistry._handlers` is a *class* dict and
+`litellm.custom_provider_map` is a module global, so one `SageLiteLlm` →
+`AsyncSAGEClient` → `AsyncBaseClient` is reused forever, and
+`AsyncBaseClient._get_session()` caches an `aiohttp.ClientSession` the first time
+it is called. An aiohttp session belongs to the loop that created it, so it fails
+two ways: `loop <...> is not the running loop` from a different live loop, and
+`Event loop is closed` after that loop ends.
 
-- ADK invokes a synchronous `FunctionTool` **inline on the server loop thread**, so
-  the pipeline these tools drive blocks that loop while running.
-- The sage coroutine `generate_text` must run has to execute **on that same loop**
-  (its session lives there); a bare `asyncio.run()` raises `asyncio.run() cannot be
-  called from a running event loop`, and running it on any *other* loop raises
-  `loop <...> is not the running loop`.
+That second one was a live bug. Driving the coroutine on a *throwaway* loop
+(`asyncio.run`, or a one-shot executor loop) works exactly once — the first call
+binds the session, the loop closes, and every later call in the process fails. It
+degraded `POST /api/recommend` to the deterministic pick from its second grounded
+request onward, poisoned the chat path for any process that served one, and made
+`scripts/run_local.py`, `outcome_scoring --path llm` and
+`eval/test_rationale_faithfulness.py` unable to complete more than one call.
 
-You cannot both block the server loop and run a coroutine on it. The resolution is
-a two-part cooperation:
+`shared/async_bridge.py` enforces one rule: **every synchronous LLM coroutine runs
+on the loop that owns the session, and that loop never closes.**
+`run_coroutine_blocking` picks a target once and remembers it for the process —
+first loop wins, which is what the cached session enforces anyway:
 
-1. **The tools offload their blocking body off the loop.** `agent.py` wraps each
-   pipeline `FunctionTool` with `_offloaded_tool`, making it an `async` tool that
-   runs its synchronous work in a worker thread via `offload_to_worker_thread`
-   (`shared/llm.py`). That frees the server loop. The web app's
-   `_visualization_from_state` re-run is offloaded the same way. `functools.wraps`
-   keeps the tool's name/signature/declaration identical, so ADK's `tool_context`
-   injection is unchanged.
-2. **The grounded call hands its coroutine back to the server loop.**
-   `offload_to_worker_thread` records the server loop in a `ContextVar` (which
-   `asyncio.to_thread` copies into the worker thread); `_run_coro_blocking` then
-   submits the sage coroutine to that recorded *host loop* via
-   `asyncio.run_coroutine_threadsafe(...).result()` — so it runs where the session
-   is bound. With no host loop recorded (the CLI/offline case) it just uses
-   `asyncio.run()`. This keeps the grounded path working in both worlds instead of
-   silently falling back to the deterministic result.
+1. **The already-bound loop**, if one is recorded and still running.
+2. **The host loop** recorded by `offload_to_worker_thread`, when nothing is bound
+   yet. This is the ADK/web case: the agent's own streaming call has *already*
+   bound the session to that loop, outside this module entirely, so it must be
+   joined rather than competed with.
+3. **A dedicated, process-owned loop** on a daemon thread otherwise — the CLI,
+   batch scripts, and the eval judges. Started once, never closed.
+
+Two consequences worth knowing:
+
+- **A process must not mix (2) and (3).** Any entry point reaching an LLM call
+  from async code has to establish the host loop via `offload_to_worker_thread`,
+  or whichever request arrives first binds the session and the other path breaks.
+  That is why `webapp/app.py`'s `/api/recommend` is `async def` + offload rather
+  than a plain `def` endpoint on FastAPI's threadpool.
+- **Conversely, code whose loop does *not* own the session must not pin it.**
+  `eval/deepeval_llm.py`'s `a_generate` uses a plain `asyncio.to_thread`: pytest
+  gives each async test a fresh loop, so pinning it would bind the process-global
+  session to a loop that dies with the test.
+
+Blocking from the thread that runs the bound loop is the one unserviceable case —
+the bound loop is blocked by the caller, any other loop is rejected by the session
+— so it raises with the fix in the message (`offload_to_worker_thread`) rather
+than surfacing aiohttp's error three layers down inside a connection error.
+Callers guard with `except Exception` and fall back deterministically, so this
+degrades safely and logs a real reason.
+
+The tools cooperate with all of this by offloading: `agent.py` wraps each pipeline
+`FunctionTool` with `_offloaded_tool`, making it an `async` tool that runs its
+synchronous work in a worker thread, freeing the loop to service the nested call.
+The web app's `_visualization_from_state` re-run and the batch agent runner do the
+same. `functools.wraps` keeps the tool's name/signature/declaration identical, so
+ADK's `tool_context` injection is unchanged.
+
+At interpreter exit the module swaps in a no-op exception handler on the loops it
+knows about: the session is deliberately never closed, so aiohttp's `__del__`
+would otherwise report "Unclosed client session" onto pytest's already-closed
+capture streams as a wall of `--- Logging error ---` after the results.
 
 ### Brief groundedness verification
 
@@ -1032,7 +1091,11 @@ attributable to the agent, the judge, or the data rather than guessed. Recording
 is observational — it changes no score or test result, needs no `use_*` flag
 because it cannot regress behavior, and the path itself is the switch (empty
 records nothing); a failed *write* is swallowed, while a failed *judge call*
-still fails the eval. Curation (`feedback/curate.py`) only
+still fails the eval. **CI uploads this log as a build artifact** (the
+`live-eval` job in `.github/workflows/ci.yml`): `feedback_data/` is gitignored
+because it is run output rather than source, so without that step every verdict
+CI computed died with the runner and calibration could only ever read a
+developer's laptop. Curation (`feedback/curate.py`) only
 reads HUMAN records — those are the ground truth the auto-judges calibrate
 against — and emits *candidate* cases for a human to review and promote into
 `eval/golden_cases.py`. A `suggested_expected_outcome` is filled in only when the
@@ -1057,6 +1120,18 @@ standard ADK evalset JSON — so curated production feedback runs through the ex
 same trajectory eval as the built-in `GOLDEN_CASES`, without editing
 `golden_cases.py`. The committed golden dataset and its sync test are untouched
 (the flag-less `build_evalset` still regenerates exactly that).
+
+**And the test runners can be pointed at them directly.** `eval/case_set.py`
+makes the case set a *declared* input the way `eval/dataset.py` already did for
+the world: `SMART_ASSIGNMENT_EVAL_CASES` defaults to `golden` (the built-in
+fixtures) or takes a path to a curated candidates file, and every eval entry
+point follows — a value, not a code change. That matters here specifically
+because only a curated case carries a real `decision_id`, which is the key a
+judge verdict joins to a human label on; a hand-written fixture has none, so
+judging the built-ins alone can never produce an aligned pair. Two places
+deliberately ignore the variable: `build_evalset`'s committed output is always
+the golden set, and `eval.capture` refuses to run under a non-golden set, since
+it writes the golden reference whose ids the hermetic coverage gate pins.
 
 ### Judge calibration — trusting the auto-judges (Phase 0, advisory)
 
@@ -1094,8 +1169,13 @@ needs only the `(human_label, judge_verdict)` pairs that already exist.
 **Where the judge half now comes from.** `verdicts_from_jsonl` reads the durable
 judge log (`eval/judge_log.py`) the judges write as they run, so the harness's
 verdict side is *produced by running the judges* rather than hand-authored:
-`pytest eval/test_quality.py` then `scripts/calibrate_judges.py --verdicts
-feedback_data/judge_verdicts.jsonl`. The CLI picks the reader by suffix, so the
+`pytest eval/test_eval.py` (which harvests the prose) then `pytest
+eval/test_quality.py` (which judges it) then `scripts/calibrate_judges.py
+--verdicts feedback_data/judge_verdicts.jsonl`. Each verdict records the
+provenance of the *judged text*, taken from the harvested record rather than
+recomputed from the current process — otherwise a verdict on text produced by one
+model would be stamped with another, destroying the very attribution `judge` and
+`run` are separated to preserve. The CLI picks the reader by suffix, so the
 precomputed `.json` mapping still works unchanged. Because the log is append-only,
 the **latest line per `(decision_id, dimension)` wins** — the same "latest record
 per decision" rule `feedback/curate.py` applies to the human log, so a case
@@ -1107,6 +1187,49 @@ the minted `eval_id` only encodes its first 8 characters, so without the field t
 link back to the human's label on that same decision would mean parsing an id out
 of a name. A hand-written fixture has no `decision_id` — no human ever labeled it,
 so there is nothing to join to, and it participates only as its own `eval_id`.
+
+### The agent's own prose: an approved reference, and what this run said
+
+Judging the agent's customer-facing text needs the text, and there are two
+different questions to ask of it. They are kept in two files, on purpose:
+
+```
+eval/data/golden_responses.json          feedback_data/latest_run_responses.json
+  committed, reviewed in PR diffs          gitignored, rewritten every eval run
+  written by `python3 -m eval.capture`     written by `pytest eval/test_eval.py`
+    (a deliberate, human act)                (automatic, zero extra LLM calls)
+          |                                            |
+  reference-BASED metrics                    reference-FREE judges
+  response_match_score, v2                   brief_quality, response_clarity
+          |                                            |
+  "does it still say what we approved?"      "is THIS commit's prose any good?"
+```
+
+The second file exists because the eval already pays for the answers and used to
+discard them: `test_eval.py` replays every case against the real agent, scores
+the tool trajectory, and threw the responses away — while the judges scored text
+from whenever someone last ran `eval.capture` by hand. Two CI jobs could
+therefore disagree about what the agent says. `eval/capture_harvest.py` keeps
+what the run produced, by observing the same inference stream
+`eval/inference_guard.py` already watches (an observer, not a second
+monkeypatch of ADK's internals — one patch site, and a runner that registers no
+observer *cannot* harvest, which is what stops `test_response_match.py` writing
+into the reference it scores against).
+
+The judges have **no fallback** to the approved reference. Judging it would
+answer "was the reference any good?" — never the question those rubrics exist to
+ask — and would report green over prose the commit never produced. A missing
+harvest therefore *skips* locally and *fails* under CI, where the trajectory step
+runs first and an empty harvest means the harvest broke. Both files carry the
+same record shape and are read by the same parser, so a field added to one
+reaches both.
+
+**Two lanes, opposite freshness requirements — don't unify them.** The prose lane
+above must be *fresh*: a judgement is only about the commit that produced the
+text. The snapshot lane below must be *frozen*: the bundle is the answer key, and
+re-capturing it against the current model would be marking the exam with the
+student's own answers. Both are right; the mistake would be applying either one's
+discipline to the other.
 
 ### Self-contained snapshot datasets — scoring the model, offline, in CI
 
@@ -1169,7 +1292,7 @@ model over a bundle and checks the recommend/escalate outcome and the route-slot
 `SMART_ASSIGNMENT_EVAL_MODEL_PATH`) selects `deterministic` (weighted-sum, grounded
 off — offline, no credentials, the **blocking self-contained CI gate** in the
 `test` job) or `llm` (grounded judgment in the loop — advisory in the credentialed
-`agent-eval` job). The scorer is side-effect-free (it restores the data-source /
+`live-eval` job). The scorer is side-effect-free (it restores the data-source /
 geocoder env it pins). This closes the flywheel: production feedback (or a
 synthetic design) → an anonymized, self-contained golden dataset → the current
 model scored against it, automatically, in CI.

@@ -86,7 +86,7 @@ class JudgeVerdictRecord:
     ``output_ref`` is a content hash of the full judged text and
     ``output_excerpt`` its first few hundred characters. Storing a ref rather
     than the whole output keeps the log lean and avoids duplicating text that
-    already lives in ``eval/data/captured_responses.json`` -- while still
+    already lives in ``eval/data/golden_responses.json`` -- while still
     answering "did the judged text change between runs?" for
     ``test_rationale_faithfulness``, whose prose is regenerated every run and
     stored nowhere else.

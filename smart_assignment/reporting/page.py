@@ -832,7 +832,7 @@ _EVAL_TAB_BODY = f"""
           <div class="where">eval/test_response_match.py · response_match_score</div>
           <p>Literal n-gram overlap between the agent's live final answer and a captured baseline response. Cheap, reproducible, blind to paraphrasing.</p>
           <div class="guard"><b>What it can't tell you:</b> a correct answer phrased differently scores low; a wrong answer that echoes the baseline's wording can score high.</div>
-          <div class="tpmeta"><span class="flag">eval/data/captured_responses.json</span><span class="state advisory">non-escalated cases only</span></div>
+          <div class="tpmeta"><span class="flag">eval/data/golden_responses.json</span><span class="state advisory">non-escalated cases only</span></div>
         </div>
         <div class="card tpcard">
           <span class="tptype judge">LLM judge</span>

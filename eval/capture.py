@@ -4,8 +4,10 @@ Phase 2b capture -- record the agent's real final responses into the eval datase
 Runs the live ``root_agent`` (smart_assignment/agent.py) over each golden case, so
 it NEEDS a configured LLM backend (e.g. the Sage credentials -- see .env.example),
 and records the agent's concluding natural-language response per case. The text is
-written to ``eval/data/captured_responses.json`` -- a committed, human-reviewable
-``{eval_id: {"final_response": str, "escalated": bool}}`` file -- and the dataset
+written to ``eval/data/golden_responses.json`` -- the committed, human-reviewable
+reference for the GOLDEN cases, one
+``{"final_response", "escalated", "decision_id", "captured_at", "captured_with"}``
+record per eval_id -- and the dataset
 is regenerated so ``final_response`` is populated from it (see
 eval/build_evalset.py, which reads only the text and stays byte-stable either way).
 
@@ -41,7 +43,7 @@ without --ids, capture warns and captures all. SMART_ASSIGNMENT_EVAL_NUM_RUNS
 does NOT apply either: each case is captured exactly once.
 
 An --ids run (no --check) MERGES its captures into any existing
-eval/data/captured_responses.json rather than replacing it -- so recapturing
+eval/data/golden_responses.json rather than replacing it -- so recapturing
 just one case never regresses the other committed cases' final_response back to
 null. (The coverage gate, tests/eval/test_dataset_lock.py, still requires every
 golden case captured before a commit passes.)
@@ -61,49 +63,80 @@ import pathlib
 from typing import Dict, List, NamedTuple, Optional
 
 from eval.case_selection import EVAL_IDS_ENV, filter_cases_by_ids, parse_eval_ids
+from eval.case_set import CASE_SET_ENV, resolve_case_set
 from eval.dataset import apply_eval_dataset, run_provenance
-from eval.golden_cases import GOLDEN_CASES, GoldenCase
+from eval.golden_cases import GoldenCase
+from eval.judge_log import utc_now_iso
+from eval.response_extract import extract_final_response
 
 # A distinct app/user id so capture runs are easy to spot in a trace backend
 # (e.g. Arize Phoenix) separately from web-app or ad-hoc runs.
 _APP_NAME = "smart_assignment_eval_capture"
 _USER_ID = "eval_capture"
-_CAPTURED_PATH = pathlib.Path(__file__).parent / "data" / "captured_responses.json"
+_CAPTURED_PATH = pathlib.Path(__file__).parent / "data" / "golden_responses.json"
 
 
 class CaptureResult(NamedTuple):
     """One case's captured outcome: the text to put in the dataset's
-    ``final_response``, and whether it came from the escalation handoff path
-    (see ``_capture_case``) -- the fact ``eval/test_response_match.py`` needs to
-    know which captured cases it can safely response-match-score."""
+    ``final_response``, whether it came from the escalation handoff path (see
+    ``_capture_case``) -- the fact ``eval/test_response_match.py`` needs to know
+    which captured cases it can safely response-match-score -- and the production
+    ``decision_id`` the case was curated from, when it was curated at all."""
 
     final_response: str
     escalated: bool
+    decision_id: Optional[str] = None
+    captured_at: Optional[str] = None
+    captured_with: Optional[Dict[str, object]] = None
+
+
+def read_records(path: pathlib.Path) -> Dict[str, CaptureResult]:
+    """Parse a response file -- ``{eval_id: CaptureResult}``, or ``{}`` when the
+    file is absent.
+
+    Shared by both response files, which have the same record shape on purpose:
+    the committed golden reference here, and the per-run harvest written by
+    ``eval/capture_harvest.py``. One reader means a field added to
+    :func:`response_record` cannot reach one file's consumers and not the other's.
+
+    A non-dict entry raises rather than being coerced. The pre-outcome-tracking
+    format was a plain ``{eval_id: text}`` map, whose ``escalated`` had to be
+    carried as "unknown"; that ambiguity is gone with the rename to
+    ``golden_responses.json`` -- an old file is simply a different filename and
+    is never read -- so the only way to see one now is a hand-edit, which is
+    worth a loud error rather than a silently unscoreable case."""
+    if not path.exists():
+        return {}
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    results: Dict[str, CaptureResult] = {}
+    for eval_id, entry in raw.items():
+        if not isinstance(entry, dict):
+            raise ValueError(
+                f"{path.name}: entry {eval_id!r} is {type(entry).__name__}, not an "
+                "object. Expected {'final_response': ..., 'escalated': ...}. Re-run "
+                "`python3 -m eval.capture` to regenerate it."
+            )
+        results[eval_id] = CaptureResult(
+            final_response=entry["final_response"],
+            escalated=entry["escalated"],
+            decision_id=entry.get("decision_id"),
+            captured_at=entry.get("captured_at"),
+            captured_with=entry.get("captured_with"),
+        )
+    return results
 
 
 def load_captured_results() -> Dict[str, CaptureResult]:
-    """Existing captures -- ``{eval_id: CaptureResult(final_response, escalated)}``
-    -- tolerating the pre-outcome-tracking file format (a plain ``{eval_id: text}``
-    map) by treating those entries' ``escalated`` as unknown (``None``) rather
-    than guessing. Public so callers that need the full result (not just the
-    outcome bool -- e.g. ``eval/test_quality.py`` scoring the captured text
-    itself) don't have to duplicate this file-format tolerance."""
-    if not _CAPTURED_PATH.exists():
-        return {}
-    raw = json.loads(_CAPTURED_PATH.read_text(encoding="utf-8"))
-    return {
-        eval_id: (
-            CaptureResult(entry["final_response"], entry["escalated"])
-            if isinstance(entry, dict)
-            else CaptureResult(entry, None)
-        )
-        for eval_id, entry in raw.items()
-    }
+    """The committed GOLDEN reference responses (see the module docstring).
+
+    Public so callers needing the full result (not just the outcome bool -- e.g.
+    ``eval/test_response_match.py`` filtering to clean recommends) don't have to
+    duplicate the file read."""
+    return read_records(_CAPTURED_PATH)
 
 
-def load_captured_outcomes() -> Dict[str, Optional[bool]]:
-    """``{eval_id: escalated}`` for every captured case -- ``None`` for legacy
-    plain-string entries captured before outcome tracking was added. Public so
+def load_captured_outcomes() -> Dict[str, bool]:
+    """``{eval_id: escalated}`` for every captured case. Public so
     ``eval/test_response_match.py`` can filter to known-``recommend`` cases
     without needing the response text too."""
     return {eval_id: result.escalated for eval_id, result in load_captured_results().items()}
@@ -149,7 +182,13 @@ async def _capture_case(case: GoldenCase) -> CaptureResult:
     escalation the agent hands off to a human via ADK's ``request_input`` long-running
     tool; that handoff message (the triage brief) IS the agent's final output for the
     turn, so it's what we capture. The run drives the same ADK ``Runner`` the web app
-    uses, in non-streaming mode (parity with ``adk web``)."""
+    uses, in non-streaming mode (parity with ``adk web``).
+
+    Reading the answer out of the stream is ``eval/response_extract.py``'s job, not
+    this function's -- see that module for why one shared reader matters. All this
+    loop still owns is the LIVE-stream concern the shared reader cannot have:
+    dropping ``partial`` events, so a streamed reply is recorded once rather than
+    once per chunk. ADK ``Invocation`` records have no such notion."""
     from google.adk.agents.run_config import RunConfig, StreamingMode
     from google.adk.runners import Runner
     from google.adk.sessions import InMemorySessionService
@@ -164,40 +203,31 @@ async def _capture_case(case: GoldenCase) -> CaptureResult:
     )
     new_message = types.Content(role="user", parts=[types.Part(text=case.query)])
 
-    final_texts: List[str] = []
-    escalation_prompt: Optional[str] = None
+    contents: List[object] = []
     async for event in runner.run_async(
         user_id=_USER_ID,
         session_id=case.eval_id,
         new_message=new_message,
         run_config=RunConfig(streaming_mode=StreamingMode.NONE),
     ):
-        # Human-in-the-loop escalation: request_input surfaces as a long-running
-        # call; its message is the agent's final handoff for this turn.
-        if getattr(event, "long_running_tool_ids", None):
-            for call in event.get_function_calls():
-                if call.id in event.long_running_tool_ids:
-                    escalation_prompt = (call.args or {}).get("message") or escalation_prompt
+        # Aggregated events only: a partial is one chunk of a reply still being
+        # streamed, and keeping them would record the same reply several times.
+        if getattr(event, "partial", False):
             continue
-        # Tool calls / tool return values drive the pipeline; nothing to record.
-        if event.get_function_calls() or event.get_function_responses():
-            continue
-        # Aggregated (non-partial) natural-language text only, so we record each
-        # reply once rather than per streamed chunk.
-        if event.content and event.content.parts and not getattr(event, "partial", False):
-            text = "".join(p.text for p in event.content.parts if getattr(p, "text", None))
-            if text.strip():
-                final_texts.append(text.strip())
+        if event.content is not None:
+            contents.append(event.content)
 
-    if escalation_prompt:
-        return CaptureResult(escalation_prompt.strip(), escalated=True)
-    if not final_texts:
+    extracted = extract_final_response(contents)
+    if extracted is None:
         raise RuntimeError(
             f"{case.eval_id}: the agent produced no final text response and no escalation. "
             "Check the backend/model is actually answering (try `python3 -m eval.capture --check`)."
         )
-    # The concluding narration is the last aggregated text event.
-    return CaptureResult(final_texts[-1], escalated=False)
+    return CaptureResult(
+        extracted.final_response,
+        escalated=extracted.escalated,
+        decision_id=case.decision_id,
+    )
 
 
 async def _capture_all(cases: List[GoldenCase]) -> Dict[str, CaptureResult]:
@@ -210,29 +240,44 @@ async def _capture_all(cases: List[GoldenCase]) -> Dict[str, CaptureResult]:
 
 def _load_raw() -> Dict[str, dict]:
     """The captured file as its raw ``{eval_id: entry}`` dict (or ``{}``), where
-    each entry is the full on-disk record -- ``final_response``, ``escalated``,
-    and, once written by this module, the ``captured_with`` provenance block.
+    each entry is the full on-disk record -- see :func:`_entry`.
 
     Merging at this raw level (rather than through ``CaptureResult``, which only
-    carries the text + outcome) preserves the provenance of already-committed
-    entries that a filtered re-capture doesn't touch."""
+    carries the text, outcome and decision id) preserves the timestamp and
+    provenance of already-committed entries that a filtered re-capture doesn't
+    touch."""
     if not _CAPTURED_PATH.exists():
         return {}
     return json.loads(_CAPTURED_PATH.read_text(encoding="utf-8"))
 
 
-def _entry(result: CaptureResult, provenance: Dict[str, object]) -> dict:
-    """One captured record: the text + outcome, plus the run's dataset/model
-    provenance (see eval/dataset.py) so the capture is attributable and
-    reproducible."""
+def response_record(result: CaptureResult, provenance: Dict[str, object], captured_at: str) -> dict:
+    """One captured record.
+
+    ``captured_at`` is per-entry rather than per-file because a ``--ids`` run
+    merges: entries in one file can legitimately come from different runs, and a
+    single file-level timestamp would claim otherwise. It is passed in rather
+    than read from the clock here, so this stays a pure function -- the same
+    discipline ``feedback.schema.FeedbackRecord`` holds for ``created_at``.
+
+    ``decision_id`` is the production decision a curated case came from, and the
+    key a judge verdict joins to a human label on (eval/judge_calibration.py).
+    It is ``null`` for every entry in the committed golden file -- these are
+    hand-written fixtures nobody ever labeled -- and that null is the honest
+    record of it, not a placeholder.
+
+    ``captured_with`` is the run's dataset/model provenance (see eval/dataset.py),
+    so a capture is attributable and reproducible."""
     return {
         "final_response": result.final_response,
         "escalated": result.escalated,
+        "decision_id": result.decision_id,
+        "captured_at": captured_at,
         "captured_with": provenance,
     }
 
 
-def _serialize(entries: Dict[str, dict]) -> str:
+def serialize_records(entries: Dict[str, dict]) -> str:
     """Sorted keys + trailing newline so the committed file is stable and diffs are
     readable."""
     ordered = {key: entries[key] for key in sorted(entries)}
@@ -260,13 +305,29 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    # This file is the committed reference for the GOLDEN cases, and
+    # tests/eval/test_dataset_lock.py pins its ids to exactly those. Capturing a
+    # curated set into it would add foreign eval_ids and redden the hermetic
+    # suite, so refuse up front rather than after burning the live calls.
+    # --check writes nothing, so previewing a curated set stays allowed.
+    case_set = resolve_case_set()
+    if not case_set.is_default and not args.check:
+        raise SystemExit(
+            f"eval.capture writes {_CAPTURED_PATH.name} -- the committed reference for the "
+            f"GOLDEN cases -- but {CASE_SET_ENV} selects {case_set.name!r}. Writing a "
+            "non-golden set there would add eval_ids the hermetic coverage gate "
+            f"(tests/eval/test_dataset_lock.py) rejects. Unset {CASE_SET_ENV}, or pass "
+            "--check to preview without writing."
+        )
+    all_cases = list(case_set.cases)
+
     if args.ids:
         try:
-            cases = filter_cases_by_ids(GOLDEN_CASES, parse_eval_ids(args.ids), source="--ids")
+            cases = filter_cases_by_ids(all_cases, parse_eval_ids(args.ids), source="--ids")
         except ValueError as exc:
             raise SystemExit(str(exc)) from exc
         print(
-            f"[capture] --ids: capturing {len(cases)}/{len(GOLDEN_CASES)} case(s): "
+            f"[capture] --ids: capturing {len(cases)}/{len(all_cases)} case(s): "
             f"{', '.join(c.eval_id for c in cases)}"
         )
         print(
@@ -275,7 +336,7 @@ def main() -> None:
             "before a commit passes."
         )
     else:
-        cases = list(GOLDEN_CASES)
+        cases = all_cases
     # SMART_ASSIGNMENT_EVAL_IDS is a TEST-runner knob; capture deliberately does not
     # honor it (a value left in .env is loaded into the environment by load_dotenv).
     # Warn if it's set without --ids, so it can't cause "I filtered but got all" confusion.
@@ -298,11 +359,18 @@ def main() -> None:
     # Snapshot the run's provenance (dataset identity + resolved backend/model)
     # BEFORE running, so the dataset content ref reflects the pristine fixtures.
     provenance = run_provenance(dataset)
+    # One timestamp for the whole run, in the SAME format eval/judge_log.py stamps
+    # its verdicts with -- the two files are counterparts meant to be read together,
+    # so their times must be directly comparable rather than merely similar.
+    captured_at = utc_now_iso()
     captured = asyncio.run(_capture_all(cases))
-    fresh_entries = {eval_id: _entry(result, provenance) for eval_id, result in captured.items()}
+    fresh_entries = {
+        eval_id: response_record(result, provenance, captured_at)
+        for eval_id, result in captured.items()
+    }
 
     if args.check:
-        print(_serialize(fresh_entries))
+        print(serialize_records(fresh_entries))
         for eval_id, result in sorted(captured.items()):
             print(f"[capture]   {eval_id}: escalated={result.escalated}")
         print(
@@ -316,14 +384,14 @@ def main() -> None:
     # already-committed cases' final_response back to null (see module docstring).
     # Merging raw dicts preserves untouched entries' own provenance.
     merged = {**_load_raw(), **fresh_entries}
-    _CAPTURED_PATH.write_text(_serialize(merged), encoding="utf-8")
+    _CAPTURED_PATH.write_text(serialize_records(merged), encoding="utf-8")
     # Regenerate the dataset so final_response is populated from the captured file.
     from eval.build_evalset import main as build_dataset
 
     build_dataset()
     print(f"[capture] wrote {len(captured)} response(s) ({len(merged)} total) to {_CAPTURED_PATH}")
     print("[capture] regenerated the dataset. Commit BOTH files:")
-    print("           eval/data/captured_responses.json")
+    print("           eval/data/golden_responses.json")
     print("           eval/data/slot_recommendation.test.json")
 
 

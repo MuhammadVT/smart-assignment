@@ -57,6 +57,22 @@ from smart_assignment.shared.models import (  # noqa: E402
 )
 
 
+@pytest.fixture(autouse=True)
+def _fresh_llm_loop_binding():
+    """Let each test look like a fresh process to ``shared/async_bridge.py``.
+
+    That module deliberately remembers which event loop owns the LLM backend's
+    HTTP session for the life of the process -- correct for the app, wrong for a
+    suite where every test brings its own short-lived loop and the previously
+    bound one is already dead by the next test.
+    """
+    from smart_assignment.shared.async_bridge import reset_loop_binding
+
+    reset_loop_binding()
+    yield
+    reset_loop_binding()
+
+
 @pytest.fixture
 def config() -> Config:
     return Config()

@@ -21,34 +21,40 @@ This file is NOT part of the hermetic unit suite (pyproject sets
 ``testpaths = ["tests"]``); it runs only when explicitly targeted -- locally, or
 in the advisory ``agent-eval`` CI job -- because it requires model credentials.
 
+This run also HARVESTS what the agent said, to
+``feedback_data/latest_run_responses.json`` (see eval/capture_harvest.py) -- the
+prose eval/test_quality.py then judges. Free: no extra LLM calls, just keeping
+output the run already produced instead of discarding it.
+
 Run with (needs a configured LLM backend): pytest eval/test_eval.py
 
---- Local dev cost knobs (both optional; NOT used by CI) ---
+--- Cost knobs ---
 
-Every case runs the full agent pipeline against the live LLM, and ADK's own
-default is to run each case TWICE (``num_runs=2``) -- e.g. all 4 committed
-cases is 8 live conversations per run. Two env vars trim that while iterating:
+Every case runs the full agent pipeline against the live LLM, so what this
+suite costs is (cases x runs) live conversations.
 
+* Each case is replayed ONCE by default, not twice as ADK would -- see
+  ``eval/run_config.py`` for why, and set ``SMART_ASSIGNMENT_EVAL_NUM_RUNS``
+  to replay more when run-to-run variance is the actual question.
+* ``SMART_ASSIGNMENT_EVAL_CASES`` -- which case SET to score (see
+  eval/case_set.py); defaults to the built-in golden fixtures, or point it at a
+  curated candidates JSON to replay production-derived cases instead.
 * ``SMART_ASSIGNMENT_EVAL_IDS`` -- comma-separated eval_id subset (see the
   ``eval_id`` on each ``GoldenCase`` in golden_cases.py), e.g.
-  ``SMART_ASSIGNMENT_EVAL_IDS=woodlands_fresh_cafe_recommend``. Parsed by the
-  shared ``eval/case_selection.py`` (also used by ``eval/capture.py``, so one
-  setting trims cost across both). The subset is rendered fresh from
-  golden_cases.py via the same ``build_evalset`` machinery that produces the
-  committed dataset, so it can never drift from it, and is written to a
-  scratch temp dir -- the committed JSON under eval/data/ is never touched,
-  so there's nothing to accidentally commit.
-* ``SMART_ASSIGNMENT_EVAL_NUM_RUNS`` -- overrides ADK's num_runs (default 2),
-  e.g. ``SMART_ASSIGNMENT_EVAL_NUM_RUNS=1``.
+  ``SMART_ASSIGNMENT_EVAL_IDS=woodlands_fresh_cafe_recommend``. A LOCAL-only
+  knob (rejected under CI) parsed by the shared ``eval/case_selection.py``,
+  which ``eval/capture.py`` also reads, so one setting trims cost across both.
+  The subset is rendered fresh from golden_cases.py via the same
+  ``build_evalset`` machinery that produces the committed dataset, so it can
+  never drift from it, and is written to a scratch temp dir -- the committed
+  JSON under eval/data/ is never touched, so there's nothing to accidentally
+  commit.
 
-Both unset (the default) reproduces prior behavior exactly: the full committed
-dataset, ADK's own num_runs default. See "Running a subset locally while
-developing" in eval/README.md.
+See "Running a subset locally while developing" in eval/README.md.
 """
 
 from __future__ import annotations
 
-import os
 import pathlib
 import shutil
 import tempfile
@@ -58,9 +64,11 @@ from google.adk.evaluation.agent_evaluator import AgentEvaluator
 
 from eval.build_evalset import render_dataset
 from eval.case_selection import select_cases
-from eval.golden_cases import GOLDEN_CASES
+from eval.capture_harvest import RunHarvester
+from eval.case_set import resolve_case_set
 from eval.inference_guard import fail_on_dropped_cases
 from eval.run_budget import run_budget
+from eval.run_config import resolve_num_runs
 
 REPO_ROOT = pathlib.Path(__file__).parent.parent
 AGENT_MODULE_PATH = "smart_assignment"
@@ -68,15 +76,30 @@ _DATA_DIR = REPO_ROOT / "eval" / "data"
 _COMMITTED_DATASET = _DATA_DIR / "slot_recommendation.test.json"
 _TEST_CONFIG = _DATA_DIR / "test_config.json"
 
-_NUM_RUNS_ENV = "SMART_ASSIGNMENT_EVAL_NUM_RUNS"
-
 
 def _eval_dataset_path() -> str:
-    """The committed dataset, or -- when SMART_ASSIGNMENT_EVAL_IDS (see
-    eval/case_selection.py) names a subset of golden eval_ids -- a scratch
-    dataset containing only those cases (see module docstring)."""
-    cases = select_cases(GOLDEN_CASES)
-    if cases is GOLDEN_CASES:
+    """The committed dataset, or a scratch dataset rendered on the fly.
+
+    The committed file is used only when this run scores exactly what that file
+    contains: the default golden case set (eval/case_set.py), unnarrowed by
+    SMART_ASSIGNMENT_EVAL_IDS (eval/case_selection.py). A curated case set or an
+    eval_id subset is rendered fresh instead, into a scratch temp dir -- so the
+    committed JSON under eval/data/ is never touched and there is nothing to
+    accidentally commit.
+
+    The condition is checked explicitly rather than by object identity. It used
+    to read ``if cases is GOLDEN_CASES``, which was never true: select_cases
+    returns ``list(cases)``, a new object every time. So this always rendered a
+    scratch copy -- harmless, because tests/eval/test_build_evalset.py pins the
+    committed file to be byte-identical to render_dataset(), but not what the
+    code said it did.
+    """
+    case_set = resolve_case_set()
+    cases = select_cases(case_set.cases)
+    # Compared as an ordered id list, not by count: SMART_ASSIGNMENT_EVAL_IDS
+    # returns cases in the order named, so naming all of them in a different
+    # order is still not the committed dataset.
+    if case_set.is_default and [c.eval_id for c in cases] == [c.eval_id for c in case_set.cases]:
         return str(_COMMITTED_DATASET)
 
     scratch_dir = pathlib.Path(tempfile.mkdtemp(prefix="smart_assignment_eval_subset_"))
@@ -92,20 +115,26 @@ def _eval_dataset_path() -> str:
 
 @pytest.mark.asyncio
 async def test_slot_recommendation_eval():
-    kwargs = {}
-    num_runs_raw = os.environ.get(_NUM_RUNS_ENV)
-    if num_runs_raw and num_runs_raw.strip():
-        kwargs["num_runs"] = int(num_runs_raw)
+    # Constructed BEFORE the run: it snapshots the run's provenance, and replaying
+    # a case mutates the in-memory fixtures (see eval/capture_harvest.py).
+    harvester = RunHarvester()
 
     # A case whose inference crashes is dropped by ADK, not failed -- so without
     # this guard the score is silently computed over only the survivors and the
     # run still reports a pass. See eval/inference_guard.py. The budget is the
     # outer ceiling: nothing else stops a hung backend running for hours (see
     # eval/run_budget.py).
-    with fail_on_dropped_cases():
-        async with run_budget():
-            await AgentEvaluator.evaluate(
-                agent_module=AGENT_MODULE_PATH,
-                eval_dataset_file_path_or_dir=_eval_dataset_path(),
-                **kwargs,
-            )
+    try:
+        with fail_on_dropped_cases(observers=[harvester.observe]):
+            async with run_budget():
+                await AgentEvaluator.evaluate(
+                    agent_module=AGENT_MODULE_PATH,
+                    eval_dataset_file_path_or_dir=_eval_dataset_path(),
+                    num_runs=resolve_num_runs(),
+                )
+    finally:
+        # In `finally` on purpose: a trajectory failure still ran the agent, and
+        # its prose is exactly what you want to read when asking why it failed.
+        # Writing here also means a partial run leaves a truthful partial file
+        # rather than a stale one from a previous run.
+        harvester.write()

@@ -117,15 +117,25 @@ def slot_availability(route: Route, slot: SlotOption, config: Config) -> FactorS
     """Slot-level factor: how open the candidate window is (few / low-tier
     committed stops already in it), tier-weighted so we avoid harming the most
     valued customers."""
-    harm = tier_weighted_contention(slot.window, route, config)
     value = slot_openness(slot.window, route, config)
+    # `detail` is the human-readable side of a factor: the report prints it beside
+    # the formula/value/weight, and the grounded layer is told to quote it when
+    # explaining the pick TO THE CUSTOMER (see routeslot/prompts.py). So it says
+    # what the score means in the world -- how many stops share the window -- and
+    # leaves "tier-weighted contention" to the audit view, which already shows the
+    # formula, the value, the weight and the contribution alongside this line.
+    shared = slot.committed_overlap
     return FactorScore(
         name=FACTOR_SLOT_AVAILABILITY,
         weight=config.rs_weight_availability,
         value=value,
         detail=(
-            f"tier-weighted contention {harm:.2f} from committed stops sharing this "
-            f"window ({slot.committed_overlap} overlap) -> openness {value:.2f}"
+            "no other stops share this window (fully open)"
+            if shared == 0
+            else (
+                f"shared with {shared} other {'stop' if shared == 1 else 'stops'}, "
+                f"leaving it about {value:.0%} open"
+            )
         ),
     )
 

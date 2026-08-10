@@ -47,6 +47,7 @@ from smart_assignment.shared.models import (
     CandidateEvaluation,
     CustomerProfile,
     DayOfWeek,
+    GeoPoint,
     PreferredSlot,
     Route,
     SlotRecommendation,
@@ -196,6 +197,29 @@ def _find_candidates(customer: CustomerProfile) -> list[Route]:
     convert that to the `{"ok": False, "error": ...}` tool-result shape via
     `_geocoding_error_result` rather than letting it crash the tool call."""
     return geo_lookup(customer, fetch_candidate_routes(), _GEOCODER, DEFAULT_CONFIG)
+
+
+# Human-facing precision for a geocoded point. The geocoder returns a raw float
+# (29.740667796002 -- sub-micrometer on a building), which reads as false
+# precision when the agent says it out loud, and tempts the model into shortening
+# it ITSELF -- model-authored arithmetic the instruction explicitly bans. 4 dp
+# (~11 m) is what scripts/run_local.py and reporting/page.py already print, so the
+# chat, the CLI, and the report show the same digits for the same address.
+_GEO_DECIMALS = 4
+
+
+def _serialize_location(point: GeoPoint) -> dict:
+    """A geocoded point rounded for DISPLAY only.
+
+    Rounding happens here, on the way out, exactly like `distance_miles` and the
+    scores in `_serialize_evaluation` -- never on the `GeoPoint` itself. Every
+    distance, constraint check, and map pin still uses the geocoder's full
+    precision, and nothing reads this dict back into the pipeline, so a rounded
+    value cannot reach a calculation."""
+    return {
+        "latitude": round(point.latitude, _GEO_DECIMALS),
+        "longitude": round(point.longitude, _GEO_DECIMALS),
+    }
 
 
 def _geocoding_error_result(exc: GeocodingError) -> dict:
@@ -423,10 +447,7 @@ def find_candidate_routes(tool_context: ToolContext) -> dict:
         return _geocoding_error_result(exc)
     return {
         "ok": True,
-        "geocoded_location": {
-            "latitude": customer.location.latitude,
-            "longitude": customer.location.longitude,
-        },
+        "geocoded_location": _serialize_location(customer.location),
         "candidate_routes": [
             {
                 "route_id": r.route_id,
@@ -436,6 +457,60 @@ def find_candidate_routes(tool_context: ToolContext) -> dict:
             }
             for r in candidates
         ],
+    }
+
+
+# --- On-demand lookup: where is the prospect? (NOT a pipeline step) ---------
+#
+# Deliberately a SIBLING of find_candidate_routes, not a split of it. Step 2 owns
+# "geocode AND rank the nearest routes" and stays exactly as it was; this answers
+# the side question "where is this address?" on its own, without fetching and
+# ranking the route set or filling the model's context with candidates the user
+# never asked about.
+#
+# Two properties keep it safe to call at any point in a conversation:
+#   * It reads only the ADDRESS, so it works before the order quantity has been
+#     given -- geocoding needs nothing else to be on file.
+#   * It writes NO state. The geocoder caches successful lookups process-wide
+#     (see the module docstring), so a repeat costs no extra request, and staying
+#     stateless preserves the "recompute fresh from the profile" invariant: a
+#     corrected address can never be answered with a stale point.
+
+
+def geocode_prospect_address(tool_context: ToolContext) -> dict:
+    """
+    Return the map coordinates (latitude/longitude) of the prospect's address
+    currently on file -- e.g. "where is this customer located?", "what are the
+    coordinates?", "did that address resolve?".
+
+    This is a lookup, not a workflow step: it does NOT check routes, capacity, or
+    availability, and it never replaces recommend_or_escalate for a route/slot
+    decision. Call it when the user asks about the LOCATION itself.
+
+    Call this after intake_customer has recorded an address.
+
+    Returns:
+      {"ok": true, "address": "...",
+       "geocoded_location": {"latitude": .., "longitude": ..}}
+      or {"ok": false, "error": "..."} if there's no address on file yet, or if
+      the address couldn't be geocoded. The result carries the coordinates and
+      the address only -- never state a city, county, or neighborhood that a tool
+      didn't return.
+    """
+    profile = tool_context.state.get(_STATE_PROFILE_KEY)
+    address = (profile or {}).get("address")
+    if not address:
+        return _error("Call intake_customer first -- there's no address on file yet.")
+    try:
+        location = _GEOCODER.geocode(address)
+    except GeocodingError as exc:
+        # Same failure shape and wording as every other tool here, so an address
+        # miss routes to resolve_address identically no matter who hit it first.
+        return _geocoding_error_result(exc)
+    return {
+        "ok": True,
+        "address": address,
+        "geocoded_location": _serialize_location(location),
     }
 
 

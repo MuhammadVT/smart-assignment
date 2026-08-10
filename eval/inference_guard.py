@@ -26,13 +26,23 @@ and why.
 Used by both live-eval entry points (``eval/test_eval.py``,
 ``eval/test_response_match.py``), which run ``AgentEvaluator.evaluate()`` and
 otherwise share the blind spot identically.
+
+**It is also the one place that patches that method.** Anything else needing to
+see the inference stream -- ``eval/capture_harvest.py`` records what the agent
+actually said -- registers an ``observer`` here rather than wrapping
+``perform_inference`` a second time. Two independent patchers of one method work
+only while they happen to be nested correctly, and nothing would enforce that.
+An observer is a plain callable, so a consumer needs no monkeypatching at all,
+and a runner that does not pass one *cannot* observe -- which is why
+``eval/test_response_match.py`` is structurally incapable of harvesting into the
+very reference file it scores against.
 """
 
 from __future__ import annotations
 
 import contextlib
 import logging
-from typing import Any, Iterator, List
+from typing import Any, Callable, Iterator, List, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -44,19 +54,27 @@ class DroppedEvalCasesError(AssertionError):
 
 
 def _describe(dropped: List[Any]) -> str:
-    lines = [
-        f"  - {result.eval_case_id}: {result.error_message}" for result in dropped
-    ]
+    lines = [f"  - {result.eval_case_id}: {result.error_message}" for result in dropped]
     return "\n".join(lines)
 
 
 @contextlib.contextmanager
-def fail_on_dropped_cases() -> Iterator[List[Any]]:
+def fail_on_dropped_cases(
+    observers: Sequence[Callable[[Any], None]] = (),
+) -> Iterator[List[Any]]:
     """Raise ``DroppedEvalCasesError`` if any eval case failed inference inside
     this block.
 
     Yields the (initially empty) list of failed ``InferenceResult``s, so a caller
     can inspect them before the check fires.
+
+    ``observers`` are called with every ``InferenceResult`` as it streams past,
+    successes included -- the seam described in the module docstring. An observer
+    that raises is logged and skipped, never propagated: it runs inside ADK's own
+    async generator, so letting it escape would abort the whole eval run and turn
+    an additive, advisory concern into a total failure. (A consumer that needs its
+    absence noticed should check for its own missing output afterwards, which is
+    what ``eval/test_quality.py`` does.)
 
     An exception raised by the block itself is never masked -- ``AgentEvaluator``'s
     own metric assertion is the more specific failure, so it wins, and the dropped
@@ -71,9 +89,7 @@ def fail_on_dropped_cases() -> Iterator[List[Any]]:
         # Without google-adk[eval] there is nothing to guard; AgentEvaluator itself
         # raises its own actionable "Eval module is not installed" right after, and
         # swallowing that here would replace a good error with a worse one.
-        logger.warning(
-            "google-adk[eval] is not installed; dropped-case detection is inactive."
-        )
+        logger.warning("google-adk[eval] is not installed; dropped-case detection is inactive.")
         yield dropped
         return
 
@@ -85,6 +101,15 @@ def fail_on_dropped_cases() -> Iterator[List[Any]]:
         async for result in original(self, inference_request=inference_request):
             if result.status == InferenceStatus.FAILURE:
                 dropped.append(result)
+            for observe in observers:
+                try:
+                    observe(result)
+                except Exception:  # noqa: BLE001 - see the docstring: never abort the run
+                    logger.warning(
+                        "An inference observer raised on eval case %s; continuing.",
+                        getattr(result, "eval_case_id", "<unknown>"),
+                        exc_info=True,
+                    )
             yield result
 
     LocalEvalService.perform_inference = _recording_perform_inference

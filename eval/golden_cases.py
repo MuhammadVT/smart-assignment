@@ -127,7 +127,7 @@ def _by_name(name: str) -> CustomerProfile:
 # which can legitimately differ from the mock-data design intent below, and will
 # drift as real capacity changes. bayou_city_bistro_recommend is a live example:
 # under real cache data captured so far it escalates (see
-# eval/data/captured_responses.json), not the clean recommend the mock data
+# eval/data/golden_responses.json), not the clean recommend the mock data
 # gives. Not a bug -- re-run eval.capture (see eval/README.md) to refresh
 # captured responses against current real data.
 GOLDEN_CASES: List[GoldenCase] = [

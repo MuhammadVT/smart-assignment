@@ -3,7 +3,7 @@ against it -- the harness side of "an eval result is reproducible from declared,
 versioned inputs" (see ``eval/dataset.py`` and ``eval/README.md``).
 
 These are hermetic (no backend): they only inspect the committed
-``captured_responses.json`` against ``golden_cases.py``, so they run in the
+``golden_responses.json`` against ``golden_cases.py``, so they run in the
 always-required ``tests/`` suite.
 
 Adoption transition: once the committed captures carry the provenance schema
@@ -27,11 +27,11 @@ from eval.dataset import DEFAULT_EVAL_DATASET
 from eval.golden_cases import GOLDEN_CASES
 
 _CAPTURED_PATH = (
-    pathlib.Path(__file__).parents[2] / "eval" / "data" / "captured_responses.json"
+    pathlib.Path(__file__).parents[2] / "eval" / "data" / "golden_responses.json"
 )
 
 _SKIP_UNADOPTED = (
-    "captured_responses.json predates the dataset-provenance schema; run "
+    "golden_responses.json predates the dataset-provenance schema; run "
     "`python3 -m eval.capture` (needs a backend) to lock captures onto the declared "
     "dataset -- see eval/README.md. This becomes a hard gate once provenance lands."
 )
@@ -59,7 +59,7 @@ def test_no_orphan_captures():
     raw = _load_raw()
     golden_ids = {case.eval_id for case in GOLDEN_CASES}
     orphans = sorted(set(raw) - golden_ids)
-    assert not orphans, f"captured_responses.json has entries for unknown eval_ids: {orphans}"
+    assert not orphans, f"golden_responses.json has entries for unknown eval_ids: {orphans}"
 
 
 def test_every_golden_case_is_captured():
