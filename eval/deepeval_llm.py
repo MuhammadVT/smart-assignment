@@ -20,15 +20,13 @@ path to maintain.
 Backend-specific correctness notes, both already solved by reusing existing
 seams rather than reinventing them:
 
-* **Sage's loop-bound aiohttp session.** ``shared/llm.py``'s own docstring
-  documents that the Sage SDK's aiohttp ``ClientSession`` is bound to the
-  FIRST event loop that touches it; a naive ``asyncio.to_thread`` per call
-  would spin up a fresh throwaway loop each time (via ``_run_coro_blocking``'s
-  own fallback) and could break on the second live call. ``a_generate`` below
-  uses ``offload_to_worker_thread`` -- the SAME mechanism the web app's own
-  tools use to call ``generate_text`` from async code -- which records the
-  CALLING coroutine's loop as the stable "host loop" so every nested sage call
-  made from within one async test function lands back on the same loop.
+* **Sage's loop-bound aiohttp session.** The Sage SDK keeps ONE
+  ``ClientSession`` per process, bound to the first event loop that touches it
+  (see ``shared/async_bridge.py``). That module owns the problem: a synchronous
+  ``generate_text`` runs on a dedicated, never-closing loop, so a judge can be
+  called any number of times across any number of tests. ``a_generate`` below
+  only has to stay out of its way -- see the comment there for why it must NOT
+  pin pytest-asyncio's per-test loop.
 * **Dead judge-model defaults.** Nothing here has its own default model
   string to go stale (unlike ADK's ``JudgeModelOptions.judge_model`` defaulting
   to the now-retired ``gemini-2.5-flash``, or DeepEval's own ``GeminiModel``
@@ -66,6 +64,7 @@ installed at all, so it never becomes a hard hermetic-suite dependency).
 
 from __future__ import annotations
 
+import asyncio
 import os
 from typing import TYPE_CHECKING
 
@@ -80,7 +79,7 @@ os.environ.setdefault("DEEPEVAL_UPDATE_WARNING_OPT_OUT", "YES")
 from deepeval.models import DeepEvalBaseLLM  # noqa: E402
 
 from smart_assignment.shared.config import ROLE_QUALITY_JUDGE  # noqa: E402
-from smart_assignment.shared.llm import generate_text, offload_to_worker_thread  # noqa: E402
+from smart_assignment.shared.llm import generate_text  # noqa: E402
 
 if TYPE_CHECKING:
     from smart_assignment.shared.config import Config
@@ -106,7 +105,20 @@ class SmartAssignmentDeepEvalLLM(DeepEvalBaseLLM):
         return generate_text(self._config, prompt, role=ROLE_QUALITY_JUDGE)
 
     async def a_generate(self, prompt: str) -> str:
-        return await offload_to_worker_thread(self.generate, prompt)
+        # Plain ``to_thread``, deliberately NOT ``offload_to_worker_thread``.
+        #
+        # Both run ``generate`` off the calling loop; the difference is that
+        # ``offload_to_worker_thread`` also declares "nested LLM calls belong on
+        # MY loop" -- right for the ADK and web-app paths, where the agent's own
+        # streaming call has already bound the backend session to that loop, and
+        # wrong here. pytest-asyncio hands each async test a FRESH loop and closes
+        # it afterwards, so pinning it would bind the process-global session to a
+        # loop that dies with the test: the first judged metric would pass and
+        # every later one would fail with "Event loop is closed".
+        #
+        # Declaring nothing lets ``shared/async_bridge.py`` put the call on its
+        # dedicated, never-closing loop, which outlives every test in the file.
+        return await asyncio.to_thread(self.generate, prompt)
 
     def get_model_name(self) -> str:
         return self._config.sage_model if self._config.llm_backend == "sage" else self._config.model

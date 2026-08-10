@@ -552,37 +552,69 @@ The two functions that actually talk to a backend (`shared/llm.get_llm` and
 `generate_text`) are unchanged — each caller simply hands them
 `config.for_role(<its role>)`.
 
+#### One loop owns the backend session (`shared/async_bridge.py`)
+
 `generate_text` is a **synchronous** API, but the sage backend it fronts is async
-and its aiohttp `ClientSession` (inside the Sage SDK's process-global litellm
-handler) is **bound to the first event loop that touches it** — under the web app
-that is uvicorn's server loop, where the agent's own turns run. Two facts collide
-there:
+and keeps **one HTTP session for the whole process**. [VERIFIED against the
+installed SDK] `SageLlmRegistry._handlers` is a *class* dict and
+`litellm.custom_provider_map` is a module global, so one `SageLiteLlm` →
+`AsyncSAGEClient` → `AsyncBaseClient` is reused forever, and
+`AsyncBaseClient._get_session()` caches an `aiohttp.ClientSession` the first time
+it is called. An aiohttp session belongs to the loop that created it, so it fails
+two ways: `loop <...> is not the running loop` from a different live loop, and
+`Event loop is closed` after that loop ends.
 
-- ADK invokes a synchronous `FunctionTool` **inline on the server loop thread**, so
-  the pipeline these tools drive blocks that loop while running.
-- The sage coroutine `generate_text` must run has to execute **on that same loop**
-  (its session lives there); a bare `asyncio.run()` raises `asyncio.run() cannot be
-  called from a running event loop`, and running it on any *other* loop raises
-  `loop <...> is not the running loop`.
+That second one was a live bug. Driving the coroutine on a *throwaway* loop
+(`asyncio.run`, or a one-shot executor loop) works exactly once — the first call
+binds the session, the loop closes, and every later call in the process fails. It
+degraded `POST /api/recommend` to the deterministic pick from its second grounded
+request onward, poisoned the chat path for any process that served one, and made
+`scripts/run_local.py`, `outcome_scoring --path llm` and
+`eval/test_rationale_faithfulness.py` unable to complete more than one call.
 
-You cannot both block the server loop and run a coroutine on it. The resolution is
-a two-part cooperation:
+`shared/async_bridge.py` enforces one rule: **every synchronous LLM coroutine runs
+on the loop that owns the session, and that loop never closes.**
+`run_coroutine_blocking` picks a target once and remembers it for the process —
+first loop wins, which is what the cached session enforces anyway:
 
-1. **The tools offload their blocking body off the loop.** `agent.py` wraps each
-   pipeline `FunctionTool` with `_offloaded_tool`, making it an `async` tool that
-   runs its synchronous work in a worker thread via `offload_to_worker_thread`
-   (`shared/llm.py`). That frees the server loop. The web app's
-   `_visualization_from_state` re-run is offloaded the same way. `functools.wraps`
-   keeps the tool's name/signature/declaration identical, so ADK's `tool_context`
-   injection is unchanged.
-2. **The grounded call hands its coroutine back to the server loop.**
-   `offload_to_worker_thread` records the server loop in a `ContextVar` (which
-   `asyncio.to_thread` copies into the worker thread); `_run_coro_blocking` then
-   submits the sage coroutine to that recorded *host loop* via
-   `asyncio.run_coroutine_threadsafe(...).result()` — so it runs where the session
-   is bound. With no host loop recorded (the CLI/offline case) it just uses
-   `asyncio.run()`. This keeps the grounded path working in both worlds instead of
-   silently falling back to the deterministic result.
+1. **The already-bound loop**, if one is recorded and still running.
+2. **The host loop** recorded by `offload_to_worker_thread`, when nothing is bound
+   yet. This is the ADK/web case: the agent's own streaming call has *already*
+   bound the session to that loop, outside this module entirely, so it must be
+   joined rather than competed with.
+3. **A dedicated, process-owned loop** on a daemon thread otherwise — the CLI,
+   batch scripts, and the eval judges. Started once, never closed.
+
+Two consequences worth knowing:
+
+- **A process must not mix (2) and (3).** Any entry point reaching an LLM call
+  from async code has to establish the host loop via `offload_to_worker_thread`,
+  or whichever request arrives first binds the session and the other path breaks.
+  That is why `webapp/app.py`'s `/api/recommend` is `async def` + offload rather
+  than a plain `def` endpoint on FastAPI's threadpool.
+- **Conversely, code whose loop does *not* own the session must not pin it.**
+  `eval/deepeval_llm.py`'s `a_generate` uses a plain `asyncio.to_thread`: pytest
+  gives each async test a fresh loop, so pinning it would bind the process-global
+  session to a loop that dies with the test.
+
+Blocking from the thread that runs the bound loop is the one unserviceable case —
+the bound loop is blocked by the caller, any other loop is rejected by the session
+— so it raises with the fix in the message (`offload_to_worker_thread`) rather
+than surfacing aiohttp's error three layers down inside a connection error.
+Callers guard with `except Exception` and fall back deterministically, so this
+degrades safely and logs a real reason.
+
+The tools cooperate with all of this by offloading: `agent.py` wraps each pipeline
+`FunctionTool` with `_offloaded_tool`, making it an `async` tool that runs its
+synchronous work in a worker thread, freeing the loop to service the nested call.
+The web app's `_visualization_from_state` re-run and the batch agent runner do the
+same. `functools.wraps` keeps the tool's name/signature/declaration identical, so
+ADK's `tool_context` injection is unchanged.
+
+At interpreter exit the module swaps in a no-op exception handler on the loops it
+knows about: the session is deliberately never closed, so aiohttp's `__del__`
+would otherwise report "Unclosed client session" onto pytest's already-closed
+capture streams as a wall of `--- Logging error ---` after the results.
 
 ### Brief groundedness verification
 

@@ -68,7 +68,7 @@ def _offloaded_tool(func):
     coroutine on that very loop -- which is impossible while the tool is blocking
     it. Offloading the body to a worker thread frees the loop, and
     ``offload_to_worker_thread`` records it so the grounded call can hand its
-    coroutine back (see ``shared/llm.py``). ``functools.wraps`` preserves the
+    coroutine back (see ``shared/async_bridge.py``). ``functools.wraps`` preserves the
     name/signature/docstring, so ADK builds the identical function declaration and
     ``tool_context`` injection still works; the wrapper is just ``async``."""
 
