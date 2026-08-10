@@ -329,6 +329,23 @@ the app's main model with `SMART_ASSIGNMENT_MODEL_QUALITY_JUDGE` (standard
 backend) if you want a stronger/different judge than the agent's own
 operational model.
 
+**The judge answers through a function call, not prose.** G-Eval asks its model
+for structured verdicts — `generate(prompt, schema=Steps)` for the evaluation
+steps, `schema=ReasonScore` for the score and its reason — and, on `TypeError`,
+silently retries *without* the schema and `json.loads`es whatever prose comes
+back. The direct SAGE agent is conversational and narrates when asked for JSON,
+so an adapter without a `schema` parameter took that fallback on every call and
+died on `JSONDecodeError: Expecting value: line 1 column 1`. That is what made
+`brief_quality` intermittent and `response_clarity` fail outright.
+
+`SmartAssignmentDeepEvalLLM.generate` therefore accepts `schema` and translates
+it into a one-tool declaration for `shared/llm.py`'s `generate_tool_call` — the
+same channel `routeslot/` uses, for the same reason. The declaration carries the
+*shape* only; G-Eval's own prompt still owns the rubric and the score range.
+Narrated JSON is salvaged as a fallback (which is the normal path on the
+standard backends, where there is no tool channel yet), and a reply that yields
+neither raises rather than returning an invented score.
+
 > **DeepEval makes an outbound network call at import time, independent of
 > telemetry opt-out — and it can't be fully suppressed from within this repo's
 > own code when run via `pytest`.** [VERIFIED against installed deepeval 2.6.6
