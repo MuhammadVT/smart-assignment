@@ -3,7 +3,7 @@ Phase 2b verification: ``response_match_score`` on RECOMMEND-outcome cases only.
 
 ``response_match_score`` cannot meaningfully score an ESCALATE-outcome case, no
 matter the response quality -- this is a real ADK limitation, not a threshold to
-tune. [VERIFIED against installed google-adk 2.5.0 source]: an escalation ends the
+tune. [VERIFIED against installed google-adk 2.3.0 source]: an escalation ends the
 turn on ADK's long-running ``request_input`` tool call. ``Event.is_final_response()``
 (google/adk/events/event.py) returns True whenever ``long_running_tool_ids`` is
 set, so ADK's own eval harness (``evaluation_generator.py``) treats that TOOL-CALL
@@ -38,7 +38,7 @@ reference, tolerating paraphrasing/format/order differences -- a materially
 better quality signal for prose, at a materially higher cost.
 
 It has the EXACT SAME escalate-case blind spot as v1, verified from the same ADK
-source read: [VERIFIED against installed google-adk 2.5.0]
+source read: [VERIFIED against installed google-adk 2.3.0]
 ``llm_as_judge_utils.get_text_from_content`` -- even with
 ``include_intermediate_responses_in_final=True`` -- still bottoms out in a
 ``.text``-only read of ``Content.parts`` for every event it walks, including the

@@ -176,7 +176,7 @@ Unlike trajectory scoring, `response_match_score` is **not** added to the shared
    `null` reference; it silently scores that case `0.0` and `FAILED`, dragging the
    overall score down for reasons that have nothing to do with response quality.
 2. **`response_match_score` cannot meaningfully score an ESCALATE-outcome case at
-   all**, regardless of threshold. [VERIFIED against installed google-adk 2.5.0
+   all**, regardless of threshold. [VERIFIED against installed google-adk 2.3.0
    source]: an escalation ends the turn on ADK's `request_input` long-running tool
    call; `Event.is_final_response()` treats that tool-call event as the turn's
    final response, but its content holds a `function_call` part, not `.text` —
@@ -214,7 +214,7 @@ ROUGE-1 word overlap, a judge LLM rates whether the response is valid given the
 reference, tolerating paraphrasing/format/order differences — a materially
 better signal for prose, at a materially higher cost (an extra LLM call per
 sample; ADK's own default is 5 samples, majority-voted). It has the **exact same
-escalate-case blind spot as v1** — [verified against installed google-adk 2.5.0
+escalate-case blind spot as v1** — [verified against installed google-adk 2.3.0
 source] `llm_as_judge_utils.get_text_from_content` still only reads `.text` parts
 of `Content`, same as v1, so it never sees the escalation handoff message either
 (that lives in a `function_call`'s args) — so it's scoped by the same

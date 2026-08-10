@@ -1046,7 +1046,11 @@ attributable to the agent, the judge, or the data rather than guessed. Recording
 is observational — it changes no score or test result, needs no `use_*` flag
 because it cannot regress behavior, and the path itself is the switch (empty
 records nothing); a failed *write* is swallowed, while a failed *judge call*
-still fails the eval. Curation (`feedback/curate.py`) only
+still fails the eval. **CI uploads this log as a build artifact** (the
+`live-eval` job in `.github/workflows/ci.yml`): `feedback_data/` is gitignored
+because it is run output rather than source, so without that step every verdict
+CI computed died with the runner and calibration could only ever read a
+developer's laptop. Curation (`feedback/curate.py`) only
 reads HUMAN records — those are the ground truth the auto-judges calibrate
 against — and emits *candidate* cases for a human to review and promote into
 `eval/golden_cases.py`. A `suggested_expected_outcome` is filled in only when the
@@ -1071,6 +1075,18 @@ standard ADK evalset JSON — so curated production feedback runs through the ex
 same trajectory eval as the built-in `GOLDEN_CASES`, without editing
 `golden_cases.py`. The committed golden dataset and its sync test are untouched
 (the flag-less `build_evalset` still regenerates exactly that).
+
+**And the test runners can be pointed at them directly.** `eval/case_set.py`
+makes the case set a *declared* input the way `eval/dataset.py` already did for
+the world: `SMART_ASSIGNMENT_EVAL_CASES` defaults to `golden` (the built-in
+fixtures) or takes a path to a curated candidates file, and every eval entry
+point follows — a value, not a code change. That matters here specifically
+because only a curated case carries a real `decision_id`, which is the key a
+judge verdict joins to a human label on; a hand-written fixture has none, so
+judging the built-ins alone can never produce an aligned pair. Two places
+deliberately ignore the variable: `build_evalset`'s committed output is always
+the golden set, and `eval.capture` refuses to run under a non-golden set, since
+it writes the golden reference whose ids the hermetic coverage gate pins.
 
 ### Judge calibration — trusting the auto-judges (Phase 0, advisory)
 
@@ -1108,8 +1124,13 @@ needs only the `(human_label, judge_verdict)` pairs that already exist.
 **Where the judge half now comes from.** `verdicts_from_jsonl` reads the durable
 judge log (`eval/judge_log.py`) the judges write as they run, so the harness's
 verdict side is *produced by running the judges* rather than hand-authored:
-`pytest eval/test_quality.py` then `scripts/calibrate_judges.py --verdicts
-feedback_data/judge_verdicts.jsonl`. The CLI picks the reader by suffix, so the
+`pytest eval/test_eval.py` (which harvests the prose) then `pytest
+eval/test_quality.py` (which judges it) then `scripts/calibrate_judges.py
+--verdicts feedback_data/judge_verdicts.jsonl`. Each verdict records the
+provenance of the *judged text*, taken from the harvested record rather than
+recomputed from the current process — otherwise a verdict on text produced by one
+model would be stamped with another, destroying the very attribution `judge` and
+`run` are separated to preserve. The CLI picks the reader by suffix, so the
 precomputed `.json` mapping still works unchanged. Because the log is append-only,
 the **latest line per `(decision_id, dimension)` wins** — the same "latest record
 per decision" rule `feedback/curate.py` applies to the human log, so a case
@@ -1121,6 +1142,49 @@ the minted `eval_id` only encodes its first 8 characters, so without the field t
 link back to the human's label on that same decision would mean parsing an id out
 of a name. A hand-written fixture has no `decision_id` — no human ever labeled it,
 so there is nothing to join to, and it participates only as its own `eval_id`.
+
+### The agent's own prose: an approved reference, and what this run said
+
+Judging the agent's customer-facing text needs the text, and there are two
+different questions to ask of it. They are kept in two files, on purpose:
+
+```
+eval/data/golden_responses.json          feedback_data/latest_run_responses.json
+  committed, reviewed in PR diffs          gitignored, rewritten every eval run
+  written by `python3 -m eval.capture`     written by `pytest eval/test_eval.py`
+    (a deliberate, human act)                (automatic, zero extra LLM calls)
+          |                                            |
+  reference-BASED metrics                    reference-FREE judges
+  response_match_score, v2                   brief_quality, response_clarity
+          |                                            |
+  "does it still say what we approved?"      "is THIS commit's prose any good?"
+```
+
+The second file exists because the eval already pays for the answers and used to
+discard them: `test_eval.py` replays every case against the real agent, scores
+the tool trajectory, and threw the responses away — while the judges scored text
+from whenever someone last ran `eval.capture` by hand. Two CI jobs could
+therefore disagree about what the agent says. `eval/capture_harvest.py` keeps
+what the run produced, by observing the same inference stream
+`eval/inference_guard.py` already watches (an observer, not a second
+monkeypatch of ADK's internals — one patch site, and a runner that registers no
+observer *cannot* harvest, which is what stops `test_response_match.py` writing
+into the reference it scores against).
+
+The judges have **no fallback** to the approved reference. Judging it would
+answer "was the reference any good?" — never the question those rubrics exist to
+ask — and would report green over prose the commit never produced. A missing
+harvest therefore *skips* locally and *fails* under CI, where the trajectory step
+runs first and an empty harvest means the harvest broke. Both files carry the
+same record shape and are read by the same parser, so a field added to one
+reaches both.
+
+**Two lanes, opposite freshness requirements — don't unify them.** The prose lane
+above must be *fresh*: a judgement is only about the commit that produced the
+text. The snapshot lane below must be *frozen*: the bundle is the answer key, and
+re-capturing it against the current model would be marking the exam with the
+student's own answers. Both are right; the mistake would be applying either one's
+discipline to the other.
 
 ### Self-contained snapshot datasets — scoring the model, offline, in CI
 

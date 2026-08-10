@@ -10,7 +10,7 @@ Why this exists: ADK's own ``AgentEvaluator`` resolves its LLM-as-judge model
 ADK-core's OWN generic provider registry (a bare "gemini-*" string resolves to
 its built-in ``Gemini`` class, "openai/*" to ``LiteLlm``, etc. -- see
 ``google/adk/models/__init__.py``'s ``_LAZY_PROVIDERS``
-[VERIFIED against installed google-adk 2.5.0 source]). That registry has no
+[VERIFIED against installed google-adk 2.3.0 source]). That registry has no
 pattern matching "sage-*" and never calls into this repo's ``shared/llm.py``,
 so:
 
