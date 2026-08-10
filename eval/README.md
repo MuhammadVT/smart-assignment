@@ -18,13 +18,13 @@ live LLM backend** and are kept separate from the hermetic tests.
 | `capture.py` | Runs the live agent once per case to record its real final response + whether it escalated (Phase 2b), into the committed **reference**. |
 | `capture_harvest.py` | Keeps what the agent said during a `test_eval.py` run, to the uncommitted `feedback_data/latest_run_responses.json` — the prose `test_quality.py` judges. Free: no extra LLM calls. |
 | `test_response_match.py` | Separate pytest entry point: `response_match_score`, scoped to captured cases known NOT to have escalated. See its module docstring for why escalate cases can't be scored this way at all. |
-| `inference_guard.py` | Fails the run when ADK *drops* an eval case (a crashed inference) instead of scoring it — otherwise a dropped case is indistinguishable from a passing one. Used by `test_eval.py` and `test_response_match.py`. |
+| `inference_guard.py` | Fails the run when ADK *drops* an eval case (a crashed inference) instead of scoring it — otherwise a dropped case is indistinguishable from a passing one. Used by `test_eval.py` and `test_response_match.py`. Also the **only** patcher of `LocalEvalService.perform_inference`: anything else needing that stream (the harvester) registers an `observer` here rather than wrapping it again. |
 | `run_budget.py` | A wall-clock ceiling on a live run (`SMART_ASSIGNMENT_EVAL_BUDGET_SECONDS`, default 20 min), so a hung backend fails promptly instead of running for hours. |
 | `run_config.py` | How many times each case is replayed (`SMART_ASSIGNMENT_EVAL_NUM_RUNS`, default **1**, overriding ADK's 2). See "How many live conversations a run costs". |
 | `case_set.py` | Which case **set** a run scores — `SMART_ASSIGNMENT_EVAL_CASES`, default `golden` (the built-in fixtures), or a path to a curated candidates JSON. The cases-side twin of `dataset.py`. See "Scoring curated production cases". |
 | `case_selection.py` | Owns the `SMART_ASSIGNMENT_EVAL_IDS` subset knob for the **test runners** (`test_eval.py`, `test_quality.py`, `test_rationale_faithfulness.py`): local-only, rejected under CI, warns when it narrows. Also exposes `filter_cases_by_ids` — the explicit-subset primitive `capture.py`'s `--ids` uses (capture does not read the env var). |
 | `deepeval_llm.py` | `SmartAssignmentDeepEvalLLM` — adapts this repo's own `generate_text` (any `SMART_ASSIGNMENT_LLM_BACKEND`) to DeepEval's judge-model interface. |
-| `test_quality.py` | Separate pytest entry point (Phase 3a): DeepEval G-Eval `brief_quality`/`response_clarity`, scored directly against captured `{final_response, escalated}` data — no ADK dataset involved. |
+| `test_quality.py` | Separate pytest entry point (Phase 3a): DeepEval G-Eval `brief_quality`/`response_clarity`, scored against the prose **this run** harvested — no ADK dataset involved. Skips locally when no run has harvested; **fails** under CI. |
 | `test_rationale_faithfulness.py` | Separate pytest entry point (Phase 3b): DeepEval G-Eval `rationale_faithfulness`, scored directly against a live `routeslot/` grounded pick and its real evidence packet — no captured data or ADK dataset involved. |
 
 ## What is scored (and what isn't, yet)
@@ -347,7 +347,7 @@ operational model.
 > export DEEPEVAL_TELEMETRY_OPT_OUT=YES DEEPEVAL_UPDATE_WARNING_OPT_OUT=YES
 > pytest eval/test_quality.py
 > ```
-> CI's `quality-eval` job sets both in its step's `env:` block for the same
+> CI's `live-eval` job sets both in its job-level `env:` block for the same
 > reason. Purely cosmetic/latency, not a functional issue — the check fails
 > silently (no error) if `pypi.org` is unreachable, relevant in a Sage-only
 > environment where such egress may be blocked or audited.
@@ -678,24 +678,46 @@ never regresses the others' `final_response` back to `null`:
 python3 -m eval.capture --ids woodlands_fresh_cafe_recommend --check
 ```
 
-## CI: advisory first
+## CI: one credentialed job, advisory first
 
-The `agent-eval` job in `.github/workflows/ci.yml` runs `test_eval.py`, and the
-sibling `quality-eval` job runs both `test_quality.py` and
-`test_rationale_faithfulness.py` — both jobs **advisory**
-(`continue-on-error: true`): they report, they don't block. Both no-op cleanly
-when `SAGE_*` credentials aren't configured as repo secrets, so neither fails a
-PR for infrastructure reasons.
+`.github/workflows/ci.yml` has two jobs: the hermetic `test` job, and
+`live-eval` — everything that needs a live LLM backend, in **one** job because
+the steps are now ordered rather than merely related:
 
-**CI triggers on `main` and the `dev-eval` integration branch** (see the `on:`
-block at the top of `ci.yml`) — a push or PR to either runs all three jobs. Only
-`dev-eval` is included among the dev branches: it's where the eval hardening
-integrates, so it's where `agent-eval`/`quality-eval` build the green track
-record. (The Pages deploy, `pages.yml`, still runs on `main` only — `dev-eval`
-is validated, not published.)
+1. `pytest eval/test_eval.py` — trajectory, **and it writes the harvest**
+2. `pytest eval/test_quality.py eval/test_rationale_faithfulness.py` — judges,
+   over the text step 1 just produced
+3. `python3 -m eval.outcome_scoring --path llm` — the snapshot gate, grounded
+4. **upload the run's output as an artifact**
 
-The plan is to keep `agent-eval`/`quality-eval` advisory until their thresholds
-prove stable over a few real `dev-eval` PRs, then flip them to required checks.
+This was two jobs (`agent-eval` + `quality-eval`). Since `test_quality.py` now
+scores what `test_eval.py` harvested, expressing that with `needs:` would have
+serialized them anyway *and* still paid for a second checkout, a second
+dependency install and a second Sage SDK install — plus an artifact round-trip
+to move the harvest across. One job makes the ordering structural.
+
+Each eval step keeps its own `continue-on-error: true`, so a non-deterministic
+score divergence stays advisory; the job itself is **not** `continue-on-error`,
+so a can't-run failure (the Sage SDK install failing while creds are present)
+goes red. Non-blocking is enforced by not making it a required check, never by
+`continue-on-error`. A run with no `SAGE_*` secrets skips cleanly and stays
+green.
+
+**Step 4 is the one that closes the loop.** `feedback_data/` is gitignored (it's
+run output, not source), so before this every judge verdict CI computed was
+deleted with the runner — leaving `scripts/calibrate_judges.py`, which decides
+whether these judges can be trusted enough to gate on, with nothing but a
+developer's laptop to read. The upload runs under `always()`, so a *failed* eval
+still publishes what the agent said, which is exactly when you want to read it.
+
+**CI triggers on `main` and the `qa` integration branch** (see the `on:` block at
+the top of `ci.yml`) — a push or PR to either runs both jobs. Only `qa` is
+included among the dev branches: it's where the eval hardening integrates, so
+it's where `live-eval` builds its green track record. (The Pages deploy,
+`pages.yml`, still runs on `main` only — `qa` is validated, not published.)
+
+The plan is to keep `live-eval` advisory until its thresholds prove stable over
+a few real `qa` PRs, then flip it to a required check.
 
 ## Adding or changing cases
 

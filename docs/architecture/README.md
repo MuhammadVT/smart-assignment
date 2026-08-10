@@ -1183,7 +1183,7 @@ model over a bundle and checks the recommend/escalate outcome and the route-slot
 `SMART_ASSIGNMENT_EVAL_MODEL_PATH`) selects `deterministic` (weighted-sum, grounded
 off — offline, no credentials, the **blocking self-contained CI gate** in the
 `test` job) or `llm` (grounded judgment in the loop — advisory in the credentialed
-`agent-eval` job). The scorer is side-effect-free (it restores the data-source /
+`live-eval` job). The scorer is side-effect-free (it restores the data-source /
 geocoder env it pins). This closes the flywheel: production feedback (or a
 synthetic design) → an anonymized, self-contained golden dataset → the current
 model scored against it, automatically, in CI.
