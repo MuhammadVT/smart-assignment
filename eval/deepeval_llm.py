@@ -20,15 +20,13 @@ path to maintain.
 Backend-specific correctness notes, both already solved by reusing existing
 seams rather than reinventing them:
 
-* **Sage's loop-bound aiohttp session.** ``shared/llm.py``'s own docstring
-  documents that the Sage SDK's aiohttp ``ClientSession`` is bound to the
-  FIRST event loop that touches it; a naive ``asyncio.to_thread`` per call
-  would spin up a fresh throwaway loop each time (via ``_run_coro_blocking``'s
-  own fallback) and could break on the second live call. ``a_generate`` below
-  uses ``offload_to_worker_thread`` -- the SAME mechanism the web app's own
-  tools use to call ``generate_text`` from async code -- which records the
-  CALLING coroutine's loop as the stable "host loop" so every nested sage call
-  made from within one async test function lands back on the same loop.
+* **Sage's loop-bound aiohttp session.** The Sage SDK keeps ONE
+  ``ClientSession`` per process, bound to the first event loop that touches it
+  (see ``shared/async_bridge.py``). That module owns the problem: a synchronous
+  ``generate_text`` runs on a dedicated, never-closing loop, so a judge can be
+  called any number of times across any number of tests. ``a_generate`` below
+  only has to stay out of its way -- see the comment there for why it must NOT
+  pin pytest-asyncio's per-test loop.
 * **Dead judge-model defaults.** Nothing here has its own default model
   string to go stale (unlike ADK's ``JudgeModelOptions.judge_model`` defaulting
   to the now-retired ``gemini-2.5-flash``, or DeepEval's own ``GeminiModel``
@@ -66,8 +64,12 @@ installed at all, so it never becomes a hard hermetic-suite dependency).
 
 from __future__ import annotations
 
+import asyncio
+import json
+import logging
 import os
-from typing import TYPE_CHECKING
+import re
+from typing import TYPE_CHECKING, Optional
 
 # Must be set before ANY `deepeval` import, in this module or any caller's --
 # deepeval reads both at import time (see module docstring above). Owned HERE,
@@ -80,10 +82,86 @@ os.environ.setdefault("DEEPEVAL_UPDATE_WARNING_OPT_OUT", "YES")
 from deepeval.models import DeepEvalBaseLLM  # noqa: E402
 
 from smart_assignment.shared.config import ROLE_QUALITY_JUDGE  # noqa: E402
-from smart_assignment.shared.llm import generate_text, offload_to_worker_thread  # noqa: E402
+from smart_assignment.shared.llm import generate_text, generate_tool_call  # noqa: E402
 
 if TYPE_CHECKING:
+    from pydantic import BaseModel
+
     from smart_assignment.shared.config import Config
+
+logger = logging.getLogger(__name__)
+
+
+def tool_for_schema(schema: "type[BaseModel]") -> dict:
+    """Translate a DeepEval verdict model into this repo's provider-agnostic tool
+    declaration ``{name, description, parameters}``.
+
+    DeepEval's verdict models are deliberately small and flat -- ``Steps`` is
+    ``{steps: list[str]}``, ``ReasonScore`` is ``{reason: str, score: float}`` --
+    so pydantic's own JSON schema is already the ``parameters`` object
+    ``generate_tool_call`` wants, minus the ``title`` keys it ignores.
+
+    Nothing here describes *what* to answer: G-Eval's prompt already specifies the
+    rubric and the score range, and restating either would risk contradicting it.
+    This only supplies the shape.
+
+    Raises ``TypeError`` for a schema carrying ``$ref``/``$defs`` (a nested model),
+    which this flat translation cannot express -- DeepEval catches ``TypeError``
+    around its schema call and retries without one, so an unsupported schema
+    degrades to the prose path instead of failing the metric.
+    """
+    json_schema = schema.model_json_schema()
+    if "$defs" in json_schema or "$ref" in json.dumps(json_schema):
+        raise TypeError(f"{schema.__name__} nests another model; no flat tool shape for it")
+
+    return {
+        "name": f"submit_{_snake_case(schema.__name__)}",
+        "description": (
+            "Submit your answer in this exact structure. Call this exactly once, "
+            "and put the whole answer in the arguments -- do not also narrate it."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": json_schema.get("properties", {}),
+            "required": json_schema.get("required", []),
+        },
+    }
+
+
+def _snake_case(name: str) -> str:
+    """``ReasonScore`` -> ``reason_score``. Tool names are conventionally snake."""
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
+
+
+def _salvage_json(text: str) -> "Optional[dict]":
+    """The outermost JSON object in ``text``, or ``None``.
+
+    The narration fallback: a conversational agent that ignores the tool usually
+    still writes the JSON G-Eval's prompt asked for, wrapped in a sentence or a
+    ```json fence. Outermost braces rather than a greedy regex so a fenced object
+    containing nested objects survives intact; ``json_repair`` then covers the
+    trailing commas and unquoted keys such prose tends to carry.
+    """
+    start, end = text.find("{"), text.rfind("}")
+    if start == -1 or end <= start:
+        return None
+    candidate = text[start : end + 1]
+    try:
+        parsed = json.loads(candidate)
+    except json.JSONDecodeError:
+        parsed = _repair_json(candidate)
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _repair_json(text: str) -> object:
+    """Best-effort JSON recovery via ``json_repair``; ``None`` when the library
+    isn't importable, so the caller degrades cleanly. Same helper, same reason, as
+    ``routeslot/llm.py``."""
+    try:
+        from json_repair import repair_json
+    except ModuleNotFoundError:  # pragma: no cover - json_repair ships with the SDK
+        return None
+    return repair_json(text, return_objects=True)
 
 
 class SmartAssignmentDeepEvalLLM(DeepEvalBaseLLM):
@@ -102,11 +180,71 @@ class SmartAssignmentDeepEvalLLM(DeepEvalBaseLLM):
     def load_model(self) -> "SmartAssignmentDeepEvalLLM":
         return self
 
-    def generate(self, prompt: str) -> str:
-        return generate_text(self._config, prompt, role=ROLE_QUALITY_JUDGE)
+    def generate(self, prompt: str, schema: "Optional[type[BaseModel]]" = None):
+        """Free text, or -- when DeepEval asks for one -- an instance of ``schema``.
 
-    async def a_generate(self, prompt: str) -> str:
-        return await offload_to_worker_thread(self.generate, prompt)
+        The ``schema`` parameter is not optional decoration: G-Eval calls
+        ``generate(prompt, schema=Steps)`` and falls back to a plain
+        ``generate(prompt)`` on ``TypeError``. An adapter without the parameter
+        therefore took that fallback on EVERY call, and G-Eval then ran
+        ``json.loads`` over whatever came back. The direct SAGE agent is
+        conversational and narrates when asked for JSON, so that reliably produced
+        ``JSONDecodeError: Expecting value: line 1 column 1`` -- which is what made
+        ``brief_quality`` flaky and ``response_clarity`` fail outright.
+
+        The dependable structured channel for that agent is a function call, which
+        is why this routes through ``generate_tool_call`` -- the same seam
+        ``routeslot/`` uses, for the same reason.
+        """
+        if schema is None:
+            return generate_text(self._config, prompt, role=ROLE_QUALITY_JUDGE)
+        return self._generate_structured(prompt, schema)
+
+    def _generate_structured(self, prompt: str, schema: "type[BaseModel]") -> "BaseModel":
+        """One verdict, as an instance of ``schema``.
+
+        Tool arguments first, salvaged JSON from narration second -- mirroring
+        ``routeslot/llm.py``'s ``generate_route_slot_choice``. Raises when neither
+        yields something the schema accepts: a judge that cannot produce a verdict
+        must fail visibly, not return an invented score.
+
+        Only the sage backend has a tool channel today (see ``generate_tool_call``),
+        so under the standard backends every call lands on the salvage path. That
+        is fine rather than accidental: G-Eval's prompt asks for JSON, and the
+        models behind those backends comply -- the narrating direct SAGE agent is
+        precisely the one that needed the tool channel.
+        """
+        tool = tool_for_schema(schema)
+        call_args, text = generate_tool_call(
+            self._config, prompt, tool, role=ROLE_QUALITY_JUDGE
+        )
+        if call_args is None:
+            # The model narrated instead of calling the tool. Salvage the JSON it
+            # very likely still wrote -- G-Eval's prompt asks for JSON in prose.
+            logger.info("Judge narrated instead of calling %s; salvaging JSON", tool["name"])
+            call_args = _salvage_json(text)
+        if call_args is None:
+            raise ValueError(
+                f"Judge produced neither a {tool['name']} call nor parseable JSON "
+                f"(len={len(text)}): {text[:300]!r}"
+            )
+        return schema.model_validate(call_args)
+
+    async def a_generate(self, prompt: str, schema: "Optional[type[BaseModel]]" = None):
+        # Plain ``to_thread``, deliberately NOT ``offload_to_worker_thread``.
+        #
+        # Both run ``generate`` off the calling loop; the difference is that
+        # ``offload_to_worker_thread`` also declares "nested LLM calls belong on
+        # MY loop" -- right for the ADK and web-app paths, where the agent's own
+        # streaming call has already bound the backend session to that loop, and
+        # wrong here. pytest-asyncio hands each async test a FRESH loop and closes
+        # it afterwards, so pinning it would bind the process-global session to a
+        # loop that dies with the test: the first judged metric would pass and
+        # every later one would fail with "Event loop is closed".
+        #
+        # Declaring nothing lets ``shared/async_bridge.py`` put the call on its
+        # dedicated, never-closing loop, which outlives every test in the file.
+        return await asyncio.to_thread(self.generate, prompt, schema)
 
     def get_model_name(self) -> str:
         return self._config.sage_model if self._config.llm_backend == "sage" else self._config.model

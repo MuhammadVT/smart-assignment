@@ -60,6 +60,7 @@ from smart_assignment.mock_customers import SAMPLE_CUSTOMERS
 from smart_assignment.pipeline import run_slot_recommendation
 from smart_assignment.reporting.page import _FE_STYLE, _STYLE, build_workflow_payload
 from smart_assignment.shared.config import DEFAULT_CONFIG
+from smart_assignment.shared.llm import offload_to_worker_thread
 from smart_assignment.webapp.decision import traced_decision
 from smart_assignment.webapp.deterministic_chat import DeterministicChatService
 from smart_assignment.webapp.llm_chat import LlmChatService, resolve_mode
@@ -201,8 +202,24 @@ def samples() -> list[dict]:
 
 
 @app.post("/api/recommend", response_model=RecommendResponse)
-def recommend(req: RecommendRequest) -> RecommendResponse:
-    """Parse the message, run the workflow, and return the visualization payload."""
+async def recommend(req: RecommendRequest) -> RecommendResponse:
+    """Parse the message, run the workflow, and return the visualization payload.
+
+    ``async def`` + ``offload_to_worker_thread`` rather than a plain ``def``
+    endpoint. Both run the blocking pipeline off the event loop, but only this
+    form records the server loop as the *host loop* -- which is what keeps this
+    endpoint's grounded LLM calls on the same loop the chat path's ADK agent
+    already bound the backend session to (see ``shared/async_bridge.py``).
+    As a plain ``def``, FastAPI's threadpool left no host loop: the grounded call
+    ran on a throwaway loop, so every request after the first silently fell back
+    to the deterministic pick, and one such request broke the chat path too.
+    """
+    return await offload_to_worker_thread(_run_recommendation, req)
+
+
+def _run_recommendation(req: RecommendRequest) -> RecommendResponse:
+    """The endpoint's blocking body, kept whole so the trace context manager and
+    the pipeline run on the same worker thread."""
     parsed = parse_intake(req.message)
     if parsed.profile is None:
         return RecommendResponse(ok=False, reply=parsed.clarify, needs_input=True)

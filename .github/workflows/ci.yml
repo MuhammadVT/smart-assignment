@@ -73,9 +73,21 @@ jobs:
         # at-a-glance CI step and exercises the CLI.)
         run: python3 -m eval.outcome_scoring --path deterministic
 
-  # Agent-level evaluation (ADK AgentEvaluator): replays scripted intake
-  # conversations against the real root_agent and scores tool trajectory. Unlike
-  # the hermetic `test` job it needs a live LLM backend, so it runs separately.
+  # The credentialed eval job: everything needing a live LLM backend, in ONE job
+  # because the steps are now ORDERED, not merely related.
+  #
+  # eval/test_eval.py harvests what the agent actually said while replaying each
+  # case (eval/capture_harvest.py), and eval/test_quality.py judges exactly that
+  # text. So quality MUST run after trajectory, in the same workspace. This was
+  # two jobs (agent-eval + quality-eval); expressing the new dependency with
+  # `needs:` would have serialized them anyway while still paying for a second
+  # checkout, a second dependency install and a second Sage SDK install -- and
+  # would have needed an artifact round-trip to carry the harvest between them.
+  # One job makes the ordering structural (step order) rather than declared.
+  #
+  # The combined extras install was verified to resolve before this merge:
+  # deepeval 2.6.6, litellm 1.83.7 and python-dotenv 1.0.1 coexist, and
+  # google-adk[eval] on top disturbs neither.
   #
   # RED vs. NON-BLOCKING are decided separately, on purpose:
   #  - This job is NOT advisory-green. `continue-on-error` is intentionally unset
@@ -87,7 +99,7 @@ jobs:
   #    branch-protection rule (Settings -> Branches). A red check that isn't
   #    required shows red but leaves the merge button enabled. (Blocking is a
   #    branch-protection setting, never continue-on-error.) Make it a required
-  #    check once trajectory scores prove stable over a few real PRs (Phase 2a).
+  #    check once the scores prove stable over a few real PRs.
   #  - The NON-DETERMINISTIC eval steps themselves (grounded LLM reasoning varies
   #    run to run) keep step-level `continue-on-error: true` so an expected score
   #    divergence stays advisory; only a hard failure (can't run at all) goes red.
@@ -100,10 +112,31 @@ jobs:
   # SDK install fails there and this job goes red. To make it pass, either give the
   # runner a read-only PAT/SSO for the SDK repo, or switch this job to
   # SMART_ASSIGNMENT_LLM_BACKEND=standard + a GOOGLE_API_KEY secret (no private SDK).
-  agent-eval:
-    timeout-minutes: 30
+  live-eval:
+    # Higher than the 30 the two jobs had individually: this one runs both their
+    # workloads in sequence. Still well above the in-test budget
+    # (SMART_ASSIGNMENT_EVAL_BUDGET_SECONDS, 20 min) on purpose, so the readable
+    # in-test failure is what you normally see -- see eval/run_budget.py.
+    timeout-minutes: 40
     # See the note on the `test` job above; CI_RUNNER is shared repo-wide.
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    env:
+      # Job-level so every eval step below shares them: the backend must not
+      # drift between the run that produces the prose and the judges scoring it.
+      SMART_ASSIGNMENT_LLM_BACKEND: sage
+      SMART_ASSIGNMENT_SAGE_MODEL: sage-gemini-2.5-flash
+      SAGE_CLIENT_ID: ${{ secrets.SAGE_CLIENT_ID }}
+      SAGE_CLIENT_SECRET: ${{ secrets.SAGE_CLIENT_SECRET }}
+      SAGE_ENVIRONMENT: ${{ secrets.SAGE_ENVIRONMENT }}
+      # deepeval registers itself as a pytest plugin (a pytest11 entry point),
+      # which pytest auto-imports during its own startup -- before ANY of this
+      # repo's Python runs. So these MUST be real process env vars, not just set
+      # in Python (see eval/test_quality.py's own os.environ.setdefault, which
+      # only helps a non-pytest import). Suppresses an outbound HTTPS
+      # version-check to pypi.org plus usage-analytics events, on every `pytest`
+      # invocation in an environment where deepeval happens to be installed.
+      DEEPEVAL_TELEMETRY_OPT_OUT: "YES"
+      DEEPEVAL_UPDATE_WARNING_OPT_OUT: "YES"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -117,10 +150,11 @@ jobs:
       - name: Install the local ds-utils-lite dependency
         run: pip install -e smart_assignment/ds_utils_lite
 
-      - name: Install package with dev dependencies
-        # NOTE: needs the `eval` extra too (google-adk[eval]) -- AgentEvaluator
-        # raises ModuleNotFoundError without it. `.[dev]` alone is not enough.
-        run: pip install -e ".[dev,eval]"
+      - name: Install package with dev + eval + quality-eval dependencies
+        # `eval` is google-adk[eval] -- AgentEvaluator raises ModuleNotFoundError
+        # without it. `eval-quality` is DeepEval, which never goes through
+        # AgentEvaluator at all. One job now runs both, so it needs both.
+        run: pip install -e ".[dev,eval,eval-quality]"
 
       - name: Install the Sage SDK when credentials are present
         id: sage_sdk
@@ -149,7 +183,6 @@ jobs:
         # runner with native git access) the rewrite is skipped and the clone runs
         # as-is. GitHub auto-masks the secret in logs.
         env:
-          SAGE_CLIENT_ID: ${{ secrets.SAGE_CLIENT_ID }}
           SAGE_SDK_TOKEN_CLASSIC: ${{ secrets.SAGE_SDK_TOKEN_CLASSIC }}
         run: |
           if [ -z "$SAGE_CLIENT_ID" ]; then
@@ -165,21 +198,36 @@ jobs:
           pip install -e ".[sage]"
           echo "installed=true" >> "$GITHUB_OUTPUT"
 
-      - name: Run agent trajectory eval (only when the Sage SDK installed)
+      # ---- 1. trajectory -- and the harvest every judge below reads ----
+      - name: Run agent trajectory eval (harvests the agent's responses)
         if: steps.sage_sdk.outputs.installed == 'true'
         # Grounded LLM reasoning is non-deterministic, so a score divergence stays
-        # advisory (step-level continue-on-error) even though the job overall is no
-        # longer advisory-green. A hard failure to run at all still shows via the
+        # advisory (step-level continue-on-error) even though the job overall is
+        # not advisory-green. A hard failure to run at all still shows via the
         # install step above going red.
+        #
+        # This step also WRITES feedback_data/latest_run_responses.json -- what the
+        # agent actually said this run (eval/capture_harvest.py). The next step
+        # scores that file and nothing else, which is why it must run after this.
         continue-on-error: true
-        env:
-          SMART_ASSIGNMENT_LLM_BACKEND: sage
-          SMART_ASSIGNMENT_SAGE_MODEL: sage-gemini-2.5-flash
-          SAGE_CLIENT_ID: ${{ secrets.SAGE_CLIENT_ID }}
-          SAGE_CLIENT_SECRET: ${{ secrets.SAGE_CLIENT_SECRET }}
-          SAGE_ENVIRONMENT: ${{ secrets.SAGE_ENVIRONMENT }}
         run: python3 -m pytest eval/test_eval.py -q
 
+      # ---- 2. the judges, over the text step 1 just produced ----
+      - name: Run quality + rationale metrics
+        if: steps.sage_sdk.outputs.installed == 'true'
+        # Non-deterministic G-Eval scores stay advisory (step-level
+        # continue-on-error); only a can't-run failure (the install step above)
+        # reds the job.
+        #
+        # test_quality.py FAILS rather than skips when the harvest is missing,
+        # precisely because CI runs the step above first: an empty harvest here
+        # means the harvest broke, not that there is nothing to judge.
+        # test_rationale_faithfulness.py needs no harvest -- it drives routeslot/'s
+        # grounded pick directly and regenerates its own prose every run.
+        continue-on-error: true
+        run: python3 -m pytest eval/test_quality.py eval/test_rationale_faithfulness.py -q
+
+      # ---- 3. the offline snapshot gate, with the LLM in the loop ----
       - name: Score curated snapshot datasets (LLM path, advisory)
         # The same snapshot gate as the `test` job, but with the grounded LLM
         # decision in the loop (SMART_ASSIGNMENT_EVAL_MODEL_PATH=llm). Grounded
@@ -188,101 +236,29 @@ jobs:
         # the job. Runs only when the Sage SDK installed above.
         if: steps.sage_sdk.outputs.installed == 'true'
         continue-on-error: true
-        env:
-          SMART_ASSIGNMENT_LLM_BACKEND: sage
-          SMART_ASSIGNMENT_SAGE_MODEL: sage-gemini-2.5-flash
-          SAGE_CLIENT_ID: ${{ secrets.SAGE_CLIENT_ID }}
-          SAGE_CLIENT_SECRET: ${{ secrets.SAGE_CLIENT_SECRET }}
-          SAGE_ENVIRONMENT: ${{ secrets.SAGE_ENVIRONMENT }}
         run: python3 -m eval.outcome_scoring --path llm
 
-  # G-Eval quality metrics (DeepEval): brief_quality (escalate-outcome captures)
-  # and response_clarity (recommend-outcome captures), scored directly against
-  # eval/capture.py's captured {final_response, escalated} data -- see
-  # eval/test_quality.py's module docstring. Same advisory/credential-skip
-  # shape as agent-eval above, but does NOT need google-adk[eval] at all
-  # (DeepEval's GEval never goes through AgentEvaluator) -- a narrower install.
-  #
-  # Also runs eval/test_rationale_faithfulness.py (Phase 3b): a different
-  # granularity -- routeslot/'s own grounded-decision rationale, not the
-  # agent's customer-facing prose -- scored reference-free against the real
-  # evidence packet, no capture step needed. Same eval-quality install covers
-  # both; see that file's module docstring.
-  quality-eval:
-    timeout-minutes: 30
-    # See the note on the `test` job above; CI_RUNNER is shared repo-wide.
-    # Same red-vs-non-blocking model as agent-eval: continue-on-error is unset so a
-    # can't-run failure (Sage SDK install with creds present) goes RED; the metrics
-    # step stays advisory via its own step-level continue-on-error; a no-creds run
-    # skips green; non-blocking is enforced by NOT making this a required check.
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      # ---- 4. keep what the run produced ----
+      - name: Upload eval run output
+        # Without this everything above is computed and then deleted with the
+        # runner. feedback_data/ is gitignored (it is run output, not source), so
+        # judge verdicts had no way to survive a CI run -- which left
+        # scripts/calibrate_judges.py, the thing that decides whether these judges
+        # can be trusted enough to gate on, with nothing but a developer's laptop
+        # to read. The harvested responses ride along so a reviewer can see the
+        # prose a given score was actually awarded to.
+        #
+        # always() so a FAILED eval still publishes its output: that is exactly
+        # when you want to read what the agent said.
+        if: always() && steps.sage_sdk.outputs.installed == 'true'
+        uses: actions/upload-artifact@v4
         with:
-          python-version: "3.14"
-          cache: pip
-
-      - name: Install the local ds-utils-lite dependency
-        run: pip install -e smart_assignment/ds_utils_lite
-
-      - name: Install package with dev + quality-eval dependencies
-        run: pip install -e ".[dev,eval-quality]"
-
-      - name: Install the Sage SDK when credentials are present
-        id: sage_sdk
-        # The metrics below run against the `sage` backend, which imports the Sage
-        # SDK (sage_adk) -- provided only by the `sage` extra. That extra installs
-        # three packages from a PRIVATE Sysco git repo, which needs git access
-        # (PAT/SSO) to github.com -- a SEPARATE credential from the SAGE_* runtime
-        # secrets: actions/checkout's GITHUB_TOKEN only authenticates THIS repo,
-        # so a runner can hold the SAGE_* secrets yet still be unable to clone the
-        # SDK. No creds -> exit 0 and installed=false (the metrics step skips, green
-        # skip). Creds present -> the eval is expected to run, so a failed install
-        # is a real failure: let `pip install` fail the step (default bash -e) so
-        # the job goes RED rather than a swallowed warning. SAGE_SDK_TOKEN_CLASSIC
-        # grants the git clone read access to the private SDK repo (scoped to the
-        # Sysco org prefix; skipped when absent). See the fuller note in the
-        # agent-eval job above.
-        env:
-          SAGE_CLIENT_ID: ${{ secrets.SAGE_CLIENT_ID }}
-          SAGE_SDK_TOKEN_CLASSIC: ${{ secrets.SAGE_SDK_TOKEN_CLASSIC }}
-        run: |
-          if [ -z "$SAGE_CLIENT_ID" ]; then
-            echo "No SAGE_* credentials configured; skipping Sage-backed eval (clean skip)."
-            echo "installed=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if [ -n "$SAGE_SDK_TOKEN_CLASSIC" ]; then
-            git config --global \
-              url."https://x-access-token:${SAGE_SDK_TOKEN_CLASSIC}@github.com/SyscoCorporation/".insteadOf \
-              "https://github.com/SyscoCorporation/"
-          fi
-          pip install -e ".[sage]"
-          echo "installed=true" >> "$GITHUB_OUTPUT"
-
-      - name: Run quality metrics (only when the Sage SDK installed)
-        if: steps.sage_sdk.outputs.installed == 'true'
-        # Non-deterministic G-Eval scores stay advisory (step-level
-        # continue-on-error); only a can't-run failure (install step above) reds
-        # the job.
-        continue-on-error: true
-        env:
-          SMART_ASSIGNMENT_LLM_BACKEND: sage
-          SMART_ASSIGNMENT_SAGE_MODEL: sage-gemini-2.5-flash
-          SAGE_CLIENT_ID: ${{ secrets.SAGE_CLIENT_ID }}
-          SAGE_CLIENT_SECRET: ${{ secrets.SAGE_CLIENT_SECRET }}
-          SAGE_ENVIRONMENT: ${{ secrets.SAGE_ENVIRONMENT }}
-          # deepeval registers itself as a pytest plugin (pytest11 entry point),
-          # which pytest auto-imports before any of this repo's own code runs --
-          # so these MUST be real process env vars, not just set in Python (see
-          # eval/test_quality.py's own os.environ.setdefault, which only helps
-          # non-pytest invocations). Suppresses an outbound HTTPS version-check
-          # to pypi.org and usage-analytics events on every `pytest` invocation
-          # in an environment where deepeval happens to be installed.
-          DEEPEVAL_TELEMETRY_OPT_OUT: "YES"
-          DEEPEVAL_UPDATE_WARNING_OPT_OUT: "YES"
-        run: python3 -m pytest eval/test_quality.py eval/test_rationale_faithfulness.py -q
+          name: eval-run-output-${{ github.run_id }}
+          path: |
+            feedback_data/judge_verdicts.jsonl
+            feedback_data/latest_run_responses.json
+          # warn, not error: a run whose harvest broke has already been reported
+          # by the failing step above; a missing-file error here would just add a
+          # second, less informative failure on top.
+          if-no-files-found: warn
+          retention-days: 30

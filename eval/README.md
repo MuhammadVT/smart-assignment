@@ -13,15 +13,18 @@ live LLM backend** and are kept separate from the hermetic tests.
 | `build_evalset.py` | Deterministically renders the cases into an ADK `EvalSet` JSON. Run `python3 -m eval.build_evalset` to regenerate the dataset. |
 | `data/slot_recommendation.test.json` | The generated `EvalSet` (do not hand-edit — regenerate). |
 | `data/test_config.json` | The scoring criteria ADK auto-discovers from this folder. |
-| `data/captured_responses.json` | Committed `{eval_id: {final_response, escalated}}` map written by `capture.py` (Phase 2b). |
+| `data/golden_responses.json` | The committed, human-reviewed reference response per golden case, written by `capture.py` (Phase 2b). One `{final_response, escalated, decision_id, captured_at, captured_with}` record per `eval_id`. |
 | `test_eval.py` | The pytest entry point that runs `AgentEvaluator` (trajectory, full dataset). |
-| `capture.py` | Runs the live agent once per case to record its real final response + whether it escalated (Phase 2b). |
+| `capture.py` | Runs the live agent once per case to record its real final response + whether it escalated (Phase 2b), into the committed **reference**. |
+| `capture_harvest.py` | Keeps what the agent said during a `test_eval.py` run, to the uncommitted `feedback_data/latest_run_responses.json` — the prose `test_quality.py` judges. Free: no extra LLM calls. |
 | `test_response_match.py` | Separate pytest entry point: `response_match_score`, scoped to captured cases known NOT to have escalated. See its module docstring for why escalate cases can't be scored this way at all. |
-| `inference_guard.py` | Fails the run when ADK *drops* an eval case (a crashed inference) instead of scoring it — otherwise a dropped case is indistinguishable from a passing one. Used by `test_eval.py` and `test_response_match.py`. |
+| `inference_guard.py` | Fails the run when ADK *drops* an eval case (a crashed inference) instead of scoring it — otherwise a dropped case is indistinguishable from a passing one. Used by `test_eval.py` and `test_response_match.py`. Also the **only** patcher of `LocalEvalService.perform_inference`: anything else needing that stream (the harvester) registers an `observer` here rather than wrapping it again. |
 | `run_budget.py` | A wall-clock ceiling on a live run (`SMART_ASSIGNMENT_EVAL_BUDGET_SECONDS`, default 20 min), so a hung backend fails promptly instead of running for hours. |
+| `run_config.py` | How many times each case is replayed (`SMART_ASSIGNMENT_EVAL_NUM_RUNS`, default **1**, overriding ADK's 2). See "How many live conversations a run costs". |
+| `case_set.py` | Which case **set** a run scores — `SMART_ASSIGNMENT_EVAL_CASES`, default `golden` (the built-in fixtures), or a path to a curated candidates JSON. The cases-side twin of `dataset.py`. See "Scoring curated production cases". |
 | `case_selection.py` | Owns the `SMART_ASSIGNMENT_EVAL_IDS` subset knob for the **test runners** (`test_eval.py`, `test_quality.py`, `test_rationale_faithfulness.py`): local-only, rejected under CI, warns when it narrows. Also exposes `filter_cases_by_ids` — the explicit-subset primitive `capture.py`'s `--ids` uses (capture does not read the env var). |
 | `deepeval_llm.py` | `SmartAssignmentDeepEvalLLM` — adapts this repo's own `generate_text` (any `SMART_ASSIGNMENT_LLM_BACKEND`) to DeepEval's judge-model interface. |
-| `test_quality.py` | Separate pytest entry point (Phase 3a): DeepEval G-Eval `brief_quality`/`response_clarity`, scored directly against captured `{final_response, escalated}` data — no ADK dataset involved. |
+| `test_quality.py` | Separate pytest entry point (Phase 3a): DeepEval G-Eval `brief_quality`/`response_clarity`, scored against the prose **this run** harvested — no ADK dataset involved. Skips locally when no run has harvested; **fails** under CI. |
 | `test_rationale_faithfulness.py` | Separate pytest entry point (Phase 3b): DeepEval G-Eval `rationale_faithfulness`, scored directly against a live `routeslot/` grounded pick and its real evidence packet — no captured data or ADK dataset involved. |
 
 ## What is scored (and what isn't, yet)
@@ -151,7 +154,7 @@ python3 -m eval.capture --check   # dry run: print what would be captured, write
 python3 -m eval.capture           # capture, then regenerate the dataset from it
 ```
 
-This writes **`eval/data/captured_responses.json`** (a committed, reviewable
+This writes **`eval/data/golden_responses.json`** (a committed, reviewable
 `{eval_id: {final_response, escalated}}` map — `escalated` records whether the
 case handed off via ADK's `request_input` long-running tool rather than ending on
 plain text; see `eval/test_response_match.py` below for why that matters) and
@@ -173,7 +176,7 @@ Unlike trajectory scoring, `response_match_score` is **not** added to the shared
    `null` reference; it silently scores that case `0.0` and `FAILED`, dragging the
    overall score down for reasons that have nothing to do with response quality.
 2. **`response_match_score` cannot meaningfully score an ESCALATE-outcome case at
-   all**, regardless of threshold. [VERIFIED against installed google-adk 2.5.0
+   all**, regardless of threshold. [VERIFIED against installed google-adk 2.3.0
    source]: an escalation ends the turn on ADK's `request_input` long-running tool
    call; `Event.is_final_response()` treats that tool-call event as the turn's
    final response, but its content holds a `function_call` part, not `.text` —
@@ -211,7 +214,7 @@ ROUGE-1 word overlap, a judge LLM rates whether the response is valid given the
 reference, tolerating paraphrasing/format/order differences — a materially
 better signal for prose, at a materially higher cost (an extra LLM call per
 sample; ADK's own default is 5 samples, majority-voted). It has the **exact same
-escalate-case blind spot as v1** — [verified against installed google-adk 2.5.0
+escalate-case blind spot as v1** — [verified against installed google-adk 2.3.0
 source] `llm_as_judge_utils.get_text_from_content` still only reads `.text` parts
 of `Content`, same as v1, so it never sees the escalation handoff message either
 (that lives in a `function_call`'s args) — so it's scoped by the same
@@ -222,6 +225,33 @@ ADK's default of 5) to keep this cheap while there's only a handful of captured
 cases; bump it once there's a reason to trust majority-vote stability over a
 single judge call. It's also marked `@experimental` in ADK's own source — its
 shape or behavior may move under future ADK versions.
+
+> **v2 is skipped under the direct SAGE agent, on purpose.** Two separate
+> problems sat on this path, and only the first was a code bug:
+>
+> 1. **Addressing (fixed).** ADK stamps the *bare* judge-model id onto the
+>    request, and its `LiteLlm` prefers that over the handler's own
+>    provider-qualified `"<agent>/model"` — so litellm saw no provider and every
+>    case died on `GetLLMProvider Exception - list index out of range`.
+>    `sage_judge_llm.py` now re-addresses the request; see `_addressed_to_sage`.
+> 2. **Capability (not fixable here).** [VERIFIED live] the direct SAGE agent
+>    *answers* the user prompt embedded in ADK's rater prompt rather than rating
+>    it — echoing the agent response back. It is a registered domain agent with
+>    its own system prompt, not a general-purpose model. Three prompt variants
+>    (including an explicit "you are only a rater" prefix and a rater
+>    `system_instruction`) failed to change that, so `_parse_critique` finds no
+>    `is_the_agent_response_valid` field, every sample is discarded, and the
+>    metric reports `NOT_EVALUATED`.
+>
+> `test_quality.py`'s judge works against the same agent because it asks through
+> a **function call** (`deepeval_llm.py`); ADK's v2 rater parses free **text**
+> with a regex, a channel this agent will not reliably use. So v2 is scored only
+> where a general-purpose judge is reachable — the standard backends, or sage via
+> the LLM Gateway (`SMART_ASSIGNMENT_USE_SAGE_GATEWAY=true`, where `sage_model`
+> names a gateway-exposed model rather than a SAGE agent). `response_match_score`
+> and the trajectory check need no judge and run everywhere. The test emits a
+> `UserWarning` naming the skip on every run, so a green tick never silently
+> implies v2 was scored.
 
 > **Data source matters here.** Capture runs the real agent, which by default
 > loads route capacity from whatever's under `data/dev/*.parquet` (the "cache"
@@ -238,6 +268,33 @@ shape or behavior may move under future ADK versions.
 > `golden_cases.py`'s comments), run capture with
 > `SMART_ASSIGNMENT_DATA_SOURCE=mock` set.
 
+### Two response files, two jobs
+
+| | `eval/data/golden_responses.json` | `feedback_data/latest_run_responses.json` |
+|---|---|---|
+| What | The approved **reference** | What the agent said in **this run** |
+| Committed | yes, reviewed in PR diffs | no (`feedback_data/` is gitignored) |
+| Written by | `python3 -m eval.capture` (deliberate, manual) | `pytest eval/test_eval.py` (automatic, free) |
+| Feeds | reference-**based** metrics: `response_match_score`, `final_response_match_v2` | reference-**free** judges: `brief_quality`, `response_clarity` |
+| Answers | "Does the agent still say what we approved?" | "Is this commit's prose any good?" |
+
+Both hold the same record shape (`final_response`, `escalated`, `decision_id`,
+`captured_at`, `captured_with`) and are read by the same parser, so a field
+added to one reaches both.
+
+The judges have **no fallback** to the reference. Judging approved text answers
+"was the reference any good?", never the question those rubrics exist to ask —
+and it would report green over prose the commit never produced. So a missing
+harvest **skips** locally (run `pytest eval/test_eval.py` first) and **fails**
+under CI, where the eval job runs first and an empty harvest means it broke.
+That local-vs-CI asymmetry is the same one `case_selection.py` applies to
+`SMART_ASSIGNMENT_EVAL_IDS`.
+
+```bash
+pytest eval/test_eval.py      # replays the agent, harvests what it said
+pytest eval/test_quality.py   # judges that
+```
+
 ### `eval/test_quality.py` — Phase 3a: DeepEval G-Eval quality metrics
 
 `response_match_score`/`final_response_match_v2` are similarity-to-reference
@@ -246,9 +303,9 @@ leaving the highest-stakes prose (the escalation/handoff brief a human
 specialist acts on) with zero automated signal. `test_quality.py` closes that
 gap with two **reference-free** DeepEval G-Eval rubrics (no `expected_output`
 set — the judge rates the response on its own merits, not fidelity to a
-captured reference), scored **directly against captured text** — no ADK
-`EvalSet`/`AgentEvaluator` involved at all, so there's no scratch dataset file
-to render; this file only *reads* `eval/data/captured_responses.json`.
+captured reference), scored **directly against the prose this run produced** —
+no ADK `EvalSet`/`AgentEvaluator` involved at all, so there's no scratch dataset
+file to render; this file only *reads* `feedback_data/latest_run_responses.json`.
 
 Both rubrics are drawn from the human-annotation dimensions in
 [`deployment/phoenix/README.md`](../deployment/phoenix/README.md)'s feedback
@@ -299,6 +356,23 @@ the app's main model with `SMART_ASSIGNMENT_MODEL_QUALITY_JUDGE` (standard
 backend) if you want a stronger/different judge than the agent's own
 operational model.
 
+**The judge answers through a function call, not prose.** G-Eval asks its model
+for structured verdicts — `generate(prompt, schema=Steps)` for the evaluation
+steps, `schema=ReasonScore` for the score and its reason — and, on `TypeError`,
+silently retries *without* the schema and `json.loads`es whatever prose comes
+back. The direct SAGE agent is conversational and narrates when asked for JSON,
+so an adapter without a `schema` parameter took that fallback on every call and
+died on `JSONDecodeError: Expecting value: line 1 column 1`. That is what made
+`brief_quality` intermittent and `response_clarity` fail outright.
+
+`SmartAssignmentDeepEvalLLM.generate` therefore accepts `schema` and translates
+it into a one-tool declaration for `shared/llm.py`'s `generate_tool_call` — the
+same channel `routeslot/` uses, for the same reason. The declaration carries the
+*shape* only; G-Eval's own prompt still owns the rubric and the score range.
+Narrated JSON is salvaged as a fallback (which is the normal path on the
+standard backends, where there is no tool channel yet), and a reply that yields
+neither raises rather than returning an invented score.
+
 > **DeepEval makes an outbound network call at import time, independent of
 > telemetry opt-out — and it can't be fully suppressed from within this repo's
 > own code when run via `pytest`.** [VERIFIED against installed deepeval 2.6.6
@@ -317,7 +391,7 @@ operational model.
 > export DEEPEVAL_TELEMETRY_OPT_OUT=YES DEEPEVAL_UPDATE_WARNING_OPT_OUT=YES
 > pytest eval/test_quality.py
 > ```
-> CI's `quality-eval` job sets both in its step's `env:` block for the same
+> CI's `live-eval` job sets both in its job-level `env:` block for the same
 > reason. Purely cosmetic/latency, not a functional issue — the check fails
 > silently (no error) if `pypi.org` is unreachable, relevant in a Sage-only
 > environment where such egress may be blocked or audited.
@@ -542,21 +616,80 @@ never a new branch at a call site. `tests/eval/test_dataset_lock.py` enforces
 that every golden case is captured against the declared dataset (see *Adding or
 changing cases*).
 
-### Running a subset locally while developing (cost control)
+### How many live conversations a run costs
 
-Every case replays the full agent pipeline against your live LLM backend, and
-ADK's own default runs each case **twice** (`num_runs=2`) — so a plain
-`pytest eval/test_eval.py` against all 4 committed cases is 8 live
-conversations. Two env vars (unset by default, so normal behavior is
-unchanged) trim that while iterating. They are **shell-only, local-only**
-cost knobs for the **test runners**: `SMART_ASSIGNMENT_EVAL_IDS` is *rejected*
-if it's set during a CI run (`CI=true`), so CI always scores the full committed
-dataset, and any narrowing logs a loud warning so it's never invisible.
+Every case replays the full agent pipeline against your live LLM backend, so the
+cost of a run is **cases × runs**.
+
+**Each case is replayed once** (`eval/run_config.py`, `DEFAULT_NUM_RUNS = 1`),
+overriding ADK's own default of `num_runs=2`. So a plain `pytest
+eval/test_eval.py` over the 4 committed cases is 4 live conversations, not 8.
+Three reasons, in that module's docstring: it halves the cost of every
+credentialed CI run; averaging two runs *hides* an intermittent failure behind a
+middling score that can still clear the threshold; and two runs give two final
+responses per case, so anything recording that text has to pick one.
+
+Expect this to be **redder** than averaging — that's the point. A case that
+passes once and fails once now fails, instead of reporting a passable mean.
+
+Raise it deliberately when run-to-run *variance* is the actual question:
 
 ```bash
-# Just one case, one run each -- cheapest inner loop.
+SMART_ASSIGNMENT_EVAL_NUM_RUNS=3 pytest eval/test_eval.py
+```
+
+Both `test_eval.py` and `test_response_match.py` read it (they both drive a live
+agent run). A value below `1` is rejected rather than passed through — ADK would
+take `0` as "replay nothing" and report success over zero cases.
+
+### Scoring curated production cases, not just the built-in fixtures
+
+Two independent selections, deliberately separate: **which world** a run scores
+against (`SMART_ASSIGNMENT_EVAL_DATASET`, see "Locking the eval dataset") and
+**which cases** it scores (`SMART_ASSIGNMENT_EVAL_CASES`, `eval/case_set.py`).
+Both default to the committed offline set, so unset means today's behavior
+exactly.
+
+`scripts/curate_feedback.py` and `scripts/phoenix_curate.py` already turn human
+👎 feedback into a candidates JSON, and `eval/case_source.py` reconstructs
+`GoldenCase` objects from it. Those curated cases are the ones that carry a real
+`decision_id` — the key a judge verdict joins to a human label on
+(`eval/judge_calibration.py`), which a hand-written fixture has no equivalent
+for. Point the runners at them with a value, not a code change:
+
+```bash
+SMART_ASSIGNMENT_EVAL_CASES=eval/data/feedback_candidates.json \
+pytest eval/test_eval.py
+```
+
+Every test runner follows: `test_eval.py`, `test_quality.py`,
+`test_rationale_faithfulness.py`, `test_response_match.py`. A non-default
+selection logs a loud warning naming the set and its size, and any candidate
+that can't be replayed (a PII-redacted address can't be geocoded) is reported
+rather than silently dropped. An unreadable path, an unparseable file, or a set
+that resolves to zero cases raises — scoring nothing must never report success.
+
+Two deliberate exceptions:
+
+- **`eval/build_evalset.py` ignores it.** The committed dataset is always the
+  golden one, whatever a shell variable says. Use its explicit `--cases <file>`
+  flag to render a curated evalset to a separate file.
+- **`eval/capture.py` refuses to write under it.** Capture writes the committed
+  golden reference, whose ids `tests/eval/test_dataset_lock.py` pins to
+  `GOLDEN_CASES`; capturing a curated set there would add foreign eval_ids and
+  redden the hermetic suite. It exits with an explanation instead. `--check`
+  (which writes nothing) still works, so you can preview.
+
+### Running a subset locally while developing (cost control)
+
+`SMART_ASSIGNMENT_EVAL_IDS` is a **shell-only, local-only** knob for the **test
+runners**. It is *rejected* if set during a CI run (`CI=true`), so CI always
+scores the full committed dataset, and any narrowing logs a loud warning so it's
+never invisible.
+
+```bash
+# Just one case -- cheapest inner loop.
 SMART_ASSIGNMENT_EVAL_IDS=woodlands_fresh_cafe_recommend \
-SMART_ASSIGNMENT_EVAL_NUM_RUNS=1 \
 pytest eval/test_eval.py
 
 # Multiple cases: comma-separate the eval_id (see golden_cases.py).
@@ -581,7 +714,7 @@ a value left in `.env` (loaded into the environment by `load_dotenv`) can never
 silently capture a partial dataset. (If that var is set without `--ids`, capture
 warns and captures all.) `SMART_ASSIGNMENT_EVAL_NUM_RUNS` doesn't apply either
 (one live call per case). A non-`--check` capture **merges** into any existing
-`captured_responses.json` rather than replacing it, so recapturing one case
+`golden_responses.json` rather than replacing it, so recapturing one case
 never regresses the others' `final_response` back to `null`:
 
 ```bash
@@ -589,24 +722,46 @@ never regresses the others' `final_response` back to `null`:
 python3 -m eval.capture --ids woodlands_fresh_cafe_recommend --check
 ```
 
-## CI: advisory first
+## CI: one credentialed job, advisory first
 
-The `agent-eval` job in `.github/workflows/ci.yml` runs `test_eval.py`, and the
-sibling `quality-eval` job runs both `test_quality.py` and
-`test_rationale_faithfulness.py` — both jobs **advisory**
-(`continue-on-error: true`): they report, they don't block. Both no-op cleanly
-when `SAGE_*` credentials aren't configured as repo secrets, so neither fails a
-PR for infrastructure reasons.
+`.github/workflows/ci.yml` has two jobs: the hermetic `test` job, and
+`live-eval` — everything that needs a live LLM backend, in **one** job because
+the steps are now ordered rather than merely related:
 
-**CI triggers on `main` and the `dev-eval` integration branch** (see the `on:`
-block at the top of `ci.yml`) — a push or PR to either runs all three jobs. Only
-`dev-eval` is included among the dev branches: it's where the eval hardening
-integrates, so it's where `agent-eval`/`quality-eval` build the green track
-record. (The Pages deploy, `pages.yml`, still runs on `main` only — `dev-eval`
-is validated, not published.)
+1. `pytest eval/test_eval.py` — trajectory, **and it writes the harvest**
+2. `pytest eval/test_quality.py eval/test_rationale_faithfulness.py` — judges,
+   over the text step 1 just produced
+3. `python3 -m eval.outcome_scoring --path llm` — the snapshot gate, grounded
+4. **upload the run's output as an artifact**
 
-The plan is to keep `agent-eval`/`quality-eval` advisory until their thresholds
-prove stable over a few real `dev-eval` PRs, then flip them to required checks.
+This was two jobs (`agent-eval` + `quality-eval`). Since `test_quality.py` now
+scores what `test_eval.py` harvested, expressing that with `needs:` would have
+serialized them anyway *and* still paid for a second checkout, a second
+dependency install and a second Sage SDK install — plus an artifact round-trip
+to move the harvest across. One job makes the ordering structural.
+
+Each eval step keeps its own `continue-on-error: true`, so a non-deterministic
+score divergence stays advisory; the job itself is **not** `continue-on-error`,
+so a can't-run failure (the Sage SDK install failing while creds are present)
+goes red. Non-blocking is enforced by not making it a required check, never by
+`continue-on-error`. A run with no `SAGE_*` secrets skips cleanly and stays
+green.
+
+**Step 4 is the one that closes the loop.** `feedback_data/` is gitignored (it's
+run output, not source), so before this every judge verdict CI computed was
+deleted with the runner — leaving `scripts/calibrate_judges.py`, which decides
+whether these judges can be trusted enough to gate on, with nothing but a
+developer's laptop to read. The upload runs under `always()`, so a *failed* eval
+still publishes what the agent said, which is exactly when you want to read it.
+
+**CI triggers on `main` and the `qa` integration branch** (see the `on:` block at
+the top of `ci.yml`) — a push or PR to either runs both jobs. Only `qa` is
+included among the dev branches: it's where the eval hardening integrates, so
+it's where `live-eval` builds its green track record. (The Pages deploy,
+`pages.yml`, still runs on `main` only — `qa` is validated, not published.)
+
+The plan is to keep `live-eval` advisory until its thresholds prove stable over
+a few real `qa` PRs, then flip it to a required check.
 
 ## Adding or changing cases
 

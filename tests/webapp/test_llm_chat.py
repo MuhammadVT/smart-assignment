@@ -436,6 +436,54 @@ async def test_breadcrumbs_are_not_duplicated_across_tool_calls():
     assert _steps(frames, "done").count(("find_candidate_routes", "done")) == 1
 
 
+async def test_location_lookup_breadcrumb_does_not_consume_the_geo_lookup_step():
+    """A side question ("where are they?") answered before the decision shows its
+    OWN "Locating" breadcrumb -- and must leave Geo-Lookup untouched, so the
+    decision that follows still lights up all four assignment steps. Reusing the
+    find_candidate_routes step name here would have swallowed Geo-Lookup via the
+    same per-turn dedupe the test above relies on."""
+    events = [
+        *_tool_pair("intake_customer"),
+        *_tool_pair("geocode_prospect_address"),
+        *_tool_pair("recommend_or_escalate"),
+        _FakeEvent(text="Here is my recommendation."),
+    ]
+    service = LlmChatService(
+        runner=_FakeRunner([events]),
+        session_service=_FakeSessionService(_SAMPLE_STATE),
+        geocoder=MockGeocoder(),
+    )
+    frames = await _collect(service.stream_turn("s1", "where are they? then assign them"))
+
+    labels = [f["label"] for f in frames if f["type"] == "tool" and f.get("status") == "running"]
+    assert labels == ["Intake", "Locating", "Geo-Lookup", "Score & Rank", "Recommend / Decide"]
+    # The lookup settles on its own response; Geo-Lookup still settles on the
+    # decision's, exactly as it does when no lookup happened at all.
+    assert ("geocode_prospect_address", "done") in _steps(frames, "done")
+    assert _steps(frames, "done").count(("find_candidate_routes", "done")) == 1
+
+
+async def test_location_lookup_alone_settles_only_its_own_step():
+    """Asking only "where are they?" must not tick any assignment step -- the
+    workflow has not advanced, and no decision was made."""
+    events = [
+        *_tool_pair("geocode_prospect_address"),
+        _FakeEvent(text="They're at 29.76, -95.37."),
+    ]
+    service = LlmChatService(
+        runner=_FakeRunner([events]),
+        session_service=_FakeSessionService(_SAMPLE_STATE),
+        geocoder=MockGeocoder(),
+    )
+    frames = await _collect(service.stream_turn("s1", "where is this prospect?"))
+
+    steps = [f["name"] for f in frames if f["type"] == "tool"]
+    assert set(steps) == {"geocode_prospect_address"}
+    # A location answer is not a decision: no visualization cards.
+    assert not [f for f in frames if f["type"] == "visualization"]
+    assert frames[-1] == {"type": "done"}
+
+
 async def test_stream_turn_tool_frames_carry_plain_language_detail():
     """Each tool frame carries a ``detail`` breadcrumb for the UI stepper, and
     Intake echoes the customer's own inputs back (grounded, not invented)."""

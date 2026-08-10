@@ -62,7 +62,12 @@ def filter_cases_by_ids(
     return [by_id[eval_id] for eval_id in ids]
 
 
-def _ci_active() -> bool:
+def ci_active() -> bool:
+    """True when running under CI (GitHub Actions sets ``CI=true``).
+
+    Public because more than one eval module needs the local-vs-CI distinction:
+    this one rejects a subset filter under CI, and ``eval/test_quality.py`` turns
+    a missing harvest from a local skip into a CI failure."""
     return os.environ.get(_CI_ENV, "").strip().lower() in ("1", "true", "yes", "on")
 
 
@@ -80,7 +85,7 @@ def select_cases(cases: Sequence[GoldenCase]) -> List[GoldenCase]:
     if not raw or not raw.strip():
         return list(cases)
 
-    if _ci_active():
+    if ci_active():
         raise ValueError(
             f"{EVAL_IDS_ENV} is set ({raw!r}) but this is a CI run ({_CI_ENV} is set). "
             f"{EVAL_IDS_ENV} is a local cost-control knob and must not narrow CI, which "

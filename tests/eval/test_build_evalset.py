@@ -53,7 +53,7 @@ def test_absent_capture_leaves_final_response_null():
         assert case.conversation[0].final_response is None
 
 
-def test_captured_responses_populate_final_response_and_validate():
+def test_golden_responses_populate_final_response_and_validate():
     # Phase-2b: a captured {eval_id: text} map lands as the model-role final
     # response, and the populated set still validates against ADK's schema. Uses an
     # injected map so the test stays hermetic (no dependency on the capture file).

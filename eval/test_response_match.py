@@ -3,7 +3,7 @@ Phase 2b verification: ``response_match_score`` on RECOMMEND-outcome cases only.
 
 ``response_match_score`` cannot meaningfully score an ESCALATE-outcome case, no
 matter the response quality -- this is a real ADK limitation, not a threshold to
-tune. [VERIFIED against installed google-adk 2.5.0 source]: an escalation ends the
+tune. [VERIFIED against installed google-adk 2.3.0 source]: an escalation ends the
 turn on ADK's long-running ``request_input`` tool call. ``Event.is_final_response()``
 (google/adk/events/event.py) returns True whenever ``long_running_tool_ids`` is
 set, so ADK's own eval harness (``evaluation_generator.py``) treats that TOOL-CALL
@@ -38,7 +38,7 @@ reference, tolerating paraphrasing/format/order differences -- a materially
 better quality signal for prose, at a materially higher cost.
 
 It has the EXACT SAME escalate-case blind spot as v1, verified from the same ADK
-source read: [VERIFIED against installed google-adk 2.5.0]
+source read: [VERIFIED against installed google-adk 2.3.0]
 ``llm_as_judge_utils.get_text_from_content`` -- even with
 ``include_intermediate_responses_in_final=True`` -- still bottoms out in a
 ``.text``-only read of ``Content.parts`` for every event it walks, including the
@@ -54,23 +54,31 @@ there's a reason to trust majority-vote stability over a single judge call. Also
 marked ``@experimental`` in ADK's own source -- expect this metric's shape or
 behavior to move under future ADK versions.
 
+**v2 does not run under the direct SAGE agent**, and that is a deliberate,
+evidence-backed exclusion rather than an oversight -- see the block comment above
+``_DIRECT_SAGE_AGENT`` for the live evidence and the one-line way to re-enable it
+(the LLM Gateway). v1 and the trajectory check are unaffected and run everywhere.
+
 Run with (needs a configured LLM backend): pytest eval/test_response_match.py
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import pathlib
 import tempfile
+import warnings
 
 import pytest
 from google.adk.evaluation.agent_evaluator import AgentEvaluator
 
 from eval.build_evalset import render_dataset
 from eval.capture import load_captured_outcomes
-from eval.golden_cases import GOLDEN_CASES
+from eval.case_set import resolve_case_set
 from eval.inference_guard import fail_on_dropped_cases
 from eval.run_budget import run_budget
+from eval.run_config import resolve_num_runs
 from smart_assignment.shared.config import DEFAULT_CONFIG
 
 AGENT_MODULE_PATH = "smart_assignment"
@@ -108,19 +116,56 @@ if DEFAULT_CONFIG.llm_backend == "sage":
 else:
     _JUDGE_MODEL = "gemini-3.1-flash-lite"
 
-_SCRATCH_TEST_CONFIG = {
+# The direct SAGE agent cannot serve as ADK's v2 rater, and no amount of prompting
+# changes that -- so scoring the metric there produces a permanent red, not a
+# signal. [VERIFIED live against sage-gemini-2.5-flash]: handed ADK's
+# _FINAL_RESPONSE_MATCH_V2_PROMPT, it answers the user prompt EMBEDDED in the
+# rater prompt instead of rating it -- echoing the agent response back verbatim.
+# Three prompt variants (as-is, an explicit "you are only a rater, do not answer"
+# prefix, and that prefix plus a rater system_instruction) x a valid and an invalid
+# agent response x 3 samples each: the valid case never once produced ADK's
+# `is_the_agent_response_valid` field, so _parse_critique returns NOT_FOUND, every
+# sample is discarded, and the metric reports EvalStatus.NOT_EVALUATED (score None).
+# It is a registered domain agent with its own system prompt, not a general-purpose
+# model -- unlike eval/test_quality.py's judge, which reaches it through a FUNCTION
+# CALL (see eval/deepeval_llm.py) and so gets real verdicts; ADK's v2 rater parses
+# free TEXT with a regex, a channel that agent will not reliably use.
+#
+# So v2 is scored only where a general-purpose judge is actually reachable: the
+# standard backends, or sage via the LLM Gateway (Config.use_sage_gateway), where
+# `sage_model` names a gateway-exposed model rather than a SAGE agent. v1's ROUGE
+# overlap and the trajectory check need no judge and keep running everywhere.
+_DIRECT_SAGE_AGENT = DEFAULT_CONFIG.llm_backend == "sage" and not DEFAULT_CONFIG.use_sage_gateway
+
+_SCRATCH_TEST_CONFIG: dict = {
     "criteria": {
         "tool_trajectory_avg_score": {"threshold": 1.0, "match_type": "IN_ORDER"},
         "response_match_score": {"threshold": _RESPONSE_MATCH_THRESHOLD},
-        "final_response_match_v2": {
-            "threshold": _JUDGE_MATCH_THRESHOLD,
-            "judge_model_options": {
-                "judge_model": _JUDGE_MODEL,
-                "num_samples": _JUDGE_NUM_SAMPLES,
-            },
-        },
     }
 }
+
+_V2_SKIP_REASON = (
+    f"final_response_match_v2 is NOT scored: the direct SAGE agent "
+    f"({DEFAULT_CONFIG.sage_model}) answers ADK's rater prompt instead of rating it, so "
+    f"the metric can only ever report NOT_EVALUATED. Set "
+    f"SMART_ASSIGNMENT_USE_SAGE_GATEWAY=true (or use a standard backend) to score it. "
+    f"response_match_score and the trajectory check still run."
+)
+
+if _DIRECT_SAGE_AGENT:
+    # Logged at import for anyone driving this outside pytest; the test itself
+    # re-raises it as a warning, which is what actually reaches a reader of a
+    # PASSING run (pytest's warnings summary). A silently dropped metric reads as
+    # "we score this" to anyone who sees only the green tick.
+    logging.getLogger(__name__).warning(_V2_SKIP_REASON)
+else:
+    _SCRATCH_TEST_CONFIG["criteria"]["final_response_match_v2"] = {
+        "threshold": _JUDGE_MATCH_THRESHOLD,
+        "judge_model_options": {
+            "judge_model": _JUDGE_MODEL,
+            "num_samples": _JUDGE_NUM_SAMPLES,
+        },
+    }
 
 
 def _recommend_only_eval_ids() -> list[str]:
@@ -134,6 +179,11 @@ def _recommend_only_eval_ids() -> list[str]:
 
 @pytest.mark.asyncio
 async def test_response_match_on_recommend_cases():
+    if _DIRECT_SAGE_AGENT:
+        # Surfaces in pytest's warnings summary even when this test passes --
+        # the only moment the caveat actually needs to be read.
+        warnings.warn(_V2_SKIP_REASON, stacklevel=2)
+
     eval_ids = _recommend_only_eval_ids()
     if not eval_ids:
         pytest.skip(
@@ -144,7 +194,7 @@ async def test_response_match_on_recommend_cases():
             "golden_cases.py) and re-run."
         )
 
-    by_id = {case.eval_id: case for case in GOLDEN_CASES}
+    by_id = {case.eval_id: case for case in resolve_case_set().cases}
     cases = [by_id[eval_id] for eval_id in eval_ids]
 
     scratch_dir = pathlib.Path(tempfile.mkdtemp(prefix="smart_assignment_response_match_"))
@@ -162,4 +212,7 @@ async def test_response_match_on_recommend_cases():
             await AgentEvaluator.evaluate(
                 agent_module=AGENT_MODULE_PATH,
                 eval_dataset_file_path_or_dir=str(dataset_path),
+                # Once per case, same as test_eval.py -- this file drives a live
+                # agent run too, and ADK's own default would double it silently.
+                num_runs=resolve_num_runs(),
             )
