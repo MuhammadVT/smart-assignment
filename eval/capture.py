@@ -67,6 +67,7 @@ from eval.case_set import CASE_SET_ENV, resolve_case_set
 from eval.dataset import apply_eval_dataset, run_provenance
 from eval.golden_cases import GoldenCase
 from eval.judge_log import utc_now_iso
+from eval.response_extract import extract_final_response
 
 # A distinct app/user id so capture runs are easy to spot in a trace backend
 # (e.g. Arize Phoenix) separately from web-app or ad-hoc runs.
@@ -166,7 +167,13 @@ async def _capture_case(case: GoldenCase) -> CaptureResult:
     escalation the agent hands off to a human via ADK's ``request_input`` long-running
     tool; that handoff message (the triage brief) IS the agent's final output for the
     turn, so it's what we capture. The run drives the same ADK ``Runner`` the web app
-    uses, in non-streaming mode (parity with ``adk web``)."""
+    uses, in non-streaming mode (parity with ``adk web``).
+
+    Reading the answer out of the stream is ``eval/response_extract.py``'s job, not
+    this function's -- see that module for why one shared reader matters. All this
+    loop still owns is the LIVE-stream concern the shared reader cannot have:
+    dropping ``partial`` events, so a streamed reply is recorded once rather than
+    once per chunk. ADK ``Invocation`` records have no such notion."""
     from google.adk.agents.run_config import RunConfig, StreamingMode
     from google.adk.runners import Runner
     from google.adk.sessions import InMemorySessionService
@@ -181,42 +188,31 @@ async def _capture_case(case: GoldenCase) -> CaptureResult:
     )
     new_message = types.Content(role="user", parts=[types.Part(text=case.query)])
 
-    final_texts: List[str] = []
-    escalation_prompt: Optional[str] = None
+    contents: List[object] = []
     async for event in runner.run_async(
         user_id=_USER_ID,
         session_id=case.eval_id,
         new_message=new_message,
         run_config=RunConfig(streaming_mode=StreamingMode.NONE),
     ):
-        # Human-in-the-loop escalation: request_input surfaces as a long-running
-        # call; its message is the agent's final handoff for this turn.
-        if getattr(event, "long_running_tool_ids", None):
-            for call in event.get_function_calls():
-                if call.id in event.long_running_tool_ids:
-                    escalation_prompt = (call.args or {}).get("message") or escalation_prompt
+        # Aggregated events only: a partial is one chunk of a reply still being
+        # streamed, and keeping them would record the same reply several times.
+        if getattr(event, "partial", False):
             continue
-        # Tool calls / tool return values drive the pipeline; nothing to record.
-        if event.get_function_calls() or event.get_function_responses():
-            continue
-        # Aggregated (non-partial) natural-language text only, so we record each
-        # reply once rather than per streamed chunk.
-        if event.content and event.content.parts and not getattr(event, "partial", False):
-            text = "".join(p.text for p in event.content.parts if getattr(p, "text", None))
-            if text.strip():
-                final_texts.append(text.strip())
+        if event.content is not None:
+            contents.append(event.content)
 
-    if escalation_prompt:
-        return CaptureResult(
-            escalation_prompt.strip(), escalated=True, decision_id=case.decision_id
-        )
-    if not final_texts:
+    extracted = extract_final_response(contents)
+    if extracted is None:
         raise RuntimeError(
             f"{case.eval_id}: the agent produced no final text response and no escalation. "
             "Check the backend/model is actually answering (try `python3 -m eval.capture --check`)."
         )
-    # The concluding narration is the last aggregated text event.
-    return CaptureResult(final_texts[-1], escalated=False, decision_id=case.decision_id)
+    return CaptureResult(
+        extracted.final_response,
+        escalated=extracted.escalated,
+        decision_id=case.decision_id,
+    )
 
 
 async def _capture_all(cases: List[GoldenCase]) -> Dict[str, CaptureResult]:
