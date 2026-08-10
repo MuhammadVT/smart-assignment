@@ -688,6 +688,24 @@ band before reading the kappa: with a handful of labels it will say
 judge is bad". It also prints the human's note beside each disagreement, which is
 how you tell a real quality complaint from a button pressed during a demo.
 
+**Two files, deliberately not one.**
+`eval/data/feedback_candidates.json` is your **local working file** — what step 1
+writes, gitignored for the same reason `feedback_data/` is: it carries whatever
+address a real prospect typed. `eval/data/curated_cases.placeholder.json` is
+**committed**, holds a single synthetic case, and is what CI runs (the
+"Smoke-test the curated-case path" step in `.github/workflows/ci.yml`).
+
+That CI step exists because this path had rotted unnoticed: nothing exercised it,
+so every curated case scored 0.0 on tool trajectory — the replay demanded the
+agent extract the unnamed-prospect placeholder as a customer *name*, which it
+correctly refuses to do. The placeholder case keeps that exact shape, so a
+regression reddens CI in about 50 seconds. It proves the plumbing (candidates
+load → cases reconstruct → agent replays → harvest → verdict tagged with a
+`decision_id`), and nothing about judge quality: its `decision_id` is fabricated
+and joins to no human label. To widen coverage, promote reviewed cases into it by
+hand — one recommend and one escalate exercises both judges. Read its `_README`
+block first; whatever lands there is in git forever.
+
 Every test runner follows: `test_eval.py`, `test_quality.py`,
 `test_rationale_faithfulness.py`, `test_response_match.py`. A non-default
 selection logs a loud warning naming the set and its size, and any candidate

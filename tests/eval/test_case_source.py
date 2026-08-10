@@ -4,6 +4,7 @@ candidates become runnable eval cases with no hand-copying into golden_cases.py.
 from __future__ import annotations
 
 import json
+import pathlib
 
 from datetime import time
 
@@ -128,6 +129,33 @@ def test_the_query_and_the_expected_intake_args_always_agree_on_the_name():
         in_args = "name" in intake_args(case.customer)
         in_query = case.query.startswith(name) if name else False
         assert in_args == in_query, f"disagreement for {name!r}"
+
+
+def test_the_committed_placeholder_case_set_is_loadable():
+    """The one curated file that is committed and that CI runs.
+
+    Its own ``_README`` invites a developer to promote reviewed cases into it, so
+    a malformed edit must fail here -- in the hermetic suite, in milliseconds --
+    rather than 50 seconds into a live CI step. Also pins the two properties the
+    file exists to exercise: a decision_id to join on, and the unnamed-prospect
+    placeholder NOT being replayed as a name."""
+    path = pathlib.Path(__file__).resolve().parents[2] / "eval" / "data"
+    path = path / "curated_cases.placeholder.json"
+    cases, skipped = load_curated_cases(str(path))
+
+    assert cases, "the committed placeholder must yield at least one runnable case"
+    assert not skipped, f"no placeholder case should be unreplayable: {skipped}"
+    for case in cases:
+        assert case.decision_id, f"{case.eval_id} has no decision_id to join on"
+        assert case.customer.name != PROSPECT_PLACEHOLDER_NAME
+        assert "name" not in intake_args(case.customer) or case.customer.name
+
+
+def test_unknown_keys_in_a_candidate_are_ignored():
+    """The placeholder carries a ``_README`` block explaining itself. That only
+    works if the loader ignores keys it does not know."""
+    case = candidate_to_case(_candidate(_README=["a note", "another line"]))
+    assert case.eval_id == "phoenix_ab12cd34_negative"
 
 
 def test_load_skips_redacted_and_missing(tmp_path):
