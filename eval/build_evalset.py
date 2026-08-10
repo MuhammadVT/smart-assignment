@@ -10,8 +10,8 @@ Two modes, by design:
   test can assert the committed file stays in sync with this builder.
 
 * **capture** (Phase 2b) -- ``eval/capture.py`` runs the real ``root_agent`` to
-  record the actual final responses into ``data/captured_responses.json`` (a
-  committed ``{eval_id: text}`` file). This builder reads that file and populates
+  record the actual final responses into ``data/golden_responses.json`` (a
+  committed reference file). This builder reads that file and populates
   ``final_response`` from it, so a captured dataset is still produced purely from
   two committed inputs (``golden_cases.py`` + the captured file) -- byte-stable,
   so the sync test in ``tests/eval/test_build_evalset.py`` still holds. When the
@@ -43,7 +43,7 @@ EVAL_SET_DESCRIPTION = (
 _DATASET_PATH = pathlib.Path(__file__).parent / "data" / "slot_recommendation.test.json"
 # Committed {eval_id: final_response} source of truth, written by eval/capture.py
 # (Phase 2b). Absent on a fresh Phase-2a checkout -> final_response stays None.
-_CAPTURED_PATH = pathlib.Path(__file__).parent / "data" / "captured_responses.json"
+_CAPTURED_PATH = pathlib.Path(__file__).parent / "data" / "golden_responses.json"
 
 
 def load_captured() -> Dict[str, str]:
@@ -52,20 +52,26 @@ def load_captured() -> Dict[str, str]:
 
     Reading a committed file (not a live call) keeps the builder deterministic and
     backend-free -- the non-determinism of a real run is frozen into the committed
-    file at capture time (see eval/capture.py). eval/capture.py's on-disk entries
-    are ``{"final_response": str, "escalated": bool}`` (it also tracks whether a
-    case escalated, for eval/test_response_match.py); this builder only needs the
-    text, so it extracts just that -- keeping this function's return shape (and
-    thus every downstream dataset field) unchanged regardless of that extra data.
-    Tolerates the older plain-``{eval_id: text}`` format too, so a file captured
-    before outcome-tracking was added still loads."""
+    file at capture time (see eval/capture.py, which writes it). Each record
+    carries more than the text (``escalated``, ``decision_id``, ``captured_at``,
+    ``captured_with``); this builder needs only the text, so it extracts just
+    that and every downstream dataset field is unaffected by the rest.
+
+    A deliberately small, strict reader rather than a call into eval/capture.py:
+    capture regenerates the dataset *through* this module, and importing it back
+    would make that a two-way dependency for the sake of one field lookup."""
     if not _CAPTURED_PATH.exists():
         return {}
     raw = json.loads(_CAPTURED_PATH.read_text(encoding="utf-8"))
-    return {
-        eval_id: (entry["final_response"] if isinstance(entry, dict) else entry)
-        for eval_id, entry in raw.items()
-    }
+    captured: Dict[str, str] = {}
+    for eval_id, entry in raw.items():
+        if not isinstance(entry, dict) or "final_response" not in entry:
+            raise ValueError(
+                f"{_CAPTURED_PATH.name}: entry {eval_id!r} has no 'final_response'. "
+                "Re-run `python3 -m eval.capture` to regenerate it."
+            )
+        captured[eval_id] = entry["final_response"]
+    return captured
 
 
 def _user_content(text: str) -> Dict[str, Any]:

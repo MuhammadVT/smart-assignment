@@ -6,7 +6,7 @@ directly against ``eval/capture.py``'s already-captured
 ``test_response_match.py``): DeepEval's ``GEval`` metric scores a bare
 ``(input, actual_output)`` pair directly, so there is no ADK dataset file to
 render or scratch ``test_config.json`` to write -- this file only READS
-``eval/data/captured_responses.json``, never touches it.
+``eval/data/golden_responses.json``, never touches it.
 
 Two rubrics, drawn directly from the human-annotation dimensions in
 ``deployment/phoenix/README.md``'s "human feedback" table (``brief_quality``,

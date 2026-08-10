@@ -13,7 +13,7 @@ live LLM backend** and are kept separate from the hermetic tests.
 | `build_evalset.py` | Deterministically renders the cases into an ADK `EvalSet` JSON. Run `python3 -m eval.build_evalset` to regenerate the dataset. |
 | `data/slot_recommendation.test.json` | The generated `EvalSet` (do not hand-edit — regenerate). |
 | `data/test_config.json` | The scoring criteria ADK auto-discovers from this folder. |
-| `data/captured_responses.json` | Committed `{eval_id: {final_response, escalated}}` map written by `capture.py` (Phase 2b). |
+| `data/golden_responses.json` | The committed, human-reviewed reference response per golden case, written by `capture.py` (Phase 2b). One `{final_response, escalated, decision_id, captured_at, captured_with}` record per `eval_id`. |
 | `test_eval.py` | The pytest entry point that runs `AgentEvaluator` (trajectory, full dataset). |
 | `capture.py` | Runs the live agent once per case to record its real final response + whether it escalated (Phase 2b). |
 | `test_response_match.py` | Separate pytest entry point: `response_match_score`, scoped to captured cases known NOT to have escalated. See its module docstring for why escalate cases can't be scored this way at all. |
@@ -153,7 +153,7 @@ python3 -m eval.capture --check   # dry run: print what would be captured, write
 python3 -m eval.capture           # capture, then regenerate the dataset from it
 ```
 
-This writes **`eval/data/captured_responses.json`** (a committed, reviewable
+This writes **`eval/data/golden_responses.json`** (a committed, reviewable
 `{eval_id: {final_response, escalated}}` map — `escalated` records whether the
 case handed off via ADK's `request_input` long-running tool rather than ending on
 plain text; see `eval/test_response_match.py` below for why that matters) and
@@ -250,7 +250,7 @@ gap with two **reference-free** DeepEval G-Eval rubrics (no `expected_output`
 set — the judge rates the response on its own merits, not fidelity to a
 captured reference), scored **directly against captured text** — no ADK
 `EvalSet`/`AgentEvaluator` involved at all, so there's no scratch dataset file
-to render; this file only *reads* `eval/data/captured_responses.json`.
+to render; this file only *reads* `eval/data/golden_responses.json`.
 
 Both rubrics are drawn from the human-annotation dimensions in
 [`deployment/phoenix/README.md`](../deployment/phoenix/README.md)'s feedback
@@ -642,7 +642,7 @@ a value left in `.env` (loaded into the environment by `load_dotenv`) can never
 silently capture a partial dataset. (If that var is set without `--ids`, capture
 warns and captures all.) `SMART_ASSIGNMENT_EVAL_NUM_RUNS` doesn't apply either
 (one live call per case). A non-`--check` capture **merges** into any existing
-`captured_responses.json` rather than replacing it, so recapturing one case
+`golden_responses.json` rather than replacing it, so recapturing one case
 never regresses the others' `final_response` back to `null`:
 
 ```bash
