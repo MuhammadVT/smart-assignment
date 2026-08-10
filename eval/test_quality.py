@@ -77,8 +77,9 @@ from deepeval.test_case import LLMTestCase, LLMTestCaseParams  # [VERIFIED again
 
 from eval.capture import load_captured_results
 from eval.case_selection import select_cases
+from eval.case_set import resolve_case_set
 from eval.deepeval_llm import SmartAssignmentDeepEvalLLM
-from eval.golden_cases import GOLDEN_CASES, GoldenCase
+from eval.golden_cases import GoldenCase
 from eval.judge_calibration import DIM_BRIEF_QUALITY, DIM_RESPONSE_CLARITY
 from eval.judge_log import measure_and_record
 from smart_assignment.shared.config import DEFAULT_CONFIG, ROLE_QUALITY_JUDGE
@@ -130,7 +131,7 @@ def _cases_with_outcome(escalated: bool) -> List[Tuple[GoldenCase, str]]:
     captured case whose known outcome matches ``escalated`` exactly --
     unknown/legacy captures (outcome ``None``) are excluded, same discipline as
     ``test_response_match.py``'s ``_recommend_only_eval_ids``."""
-    by_id = {case.eval_id: case for case in select_cases(GOLDEN_CASES)}
+    by_id = {case.eval_id: case for case in select_cases(resolve_case_set().cases)}
     return [
         (by_id[eval_id], result.final_response)
         for eval_id, result in load_captured_results().items()

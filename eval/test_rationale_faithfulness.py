@@ -72,8 +72,9 @@ from deepeval.metrics import GEval  # noqa: E402
 from deepeval.test_case import LLMTestCase, LLMTestCaseParams  # noqa: E402
 
 from eval.case_selection import select_cases  # noqa: E402
+from eval.case_set import resolve_case_set  # noqa: E402
 from eval.deepeval_llm import SmartAssignmentDeepEvalLLM  # noqa: E402
-from eval.golden_cases import GOLDEN_CASES, GoldenCase  # noqa: E402
+from eval.golden_cases import GoldenCase  # noqa: E402
 from eval.judge_log import current_run_provenance, measure_and_record  # noqa: E402
 from smart_assignment.integrations.geocoding_client import resolve_geocoder  # noqa: E402
 from smart_assignment.integrations.route_capacity_client import fetch_candidate_routes  # noqa: E402
@@ -156,7 +157,7 @@ def _grounded_choice_for(case: GoldenCase) -> Optional[Tuple[RouteSlotChoice, di
 
 @pytest.mark.asyncio
 async def test_rationale_faithfulness_on_grounded_picks():
-    cases: List[GoldenCase] = select_cases(GOLDEN_CASES)
+    cases: List[GoldenCase] = select_cases(resolve_case_set().cases)
     # Snapshot the run's provenance BEFORE the first replay: replaying a case
     # mutates the in-memory mock fixtures, so a dataset ref taken afterwards
     # would describe the mutation state rather than the dataset. Same reason

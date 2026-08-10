@@ -31,6 +31,9 @@ suite costs is (cases x runs) live conversations.
 * Each case is replayed ONCE by default, not twice as ADK would -- see
   ``eval/run_config.py`` for why, and set ``SMART_ASSIGNMENT_EVAL_NUM_RUNS``
   to replay more when run-to-run variance is the actual question.
+* ``SMART_ASSIGNMENT_EVAL_CASES`` -- which case SET to score (see
+  eval/case_set.py); defaults to the built-in golden fixtures, or point it at a
+  curated candidates JSON to replay production-derived cases instead.
 * ``SMART_ASSIGNMENT_EVAL_IDS`` -- comma-separated eval_id subset (see the
   ``eval_id`` on each ``GoldenCase`` in golden_cases.py), e.g.
   ``SMART_ASSIGNMENT_EVAL_IDS=woodlands_fresh_cafe_recommend``. A LOCAL-only
@@ -56,7 +59,7 @@ from google.adk.evaluation.agent_evaluator import AgentEvaluator
 
 from eval.build_evalset import render_dataset
 from eval.case_selection import select_cases
-from eval.golden_cases import GOLDEN_CASES
+from eval.case_set import resolve_case_set
 from eval.inference_guard import fail_on_dropped_cases
 from eval.run_budget import run_budget
 from eval.run_config import resolve_num_runs
@@ -69,11 +72,28 @@ _TEST_CONFIG = _DATA_DIR / "test_config.json"
 
 
 def _eval_dataset_path() -> str:
-    """The committed dataset, or -- when SMART_ASSIGNMENT_EVAL_IDS (see
-    eval/case_selection.py) names a subset of golden eval_ids -- a scratch
-    dataset containing only those cases (see module docstring)."""
-    cases = select_cases(GOLDEN_CASES)
-    if cases is GOLDEN_CASES:
+    """The committed dataset, or a scratch dataset rendered on the fly.
+
+    The committed file is used only when this run scores exactly what that file
+    contains: the default golden case set (eval/case_set.py), unnarrowed by
+    SMART_ASSIGNMENT_EVAL_IDS (eval/case_selection.py). A curated case set or an
+    eval_id subset is rendered fresh instead, into a scratch temp dir -- so the
+    committed JSON under eval/data/ is never touched and there is nothing to
+    accidentally commit.
+
+    The condition is checked explicitly rather than by object identity. It used
+    to read ``if cases is GOLDEN_CASES``, which was never true: select_cases
+    returns ``list(cases)``, a new object every time. So this always rendered a
+    scratch copy -- harmless, because tests/eval/test_build_evalset.py pins the
+    committed file to be byte-identical to render_dataset(), but not what the
+    code said it did.
+    """
+    case_set = resolve_case_set()
+    cases = select_cases(case_set.cases)
+    # Compared as an ordered id list, not by count: SMART_ASSIGNMENT_EVAL_IDS
+    # returns cases in the order named, so naming all of them in a different
+    # order is still not the committed dataset.
+    if case_set.is_default and [c.eval_id for c in cases] == [c.eval_id for c in case_set.cases]:
         return str(_COMMITTED_DATASET)
 
     scratch_dir = pathlib.Path(tempfile.mkdtemp(prefix="smart_assignment_eval_subset_"))

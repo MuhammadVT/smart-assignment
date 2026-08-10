@@ -68,7 +68,7 @@ from google.adk.evaluation.agent_evaluator import AgentEvaluator
 
 from eval.build_evalset import render_dataset
 from eval.capture import load_captured_outcomes
-from eval.golden_cases import GOLDEN_CASES
+from eval.case_set import resolve_case_set
 from eval.inference_guard import fail_on_dropped_cases
 from eval.run_budget import run_budget
 from eval.run_config import resolve_num_runs
@@ -145,7 +145,7 @@ async def test_response_match_on_recommend_cases():
             "golden_cases.py) and re-run."
         )
 
-    by_id = {case.eval_id: case for case in GOLDEN_CASES}
+    by_id = {case.eval_id: case for case in resolve_case_set().cases}
     cases = [by_id[eval_id] for eval_id in eval_ids]
 
     scratch_dir = pathlib.Path(tempfile.mkdtemp(prefix="smart_assignment_response_match_"))

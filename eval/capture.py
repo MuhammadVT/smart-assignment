@@ -61,8 +61,9 @@ import pathlib
 from typing import Dict, List, NamedTuple, Optional
 
 from eval.case_selection import EVAL_IDS_ENV, filter_cases_by_ids, parse_eval_ids
+from eval.case_set import CASE_SET_ENV, resolve_case_set
 from eval.dataset import apply_eval_dataset, run_provenance
-from eval.golden_cases import GOLDEN_CASES, GoldenCase
+from eval.golden_cases import GoldenCase
 
 # A distinct app/user id so capture runs are easy to spot in a trace backend
 # (e.g. Arize Phoenix) separately from web-app or ad-hoc runs.
@@ -260,13 +261,29 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    # This file is the committed reference for the GOLDEN cases, and
+    # tests/eval/test_dataset_lock.py pins its ids to exactly those. Capturing a
+    # curated set into it would add foreign eval_ids and redden the hermetic
+    # suite, so refuse up front rather than after burning the live calls.
+    # --check writes nothing, so previewing a curated set stays allowed.
+    case_set = resolve_case_set()
+    if not case_set.is_default and not args.check:
+        raise SystemExit(
+            f"eval.capture writes {_CAPTURED_PATH.name} -- the committed reference for the "
+            f"GOLDEN cases -- but {CASE_SET_ENV} selects {case_set.name!r}. Writing a "
+            "non-golden set there would add eval_ids the hermetic coverage gate "
+            f"(tests/eval/test_dataset_lock.py) rejects. Unset {CASE_SET_ENV}, or pass "
+            "--check to preview without writing."
+        )
+    all_cases = list(case_set.cases)
+
     if args.ids:
         try:
-            cases = filter_cases_by_ids(GOLDEN_CASES, parse_eval_ids(args.ids), source="--ids")
+            cases = filter_cases_by_ids(all_cases, parse_eval_ids(args.ids), source="--ids")
         except ValueError as exc:
             raise SystemExit(str(exc)) from exc
         print(
-            f"[capture] --ids: capturing {len(cases)}/{len(GOLDEN_CASES)} case(s): "
+            f"[capture] --ids: capturing {len(cases)}/{len(all_cases)} case(s): "
             f"{', '.join(c.eval_id for c in cases)}"
         )
         print(
@@ -275,7 +292,7 @@ def main() -> None:
             "before a commit passes."
         )
     else:
-        cases = list(GOLDEN_CASES)
+        cases = all_cases
     # SMART_ASSIGNMENT_EVAL_IDS is a TEST-runner knob; capture deliberately does not
     # honor it (a value left in .env is loaded into the environment by load_dotenv).
     # Warn if it's set without --ids, so it can't cause "I filtered but got all" confusion.

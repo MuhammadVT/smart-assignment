@@ -20,6 +20,7 @@ live LLM backend** and are kept separate from the hermetic tests.
 | `inference_guard.py` | Fails the run when ADK *drops* an eval case (a crashed inference) instead of scoring it — otherwise a dropped case is indistinguishable from a passing one. Used by `test_eval.py` and `test_response_match.py`. |
 | `run_budget.py` | A wall-clock ceiling on a live run (`SMART_ASSIGNMENT_EVAL_BUDGET_SECONDS`, default 20 min), so a hung backend fails promptly instead of running for hours. |
 | `run_config.py` | How many times each case is replayed (`SMART_ASSIGNMENT_EVAL_NUM_RUNS`, default **1**, overriding ADK's 2). See "How many live conversations a run costs". |
+| `case_set.py` | Which case **set** a run scores — `SMART_ASSIGNMENT_EVAL_CASES`, default `golden` (the built-in fixtures), or a path to a curated candidates JSON. The cases-side twin of `dataset.py`. See "Scoring curated production cases". |
 | `case_selection.py` | Owns the `SMART_ASSIGNMENT_EVAL_IDS` subset knob for the **test runners** (`test_eval.py`, `test_quality.py`, `test_rationale_faithfulness.py`): local-only, rejected under CI, warns when it narrows. Also exposes `filter_cases_by_ids` — the explicit-subset primitive `capture.py`'s `--ids` uses (capture does not read the env var). |
 | `deepeval_llm.py` | `SmartAssignmentDeepEvalLLM` — adapts this repo's own `generate_text` (any `SMART_ASSIGNMENT_LLM_BACKEND`) to DeepEval's judge-model interface. |
 | `test_quality.py` | Separate pytest entry point (Phase 3a): DeepEval G-Eval `brief_quality`/`response_clarity`, scored directly against captured `{final_response, escalated}` data — no ADK dataset involved. |
@@ -568,6 +569,44 @@ SMART_ASSIGNMENT_EVAL_NUM_RUNS=3 pytest eval/test_eval.py
 Both `test_eval.py` and `test_response_match.py` read it (they both drive a live
 agent run). A value below `1` is rejected rather than passed through — ADK would
 take `0` as "replay nothing" and report success over zero cases.
+
+### Scoring curated production cases, not just the built-in fixtures
+
+Two independent selections, deliberately separate: **which world** a run scores
+against (`SMART_ASSIGNMENT_EVAL_DATASET`, see "Locking the eval dataset") and
+**which cases** it scores (`SMART_ASSIGNMENT_EVAL_CASES`, `eval/case_set.py`).
+Both default to the committed offline set, so unset means today's behavior
+exactly.
+
+`scripts/curate_feedback.py` and `scripts/phoenix_curate.py` already turn human
+👎 feedback into a candidates JSON, and `eval/case_source.py` reconstructs
+`GoldenCase` objects from it. Those curated cases are the ones that carry a real
+`decision_id` — the key a judge verdict joins to a human label on
+(`eval/judge_calibration.py`), which a hand-written fixture has no equivalent
+for. Point the runners at them with a value, not a code change:
+
+```bash
+SMART_ASSIGNMENT_EVAL_CASES=eval/data/feedback_candidates.json \
+pytest eval/test_eval.py
+```
+
+Every test runner follows: `test_eval.py`, `test_quality.py`,
+`test_rationale_faithfulness.py`, `test_response_match.py`. A non-default
+selection logs a loud warning naming the set and its size, and any candidate
+that can't be replayed (a PII-redacted address can't be geocoded) is reported
+rather than silently dropped. An unreadable path, an unparseable file, or a set
+that resolves to zero cases raises — scoring nothing must never report success.
+
+Two deliberate exceptions:
+
+- **`eval/build_evalset.py` ignores it.** The committed dataset is always the
+  golden one, whatever a shell variable says. Use its explicit `--cases <file>`
+  flag to render a curated evalset to a separate file.
+- **`eval/capture.py` refuses to write under it.** Capture writes the committed
+  golden reference, whose ids `tests/eval/test_dataset_lock.py` pins to
+  `GOLDEN_CASES`; capturing a curated set there would add foreign eval_ids and
+  redden the hermetic suite. It exits with an explanation instead. `--check`
+  (which writes nothing) still works, so you can preview.
 
 ### Running a subset locally while developing (cost control)
 
