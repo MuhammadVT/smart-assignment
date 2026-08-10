@@ -18,7 +18,12 @@ from pathlib import Path
 from typing import Iterable, Iterator, Protocol, Union
 
 from smart_assignment.mock_customers import SAMPLE_CUSTOMERS
-from smart_assignment.shared.models import CustomerProfile, DayOfWeek, PreferredSlot
+from smart_assignment.shared.models import (
+    PROSPECT_PLACEHOLDER_NAME,
+    CustomerProfile,
+    DayOfWeek,
+    PreferredSlot,
+)
 from smart_assignment.shared.timeutils import parse_time
 
 
@@ -94,7 +99,7 @@ def _profile_from_dict(record: dict) -> CustomerProfile:
             (parse_time(start), parse_time(end)),
         )
     return CustomerProfile(
-        name=record.get("name") or "New prospect",
+        name=record.get("name") or PROSPECT_PLACEHOLDER_NAME,
         address=record.get("address", ""),
         order_quantity_cases=int(record.get("order_quantity_cases") or 0),
         customer_number=record.get("customer_number"),

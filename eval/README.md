@@ -662,6 +662,32 @@ SMART_ASSIGNMENT_EVAL_CASES=eval/data/feedback_candidates.json \
 pytest eval/test_eval.py
 ```
 
+**The whole loop, end to end.** Curated cases only earn their keep when a judge
+verdict on one meets the human label on the same decision, so run the three steps
+in order (each its own process — see the loop note under "Running the eval
+suite"):
+
+```bash
+# 1. distil the feedback log into candidate cases (offline)
+python3 scripts/curate_feedback.py --out eval/data/feedback_candidates.json
+
+# 2. replay them and judge what the agent said (live LLM)
+export SMART_ASSIGNMENT_EVAL_CASES=eval/data/feedback_candidates.json
+python3 -m pytest eval/test_eval.py -q       # writes the harvest
+python3 -m pytest eval/test_quality.py -q    # verdicts, tagged with decision_id
+
+# 3. join the verdicts to the human labels (offline)
+SMART_ASSIGNMENT_USE_JUDGE_CALIBRATION=true python3 scripts/calibrate_judges.py \
+    --verdicts feedback_data/judge_verdicts.jsonl \
+    --log feedback_data/annotations.jsonl
+```
+
+Step 3 prints `n`, Cohen's kappa and a trust band per dimension. Read the trust
+band before reading the kappa: with a handful of labels it will say
+`insufficient`, which means "not enough evidence to judge the judge" — not "the
+judge is bad". It also prints the human's note beside each disagreement, which is
+how you tell a real quality complaint from a button pressed during a demo.
+
 Every test runner follows: `test_eval.py`, `test_quality.py`,
 `test_rationale_faithfulness.py`, `test_response_match.py`. A non-default
 selection logs a loud warning naming the set and its size, and any candidate

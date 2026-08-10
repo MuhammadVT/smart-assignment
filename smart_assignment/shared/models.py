@@ -61,6 +61,15 @@ class PreferredSlot:
     window: Window  # (start, end) time-of-day
 
 
+# What every intake path stores when a prospect has no business name: a
+# DESCRIPTION, not a name. Named here because more than one caller writes it and
+# at least one reader must recognise it -- eval/case_source.py replays curated
+# production decisions, and treating this placeholder as a real name made the
+# replay demand the agent extract "New prospect" as the customer's name, which it
+# rightly refuses to do.
+PROSPECT_PLACEHOLDER_NAME = "New prospect"
+
+
 @dataclass
 class CustomerProfile:
     """
