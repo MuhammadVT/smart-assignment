@@ -23,32 +23,30 @@ in the advisory ``agent-eval`` CI job -- because it requires model credentials.
 
 Run with (needs a configured LLM backend): pytest eval/test_eval.py
 
---- Local dev cost knobs (both optional; NOT used by CI) ---
+--- Cost knobs ---
 
-Every case runs the full agent pipeline against the live LLM, and ADK's own
-default is to run each case TWICE (``num_runs=2``) -- e.g. all 4 committed
-cases is 8 live conversations per run. Two env vars trim that while iterating:
+Every case runs the full agent pipeline against the live LLM, so what this
+suite costs is (cases x runs) live conversations.
 
+* Each case is replayed ONCE by default, not twice as ADK would -- see
+  ``eval/run_config.py`` for why, and set ``SMART_ASSIGNMENT_EVAL_NUM_RUNS``
+  to replay more when run-to-run variance is the actual question.
 * ``SMART_ASSIGNMENT_EVAL_IDS`` -- comma-separated eval_id subset (see the
   ``eval_id`` on each ``GoldenCase`` in golden_cases.py), e.g.
-  ``SMART_ASSIGNMENT_EVAL_IDS=woodlands_fresh_cafe_recommend``. Parsed by the
-  shared ``eval/case_selection.py`` (also used by ``eval/capture.py``, so one
-  setting trims cost across both). The subset is rendered fresh from
-  golden_cases.py via the same ``build_evalset`` machinery that produces the
-  committed dataset, so it can never drift from it, and is written to a
-  scratch temp dir -- the committed JSON under eval/data/ is never touched,
-  so there's nothing to accidentally commit.
-* ``SMART_ASSIGNMENT_EVAL_NUM_RUNS`` -- overrides ADK's num_runs (default 2),
-  e.g. ``SMART_ASSIGNMENT_EVAL_NUM_RUNS=1``.
+  ``SMART_ASSIGNMENT_EVAL_IDS=woodlands_fresh_cafe_recommend``. A LOCAL-only
+  knob (rejected under CI) parsed by the shared ``eval/case_selection.py``,
+  which ``eval/capture.py`` also reads, so one setting trims cost across both.
+  The subset is rendered fresh from golden_cases.py via the same
+  ``build_evalset`` machinery that produces the committed dataset, so it can
+  never drift from it, and is written to a scratch temp dir -- the committed
+  JSON under eval/data/ is never touched, so there's nothing to accidentally
+  commit.
 
-Both unset (the default) reproduces prior behavior exactly: the full committed
-dataset, ADK's own num_runs default. See "Running a subset locally while
-developing" in eval/README.md.
+See "Running a subset locally while developing" in eval/README.md.
 """
 
 from __future__ import annotations
 
-import os
 import pathlib
 import shutil
 import tempfile
@@ -61,14 +59,13 @@ from eval.case_selection import select_cases
 from eval.golden_cases import GOLDEN_CASES
 from eval.inference_guard import fail_on_dropped_cases
 from eval.run_budget import run_budget
+from eval.run_config import resolve_num_runs
 
 REPO_ROOT = pathlib.Path(__file__).parent.parent
 AGENT_MODULE_PATH = "smart_assignment"
 _DATA_DIR = REPO_ROOT / "eval" / "data"
 _COMMITTED_DATASET = _DATA_DIR / "slot_recommendation.test.json"
 _TEST_CONFIG = _DATA_DIR / "test_config.json"
-
-_NUM_RUNS_ENV = "SMART_ASSIGNMENT_EVAL_NUM_RUNS"
 
 
 def _eval_dataset_path() -> str:
@@ -92,11 +89,6 @@ def _eval_dataset_path() -> str:
 
 @pytest.mark.asyncio
 async def test_slot_recommendation_eval():
-    kwargs = {}
-    num_runs_raw = os.environ.get(_NUM_RUNS_ENV)
-    if num_runs_raw and num_runs_raw.strip():
-        kwargs["num_runs"] = int(num_runs_raw)
-
     # A case whose inference crashes is dropped by ADK, not failed -- so without
     # this guard the score is silently computed over only the survivors and the
     # run still reports a pass. See eval/inference_guard.py. The budget is the
@@ -107,5 +99,5 @@ async def test_slot_recommendation_eval():
             await AgentEvaluator.evaluate(
                 agent_module=AGENT_MODULE_PATH,
                 eval_dataset_file_path_or_dir=_eval_dataset_path(),
-                **kwargs,
+                num_runs=resolve_num_runs(),
             )

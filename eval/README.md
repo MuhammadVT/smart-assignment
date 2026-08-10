@@ -19,6 +19,7 @@ live LLM backend** and are kept separate from the hermetic tests.
 | `test_response_match.py` | Separate pytest entry point: `response_match_score`, scoped to captured cases known NOT to have escalated. See its module docstring for why escalate cases can't be scored this way at all. |
 | `inference_guard.py` | Fails the run when ADK *drops* an eval case (a crashed inference) instead of scoring it — otherwise a dropped case is indistinguishable from a passing one. Used by `test_eval.py` and `test_response_match.py`. |
 | `run_budget.py` | A wall-clock ceiling on a live run (`SMART_ASSIGNMENT_EVAL_BUDGET_SECONDS`, default 20 min), so a hung backend fails promptly instead of running for hours. |
+| `run_config.py` | How many times each case is replayed (`SMART_ASSIGNMENT_EVAL_NUM_RUNS`, default **1**, overriding ADK's 2). See "How many live conversations a run costs". |
 | `case_selection.py` | Owns the `SMART_ASSIGNMENT_EVAL_IDS` subset knob for the **test runners** (`test_eval.py`, `test_quality.py`, `test_rationale_faithfulness.py`): local-only, rejected under CI, warns when it narrows. Also exposes `filter_cases_by_ids` — the explicit-subset primitive `capture.py`'s `--ids` uses (capture does not read the env var). |
 | `deepeval_llm.py` | `SmartAssignmentDeepEvalLLM` — adapts this repo's own `generate_text` (any `SMART_ASSIGNMENT_LLM_BACKEND`) to DeepEval's judge-model interface. |
 | `test_quality.py` | Separate pytest entry point (Phase 3a): DeepEval G-Eval `brief_quality`/`response_clarity`, scored directly against captured `{final_response, escalated}` data — no ADK dataset involved. |
@@ -542,21 +543,42 @@ never a new branch at a call site. `tests/eval/test_dataset_lock.py` enforces
 that every golden case is captured against the declared dataset (see *Adding or
 changing cases*).
 
-### Running a subset locally while developing (cost control)
+### How many live conversations a run costs
 
-Every case replays the full agent pipeline against your live LLM backend, and
-ADK's own default runs each case **twice** (`num_runs=2`) — so a plain
-`pytest eval/test_eval.py` against all 4 committed cases is 8 live
-conversations. Two env vars (unset by default, so normal behavior is
-unchanged) trim that while iterating. They are **shell-only, local-only**
-cost knobs for the **test runners**: `SMART_ASSIGNMENT_EVAL_IDS` is *rejected*
-if it's set during a CI run (`CI=true`), so CI always scores the full committed
-dataset, and any narrowing logs a loud warning so it's never invisible.
+Every case replays the full agent pipeline against your live LLM backend, so the
+cost of a run is **cases × runs**.
+
+**Each case is replayed once** (`eval/run_config.py`, `DEFAULT_NUM_RUNS = 1`),
+overriding ADK's own default of `num_runs=2`. So a plain `pytest
+eval/test_eval.py` over the 4 committed cases is 4 live conversations, not 8.
+Three reasons, in that module's docstring: it halves the cost of every
+credentialed CI run; averaging two runs *hides* an intermittent failure behind a
+middling score that can still clear the threshold; and two runs give two final
+responses per case, so anything recording that text has to pick one.
+
+Expect this to be **redder** than averaging — that's the point. A case that
+passes once and fails once now fails, instead of reporting a passable mean.
+
+Raise it deliberately when run-to-run *variance* is the actual question:
 
 ```bash
-# Just one case, one run each -- cheapest inner loop.
+SMART_ASSIGNMENT_EVAL_NUM_RUNS=3 pytest eval/test_eval.py
+```
+
+Both `test_eval.py` and `test_response_match.py` read it (they both drive a live
+agent run). A value below `1` is rejected rather than passed through — ADK would
+take `0` as "replay nothing" and report success over zero cases.
+
+### Running a subset locally while developing (cost control)
+
+`SMART_ASSIGNMENT_EVAL_IDS` is a **shell-only, local-only** knob for the **test
+runners**. It is *rejected* if set during a CI run (`CI=true`), so CI always
+scores the full committed dataset, and any narrowing logs a loud warning so it's
+never invisible.
+
+```bash
+# Just one case -- cheapest inner loop.
 SMART_ASSIGNMENT_EVAL_IDS=woodlands_fresh_cafe_recommend \
-SMART_ASSIGNMENT_EVAL_NUM_RUNS=1 \
 pytest eval/test_eval.py
 
 # Multiple cases: comma-separate the eval_id (see golden_cases.py).

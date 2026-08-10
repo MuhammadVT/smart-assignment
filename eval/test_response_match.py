@@ -71,6 +71,7 @@ from eval.capture import load_captured_outcomes
 from eval.golden_cases import GOLDEN_CASES
 from eval.inference_guard import fail_on_dropped_cases
 from eval.run_budget import run_budget
+from eval.run_config import resolve_num_runs
 from smart_assignment.shared.config import DEFAULT_CONFIG
 
 AGENT_MODULE_PATH = "smart_assignment"
@@ -162,4 +163,7 @@ async def test_response_match_on_recommend_cases():
             await AgentEvaluator.evaluate(
                 agent_module=AGENT_MODULE_PATH,
                 eval_dataset_file_path_or_dir=str(dataset_path),
+                # Once per case, same as test_eval.py -- this file drives a live
+                # agent run too, and ADK's own default would double it silently.
+                num_runs=resolve_num_runs(),
             )
