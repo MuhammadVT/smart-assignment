@@ -40,11 +40,17 @@ need to resolve a "sage-*" model (see ``eval/test_response_match.py``); repeat
 calls are harmless (``LLMRegistry._register`` just overwrites the same
 mapping, logging an info line).
 
-[NOT independently verified against live Sage infrastructure in this repo's
-dev environment -- only against real Sage credentials/network access can this
-actually be exercised end-to-end; verified here only that registration and
-resolution wire up correctly (see tests/eval/test_sage_judge_llm.py) and that
-the delegation matches shared/llm.py's own established call pattern.]
+**Resolution alone is not enough**, and this cost ``final_response_match_v2``
+every case it ever tried to score: ADK stamps the BARE judge-model id onto the
+request it hands the resolved model, and ADK's ``LiteLlm`` lets that override the
+Sage handler's own provider-qualified ``"<agent>/model"`` string -- so litellm
+sees no provider and raises. ``_addressed_to_sage`` below re-addresses the
+request; see its docstring for the verified ADK source references.
+
+[Registration/resolution and the re-addressing are covered hermetically in
+tests/eval/test_sage_judge_llm.py. The end-to-end round trip needs real SAGE_*
+credentials; it has since been exercised against live Sage, which is how the
+addressing bug above was found and confirmed.]
 """
 
 from __future__ import annotations
@@ -79,8 +85,41 @@ class SageJudgeLlm(BaseLlm):
     async def generate_content_async(
         self, llm_request: LlmRequest, stream: bool = False
     ) -> AsyncGenerator[LlmResponse, None]:
-        async for response in self._sage_llm.generate_content_async(llm_request, stream=stream):
+        async for response in self._sage_llm.generate_content_async(
+            self._addressed_to_sage(llm_request), stream=stream
+        ):
             yield response
+
+    def _addressed_to_sage(self, llm_request: LlmRequest) -> LlmRequest:
+        """The same request, re-addressed to the model string the Sage handler is
+        actually registered under.
+
+        Resolution is only half the job. [VERIFIED against installed google-adk
+        2.3.0] ``LlmAsJudge._request_judge`` builds
+        ``LlmRequest(model=judge_model_options.judge_model)`` -- the BARE id, e.g.
+        ``"sage-gemini-2.5-flash"`` -- and ``LiteLlm.generate_content_async``
+        (lite_llm.py, ``effective_model = llm_request.model or self.model``) lets
+        the request's model win over the handler's own. But the Sage SDK registers
+        its litellm custom provider as ``"<agent>/model"``, so the bare id reaches
+        litellm with no provider prefix and ``get_llm_provider`` fails with
+        ``BadRequestError: GetLLMProvider Exception - list index out of range``.
+        That is why ``final_response_match_v2`` could never score a single case.
+
+        This repo's own calls never hit it: ``shared/llm.py``'s
+        ``_sage_call_async`` leaves ``LlmRequest.model`` unset, so the handler's
+        model applies by default. The bug is reachable only through ADK-internal
+        judging, which is exactly what this adapter fronts.
+
+        Setting the qualified string explicitly, rather than clearing the field,
+        keeps this correct whichever way ADK's precedence goes -- a future version
+        that stops falling back to ``self.model`` would break a ``None`` here.
+
+        A shallow ``model_copy`` on purpose: ADK's LiteLlm appends to
+        ``contents`` as it prepares the call, and sharing that list is the
+        pre-existing behavior of passing the request straight through. Only the
+        addressing changes.
+        """
+        return llm_request.model_copy(update={"model": getattr(self._sage_llm, "model", None)})
 
 
 def register_sage_judge_model() -> None:

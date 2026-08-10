@@ -226,6 +226,33 @@ cases; bump it once there's a reason to trust majority-vote stability over a
 single judge call. It's also marked `@experimental` in ADK's own source — its
 shape or behavior may move under future ADK versions.
 
+> **v2 is skipped under the direct SAGE agent, on purpose.** Two separate
+> problems sat on this path, and only the first was a code bug:
+>
+> 1. **Addressing (fixed).** ADK stamps the *bare* judge-model id onto the
+>    request, and its `LiteLlm` prefers that over the handler's own
+>    provider-qualified `"<agent>/model"` — so litellm saw no provider and every
+>    case died on `GetLLMProvider Exception - list index out of range`.
+>    `sage_judge_llm.py` now re-addresses the request; see `_addressed_to_sage`.
+> 2. **Capability (not fixable here).** [VERIFIED live] the direct SAGE agent
+>    *answers* the user prompt embedded in ADK's rater prompt rather than rating
+>    it — echoing the agent response back. It is a registered domain agent with
+>    its own system prompt, not a general-purpose model. Three prompt variants
+>    (including an explicit "you are only a rater" prefix and a rater
+>    `system_instruction`) failed to change that, so `_parse_critique` finds no
+>    `is_the_agent_response_valid` field, every sample is discarded, and the
+>    metric reports `NOT_EVALUATED`.
+>
+> `test_quality.py`'s judge works against the same agent because it asks through
+> a **function call** (`deepeval_llm.py`); ADK's v2 rater parses free **text**
+> with a regex, a channel this agent will not reliably use. So v2 is scored only
+> where a general-purpose judge is reachable — the standard backends, or sage via
+> the LLM Gateway (`SMART_ASSIGNMENT_USE_SAGE_GATEWAY=true`, where `sage_model`
+> names a gateway-exposed model rather than a SAGE agent). `response_match_score`
+> and the trajectory check need no judge and run everywhere. The test emits a
+> `UserWarning` naming the skip on every run, so a green tick never silently
+> implies v2 was scored.
+
 > **Data source matters here.** Capture runs the real agent, which by default
 > loads route capacity from whatever's under `data/dev/*.parquet` (the "cache"
 > data source — see `integrations/route_capacity_client.py`), not the built-in
