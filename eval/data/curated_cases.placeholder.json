@@ -40,7 +40,9 @@
       "order_quantity_cases": 90,
       "preferred_day": "TUE",
       "preferred_window": "07:00-10:00",
-      "outcome": "recommend"
+      "outcome": "recommend",
+      "recommended_route_id": "4100",
+      "recommended_window": "07:14-10:14"
     },
     "observed_outcome": "recommend",
     "suggested_expected_outcome": "recommend",
@@ -53,6 +55,6 @@
       "created_at": "2026-01-01T00:00:00+00:00",
       "decision_id": "00000000000000000000000000000000"
     },
-    "query": "Informational only — eval/case_source.py regenerates the query from `context`, so editing this line changes nothing."
+    "query": "New prospect, 1200 McKinney St, Houston, TX 77010, 90 cases, prefers TUE 07:00-10:00"
   }
 ]
