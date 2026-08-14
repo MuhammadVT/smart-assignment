@@ -177,6 +177,7 @@ def summarize_committed_tw1_slots(
 
     # Latest route start date first, so the 'first' aggregates below pick the
     # most recently committed window per route/customer.
+    # TODO: make this identical to RO planner, using statistics of historical data rather than just the most recent.
     df = df.sort_values(
         by=['route_id', 'co_cust_nbr', 'rte_strt_dt'],
         ascending=[True, True, False],
