@@ -120,18 +120,97 @@ QUERIES = {
     'routes': {
         'path': os.path.join(QUERY_DIR, 'routes.sql'),
         'clusternm': 'ODI_PROD',
+        'data_types': {'co_nbr': 'str', #used
+                       'cust_nbr': 'str',#used
+                       'co_cust_nbr': 'str',#used
+                       'cust_nm_': 'str',
+                       'cust_dlvry_day_': 'str',
+                       'route_id': 'str',
+                       'planned_stop_seq': 'float',
+                       'dlvry_stp_id': 'float',
+                       'city': 'str',
+                       'longitude': 'float',
+                       'latitude': 'float',
+                       'postalcode': 'str',
+                       'route_start_date': 'float',#used
+                       'cases': 'float',#used
+                       'cubes': 'float',#used
+                       'weight': 'float',#used
+                       'planned_trvl_tm': 'float',
+                       'route_nm': 'str',
+                       'route_weight_capacity': 'float',
+                       'route_cube_capacity': 'float',#used
+                       'route_case_capacity': 'float',
+                       'planned_arrive_time': 'datetime64[ns]',
+                       'planned_srvc_tm':'float',
+                       'planned_depart_time': 'datetime64[ns]',
+                       'stoptype': 'str',
+                       'type': 'str',
+                       'dpt_long': 'float',
+                       'dpt_lat': 'float',
+                       'dpt_description': 'str'},
         'params': {},
         'cache_name': 'routes'
     },
     'cust_tier': {
         'path': os.path.join(QUERY_DIR, 'cust_tier.sql'),
         'clusternm': 'SEED_PROD',
+        'data_types': {'co_cust_nbr': 'str',
+                       'cust_tier': 'str'},
         'params': {},
         'cache_name': 'cust_tier'
     },
     'dlvr_window': {
         'path': os.path.join(QUERY_DIR, 'dlvr_window_fact.sql'),
         'clusternm': 'ODI_PROD',
+        'data_types': {'co_nbr': 'str',
+                       'cust_nbr': 'str',
+                       'co_cust_nbr': 'str',#used
+                       'acct_typ_cd': 'str',
+                       'district': 'str',
+                       'territory': 'str',
+                       'cust_nm_': 'str',
+                       'cust_dlvry_day_': 'str',
+                       'route_id': 'str',#used
+                       'route_nm': 'str',
+                       'fiscalyear': 'str',
+                       'fiscalweekid': 'int',
+                       'fiscalperiod': 'str',
+                       'stp_seq_nbr': 'float',
+                       'dlvry_stp_id': 'float',
+                       'city': 'str',
+                       'longitude': 'float',#used
+                       'latitude': 'float',#used
+                       'postalcode': 'str',
+                       'off_day_dlvry': 'str',
+                       'rte_strt_dt': 'float',#used
+                       'cases': 'float',
+                       'cubes': 'float',
+                       'weights': 'float',
+                       'dist_from_prev_stop': 'float',
+                       'trvl_tm': 'float',
+                       'tw1opendatetime': 'datetime64[ns]',#used
+                       'tw1closedatetime': 'datetime64[ns]',#used
+                       'srcservicetimetypeid': 'str',
+                       'dpt_lat': 'float',
+                       'dpt_long': 'float',
+                       'dpt_description': 'str',
+                       'dpt_origin_id': 'str',
+                       'cubecapacity': 'float',
+                       'dlvry_day_nm': 'str',
+                       'route_delivery_day': 'str',
+                       'routestartdatetime': 'datetime64[ns]',
+                       'rte_strt_tm': 'str',
+                       'schdld_arvl_tm': 'str',
+                       'arrivaldatetime': 'datetime64[ns]',
+                       'schdld_dprt_tm': 'str',
+                       'actl_srvc_tm': 'str',
+                       'arvl_tm': 'str',
+                       'actual_arrivaldatetime': 'datetime64[ns]',
+                       'arvl_day_nm': 'str',
+                       'arvl_tm_src': 'str',
+                       'dprtr_tm': 'str',
+                       'key_drop_flag': 'str'},
         'params': {},
         'cache_name': 'dlvr_window'
     },

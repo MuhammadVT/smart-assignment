@@ -36,10 +36,13 @@ SELECT
     , ploc.deliverydays AS cust_dlvry_day_
     , co.operatingcompanynumber || '-' || dd1.srcstopid as co_cust_nbr
 --     , cust.acct_typ_cd
+--     , cust.dist_id AS district -- Added -- TODO: maybe use district & territory to pull routes near prospect, if site is too big
+--     , cust.terr_cd AS territory --Added
     , route.srcrouteid AS route_id
     , route.description as route_nm
     , routes.weightcapacity as route_weight_capacity
     , routes.cubecapacity as route_cube_capacity
+    , routes.casescapacity as route_case_capacity
     , plnd_dlvry_stp.routestartdateid AS route_start_date
     -- , TO_CHAR(TO_DATE(plnd_dlvry_stp.deliverydaysdateid, 'YYYYMMDD', FALSE),'Day') AS dlvry_day_nm
 --     , fiscal_cal.daynameshort as route_start_day
@@ -48,17 +51,19 @@ SELECT
     , plnd_dlvry_stp.cube as cubes
     , plnd_dlvry_stp.cases as cases
     , plnd_dlvry_stp.sequencenumber AS planned_stop_seq
+    , plnd_dlvry_stp.deliverystopid AS dlvry_stp_id
     , plnd_dlvry_stp.traveltime/60 planned_trvl_tm
     , plnd_dlvry_stp.servicetime/60 planned_srvc_tm
-    , trips.planlocationminutes
+--     , trips.planlocationminutes -- TODO: verify. similar to planned service time, with more ~10% null
     , plnd_dlvry_stp.arrivaldatetime as planned_arrive_time
     , plnd_dlvry_stp.arrivaldatetime + ((plnd_dlvry_stp.servicetime / 60.0) * interval '1 minute') as planned_depart_time
     , plnd_dlvry_stp.stoptype
-    , CASE WHEN plnd_dlvry_stp.stoptype = 'L' THEN plnd_dlvry_stp.servicetime/60 end as fix_service_time
+--     , CASE WHEN plnd_dlvry_stp.stoptype = 'L' THEN plnd_dlvry_stp.servicetime/60 end as fix_service_time -- TODO: where is this logic come from, not active anyways bc filter stoptype='STP'
     , dd1.type
     , LOWER(ploc.region1) as city
     , ploc.longitude  -- customer long
     , ploc.latitude -- customer lat
+    , substring(ploc.postalcode,0,6) as postalcode
 
     , dpt.latitude as dpt_lat
     , dpt.longitude as dpt_long
@@ -77,9 +82,9 @@ FROM dm.fact_dailyplanneddeliverystops AS plnd_dlvry_stp
 
     LEFT JOIN dm.fact_dailydeliverytrips AS trips
         ON plnd_dlvry_stp.operatingcompanyid = trips.operatingcompanyid
-            AND plnd_dlvry_stp.deliverystopid = trips.deliverystopid
+            AND plnd_dlvry_stp.deliverystopid = trips.deliverystopid --TODO: there are -1 in data
             AND plnd_dlvry_stp.routestartdateid = trips.tripstartdateid
-            AND plnd_dlvry_stp.deliveryrouteid=trips.deliveryrouteid
+            AND plnd_dlvry_stp.deliveryrouteid=trips.deliveryrouteid--TODO: there are -1 in data
 
     LEFT JOIN dm.dim_deliveryroute AS route
         ON plnd_dlvry_stp.operatingcompanyid = route.operatingcompanyid
@@ -90,6 +95,7 @@ FROM dm.fact_dailyplanneddeliverystops AS plnd_dlvry_stp
             AND plnd_dlvry_stp.routestartdateid = routes.startdateid
             AND plnd_dlvry_stp.deliveryrouteid = routes.deliveryrouteid
             AND routes.stopcount is not null
+
     LEFT JOIN dw.dim_custmuanationalid AS cust
         ON plnd_dlvry_stp.operatingcompanyid = cust.operatingcompanyid
             AND plnd_dlvry_stp.deliverystopid = cust.deliverystopid
