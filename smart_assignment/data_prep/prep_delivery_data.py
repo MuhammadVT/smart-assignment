@@ -35,7 +35,9 @@ DEFAULT_CACHE_EXTENSION = '.parquet'  # '.csv.gz'
 DS_UTILS_RUN_MODE_ENV = 'DS_UTILS_RUN_MODE'
 DEFAULT_DS_UTILS_RUN_MODE = 'dev'
 IGNORE_CACHE = False
-
+OPCO = ('067',) #TODO: instead of making this a parameter, we want to extract opco for provided prospect, and then pull routes & TW from the same opco
+start_date = '20260706'
+end_date = '20260731'
 
 def get_ds_utils_run_mode() -> ds_utils.Mode:
     name = os.environ.get(DS_UTILS_RUN_MODE_ENV, DEFAULT_DS_UTILS_RUN_MODE).strip().lower()
@@ -115,7 +117,6 @@ def cust_tier_cache_path() -> str:
 def dlvr_window_cache_path() -> str:
     return cache_path('dlvr_window')
 
-OPCO = ('067',) #TODO: instead of making this a parameter, we want to extract opco for provided prospect, and then pull routes & TW from the same opco
 
 QUERIES = {
     'routes': {
@@ -151,7 +152,7 @@ QUERIES = {
                        'dpt_long': 'float',
                        'dpt_lat': 'float',
                        'dpt_description': 'str'},
-        'params': {'OPCO': OPCO}, #,'start_date':start_date, 'end_date': end_date
+        'params': {'OPCO': OPCO,'start_date':start_date, 'end_date': end_date}, #
         'cache_name': 'routes'
     },
     'cust_tier': {
@@ -213,7 +214,7 @@ QUERIES = {
                        'arvl_tm_src': 'str',
                        'dprtr_tm': 'str',
                        'key_drop_flag': 'str'},
-        'params': {'OPCO': OPCO}, #,'start_date':start_date, 'end_date': end_date
+        'params': {'OPCO': OPCO,'start_date':start_date, 'end_date': end_date}, #
         'cache_name': 'dlvr_window'
     },
 }

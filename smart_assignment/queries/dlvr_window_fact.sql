@@ -6,9 +6,9 @@ WITH
         , MIN(datekey) AS start_date
     FROM dw.dim_timebase AS timebase
     WHERE 1 = 1
-        -- AND dateid between start_date AND end_date -- add bracket later as it cause a bug when treated as a parameter
-       AND dateid BETWEEN
-            TO_CHAR(CURRENT_DATE - INTERVAL '28 days', 'YYYYMMDD')::INT AND TO_CHAR(CURRENT_DATE, 'YYYYMMDD')::INT  -- TODO: make this a parameter
+        AND dateid between {start_date} AND {end_date}
+    --    AND dateid BETWEEN
+            -- TO_CHAR(CURRENT_DATE - INTERVAL '28 days', 'YYYYMMDD')::INT AND TO_CHAR(CURRENT_DATE, 'YYYYMMDD')::INT
 )
 
    , fiscal_cal AS (
