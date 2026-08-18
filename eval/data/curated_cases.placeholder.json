@@ -1,0 +1,60 @@
+[
+  {
+    "_README": [
+      "PLACEHOLDER — one synthetic case, committed so CI exercises the curated-case",
+      "path end to end. It is NOT real feedback and it calibrates nothing.",
+      "",
+      "WHY THIS FILE EXISTS",
+      "  Curated cases are the only ones carrying a real `decision_id`, which is the",
+      "  key a judge verdict joins to a human's thumbs-up/down on the same decision",
+      "  (eval/judge_calibration.py). That whole path had never run in CI, so it",
+      "  silently rotted: every curated case scored 0.0 on tool trajectory because",
+      "  the replay demanded the agent extract 'New prospect' as a customer name.",
+      "  This file makes CI run the path on every build so that cannot recur —",
+      "  which is why the case below deliberately keeps the unnamed-prospect",
+      "  placeholder name. See tests/eval/test_case_source.py.",
+      "",
+      "WHAT IT DOES AND DOES NOT PROVE",
+      "  Proves : candidates load -> cases reconstruct -> the agent replays them ->",
+      "           the harvest is written -> judges score it and tag the verdict with",
+      "           a decision_id.",
+      "  Does not prove: anything about judge quality. `decision_id` below is a",
+      "           fabricated zero-id that joins to no human label, so calibration",
+      "           will correctly report 0 aligned pairs for it.",
+      "",
+      "WHAT A LATER DEVELOPER SHOULD DO",
+      "  1. Once real human feedback exists, curate it locally:",
+      "       python3 scripts/curate_feedback.py --out eval/data/feedback_candidates.json",
+      "     That file is gitignored — it derives from feedback_data/, which is too.",
+      "  2. Run the loop against it (see 'Scoring curated production cases' in",
+      "     eval/README.md) and check calibration reports a real `n`.",
+      "  3. To widen CI coverage, promote a few REVIEWED cases into this file —",
+      "     one recommend and one escalate exercises both judges. Review each for",
+      "     customer-identifying data first: whatever lands here is in git forever.",
+      "     Keep this _README block; the loader ignores unknown keys."
+    ],
+    "eval_id": "placeholder_curated_recommend",
+    "context": {
+      "name": "New prospect",
+      "address": "1200 McKinney St, Houston, TX 77010",
+      "order_quantity_cases": 90,
+      "preferred_day": "TUE",
+      "preferred_window": "07:00-10:00",
+      "outcome": "recommend",
+      "recommended_route_id": "4100",
+      "recommended_window": "07:14-10:14"
+    },
+    "observed_outcome": "recommend",
+    "suggested_expected_outcome": "recommend",
+    "human_verdict": "positive",
+    "human_label": "thumbs_up",
+    "human_score": null,
+    "note": "Placeholder curated case — proves the curated path runs; not real feedback.",
+    "provenance": {
+      "annotator_id": "placeholder",
+      "created_at": "2026-01-01T00:00:00+00:00",
+      "decision_id": "00000000000000000000000000000000"
+    },
+    "query": "New prospect, 1200 McKinney St, Houston, TX 77010, 90 cases, prefers TUE 07:00-10:00"
+  }
+]

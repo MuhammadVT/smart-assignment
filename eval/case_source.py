@@ -23,7 +23,12 @@ import logging
 from datetime import time
 from typing import Any, Dict, List, Optional, Tuple
 
-from smart_assignment.shared.models import CustomerProfile, DayOfWeek, PreferredSlot
+from smart_assignment.shared.models import (
+    PROSPECT_PLACEHOLDER_NAME,
+    CustomerProfile,
+    DayOfWeek,
+    PreferredSlot,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -76,18 +81,45 @@ def _customer_from_context(context: Dict[str, Any]) -> CustomerProfile:
     except (TypeError, ValueError):
         raise SkippedCase(f"order_quantity_cases not an int: {cases!r}")
     return CustomerProfile(
-        name=(context.get("name") or "Curated prospect").strip() or "Curated prospect",
+        name=_replayable_name(context),
         address=address,
         order_quantity_cases=cases_int,
         preferred_slot=_preferred_slot(context),
     )
 
 
+def _replayable_name(context: Dict[str, Any]) -> str:
+    """The prospect's name, or ``""`` when the decision never had one.
+
+    A curated case is replayed as a *message* the agent must parse, and
+    ``golden_cases.intake_args`` turns the same profile into the expected
+    ``intake_customer`` arguments -- so a name here is a claim that the agent
+    should extract it.
+
+    Every intake path stores ``PROSPECT_PLACEHOLDER_NAME`` when a prospect has no
+    business name, which is a description, not a name. Replaying it as one put
+    "New prospect" at the head of the query and demanded the agent return
+    ``name="New prospect"``; the agent correctly reads that as a descriptor and
+    omits the field, so EVERY curated case scored 0.0 on tool trajectory -- the
+    whole curated set looked broken while the agent was behaving properly.
+
+    An empty name is already the supported "unnamed" case: ``intake_args`` skips
+    the field, and ``_query_for`` skips the leading fragment.
+    """
+    name = (context.get("name") or "").strip()
+    return "" if name.casefold() == PROSPECT_PLACEHOLDER_NAME.casefold() else name
+
+
 def _query_for(customer: CustomerProfile) -> str:
     """A natural-language intake message consistent with ``customer`` -- so the
     reconstructed query and the expected intake args can't disagree (the
-    trajectory eval compares intake args exactly)."""
-    parts: List[str] = [customer.name, customer.address, f"{customer.order_quantity_cases} cases"]
+    trajectory eval compares intake args exactly).
+
+    The name is dropped when there isn't one (see ``_replayable_name``), matching
+    ``golden_cases.intake_args``, which omits the field for the same profile."""
+    parts: List[str] = [customer.address, f"{customer.order_quantity_cases} cases"]
+    if customer.name:
+        parts.insert(0, customer.name)
     slot = customer.preferred_slot
     if slot is not None:
         window = f"{slot.window[0].strftime('%H:%M')}-{slot.window[1].strftime('%H:%M')}"

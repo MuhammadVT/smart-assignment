@@ -31,7 +31,11 @@ from smart_assignment.reporting.page import build_workflow_payload
 from smart_assignment.shared.config import DEFAULT_CONFIG
 from smart_assignment.shared.geo import Geocoder
 from smart_assignment.webapp.decision import traced_decision
-from smart_assignment.shared.models import CustomerProfile, PreferredSlot
+from smart_assignment.shared.models import (
+    PROSPECT_PLACEHOLDER_NAME,
+    CustomerProfile,
+    PreferredSlot,
+)
 from smart_assignment.webapp.parse import describe_slot, parse_intake
 
 # Messages that clear the accumulated intake and start a fresh prospect.
@@ -140,7 +144,7 @@ class DeterministicChatService:
             ),
         }
         profile = CustomerProfile(
-            name="New prospect",
+            name=PROSPECT_PLACEHOLDER_NAME,
             address=st.address,
             order_quantity_cases=st.cases,
             preferred_slot=st.slot,

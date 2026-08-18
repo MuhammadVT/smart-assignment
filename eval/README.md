@@ -662,6 +662,50 @@ SMART_ASSIGNMENT_EVAL_CASES=eval/data/feedback_candidates.json \
 pytest eval/test_eval.py
 ```
 
+**The whole loop, end to end.** Curated cases only earn their keep when a judge
+verdict on one meets the human label on the same decision, so run the three steps
+in order (each its own process — see the loop note under "Running the eval
+suite"):
+
+```bash
+# 1. distil the feedback log into candidate cases (offline)
+python3 scripts/curate_feedback.py --out eval/data/feedback_candidates.json
+
+# 2. replay them and judge what the agent said (live LLM)
+export SMART_ASSIGNMENT_EVAL_CASES=eval/data/feedback_candidates.json
+python3 -m pytest eval/test_eval.py -q       # writes the harvest
+python3 -m pytest eval/test_quality.py -q    # verdicts, tagged with decision_id
+
+# 3. join the verdicts to the human labels (offline)
+SMART_ASSIGNMENT_USE_JUDGE_CALIBRATION=true python3 scripts/calibrate_judges.py \
+    --verdicts feedback_data/judge_verdicts.jsonl \
+    --log feedback_data/annotations.jsonl
+```
+
+Step 3 prints `n`, Cohen's kappa and a trust band per dimension. Read the trust
+band before reading the kappa: with a handful of labels it will say
+`insufficient`, which means "not enough evidence to judge the judge" — not "the
+judge is bad". It also prints the human's note beside each disagreement, which is
+how you tell a real quality complaint from a button pressed during a demo.
+
+**Two files, deliberately not one.**
+`eval/data/feedback_candidates.json` is your **local working file** — what step 1
+writes, gitignored for the same reason `feedback_data/` is: it carries whatever
+address a real prospect typed. `eval/data/curated_cases.placeholder.json` is
+**committed**, holds a single synthetic case, and is what CI runs (the
+"Smoke-test the curated-case path" step in `.github/workflows/ci.yml`).
+
+That CI step exists because this path had rotted unnoticed: nothing exercised it,
+so every curated case scored 0.0 on tool trajectory — the replay demanded the
+agent extract the unnamed-prospect placeholder as a customer *name*, which it
+correctly refuses to do. The placeholder case keeps that exact shape, so a
+regression reddens CI in about 50 seconds. It proves the plumbing (candidates
+load → cases reconstruct → agent replays → harvest → verdict tagged with a
+`decision_id`), and nothing about judge quality: its `decision_id` is fabricated
+and joins to no human label. To widen coverage, promote reviewed cases into it by
+hand — one recommend and one escalate exercises both judges. Read its `_README`
+block first; whatever lands there is in git forever.
+
 Every test runner follows: `test_eval.py`, `test_quality.py`,
 `test_rationale_faithfulness.py`, `test_response_match.py`. A non-default
 selection logs a loud warning naming the set and its size, and any candidate

@@ -4,13 +4,14 @@ candidates become runnable eval cases with no hand-copying into golden_cases.py.
 from __future__ import annotations
 
 import json
+import pathlib
 
 from datetime import time
 
 from eval.build_evalset import build_eval_set
 from eval.case_source import candidate_to_case, load_curated_cases
 from eval.golden_cases import intake_args
-from smart_assignment.shared.models import DayOfWeek
+from smart_assignment.shared.models import PROSPECT_PLACEHOLDER_NAME, DayOfWeek
 
 
 def _candidate(**over):
@@ -72,6 +73,89 @@ def test_no_preference_is_fine():
     case = candidate_to_case(_candidate(context=ctx))
     assert case.customer.preferred_slot is None
     assert "prefers" not in case.query
+
+
+def test_the_unnamed_prospect_placeholder_is_not_replayed_as_a_name():
+    """THE regression that made every curated case unusable.
+
+    Production stores ``PROSPECT_PLACEHOLDER_NAME`` when a prospect has no
+    business name. Replaying it as a name put "New prospect" at the head of the
+    query and demanded ``name="New prospect"`` back from the agent -- which
+    correctly reads it as a descriptor and omits the field. Result: tool
+    trajectory 0.0 on every curated case, which looked like a broken agent."""
+    ctx = {
+        "name": PROSPECT_PLACEHOLDER_NAME,
+        "address": "5 Main St, Houston, TX",
+        "order_quantity_cases": 10,
+    }
+    case = candidate_to_case(_candidate(context=ctx))
+
+    assert case.customer.name == ""
+    assert "name" not in intake_args(case.customer)
+    assert not case.query.startswith(PROSPECT_PLACEHOLDER_NAME)
+    assert case.query.startswith("5 Main St")
+
+
+def test_a_missing_name_is_treated_the_same_as_the_placeholder():
+    """It used to substitute "Curated prospect", which had the identical
+    problem -- an invented name the agent has no way to produce."""
+    ctx = {"address": "5 Main St, Houston, TX", "order_quantity_cases": 10}
+    case = candidate_to_case(_candidate(context=ctx))
+
+    assert case.customer.name == ""
+    assert "name" not in intake_args(case.customer)
+
+
+def test_a_real_business_name_is_still_replayed():
+    """The fix must not throw away a genuine name -- only the placeholder."""
+    case = candidate_to_case(_candidate())
+
+    assert case.customer.name == "Woodlands Fresh Cafe"
+    assert intake_args(case.customer)["name"] == "Woodlands Fresh Cafe"
+    assert case.query.startswith("Woodlands Fresh Cafe")
+
+
+def test_the_query_and_the_expected_intake_args_always_agree_on_the_name():
+    """The invariant behind all three: the trajectory metric compares intake args
+    exactly, so a name may appear in the expectation only if it appears in the
+    message the agent is given."""
+    for name in (PROSPECT_PLACEHOLDER_NAME, "", "Real Cafe Ltd"):
+        ctx = {
+            "name": name,
+            "address": "5 Main St, Houston, TX",
+            "order_quantity_cases": 10,
+        }
+        case = candidate_to_case(_candidate(context=ctx))
+        in_args = "name" in intake_args(case.customer)
+        in_query = case.query.startswith(name) if name else False
+        assert in_args == in_query, f"disagreement for {name!r}"
+
+
+def test_the_committed_placeholder_case_set_is_loadable():
+    """The one curated file that is committed and that CI runs.
+
+    Its own ``_README`` invites a developer to promote reviewed cases into it, so
+    a malformed edit must fail here -- in the hermetic suite, in milliseconds --
+    rather than 50 seconds into a live CI step. Also pins the two properties the
+    file exists to exercise: a decision_id to join on, and the unnamed-prospect
+    placeholder NOT being replayed as a name."""
+    path = pathlib.Path(__file__).resolve().parents[2] / "eval" / "data"
+    path = path / "curated_cases.placeholder.json"
+    cases, skipped = load_curated_cases(str(path))
+
+    assert cases, "the committed placeholder must yield at least one runnable case"
+    assert not skipped, f"no placeholder case should be unreplayable: {skipped}"
+    for case in cases:
+        assert case.decision_id, f"{case.eval_id} has no decision_id to join on"
+        assert case.customer.name != PROSPECT_PLACEHOLDER_NAME
+        assert "name" not in intake_args(case.customer) or case.customer.name
+
+
+def test_unknown_keys_in_a_candidate_are_ignored():
+    """The placeholder carries a ``_README`` block explaining itself. That only
+    works if the loader ignores keys it does not know."""
+    case = candidate_to_case(_candidate(_README=["a note", "another line"]))
+    assert case.eval_id == "phoenix_ab12cd34_negative"
 
 
 def test_load_skips_redacted_and_missing(tmp_path):

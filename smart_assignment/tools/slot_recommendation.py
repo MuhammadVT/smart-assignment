@@ -44,6 +44,7 @@ from smart_assignment.shared.config import DEFAULT_CONFIG
 from smart_assignment.shared.constraints import CONSTRAINT_LABEL, build_context
 from smart_assignment.shared.geo import AddressNotFoundError, GeocodingError
 from smart_assignment.shared.models import (
+    PROSPECT_PLACEHOLDER_NAME,
     CandidateEvaluation,
     CustomerProfile,
     DayOfWeek,
@@ -145,7 +146,7 @@ def _profile_from_state_dict(profile: dict) -> CustomerProfile:
             ),
         )
     return CustomerProfile(
-        name=profile.get("name") or "New prospect",
+        name=profile.get("name") or PROSPECT_PLACEHOLDER_NAME,
         address=profile.get("address", ""),
         order_quantity_cases=profile.get("order_quantity_cases", 0),
         customer_number=profile.get("customer_number"),
