@@ -115,6 +115,7 @@ def cust_tier_cache_path() -> str:
 def dlvr_window_cache_path() -> str:
     return cache_path('dlvr_window')
 
+OPCO = ('067',) #TODO: instead of making this a parameter, we want to extract opco for provided prospect, and then pull routes & TW from the same opco
 
 QUERIES = {
     'routes': {
@@ -143,13 +144,14 @@ QUERIES = {
                        'route_case_capacity': 'float',
                        'planned_arrive_time': 'datetime64[ns]',
                        'planned_srvc_tm':'float',
+                       'planlocationminutes': 'float', #used
                        'planned_depart_time': 'datetime64[ns]',
                        'stoptype': 'str',
                        'type': 'str',
                        'dpt_long': 'float',
                        'dpt_lat': 'float',
                        'dpt_description': 'str'},
-        'params': {},
+        'params': {'OPCO': OPCO}, #,'start_date':start_date, 'end_date': end_date
         'cache_name': 'routes'
     },
     'cust_tier': {
@@ -157,7 +159,7 @@ QUERIES = {
         'clusternm': 'SEED_PROD',
         'data_types': {'co_cust_nbr': 'str',
                        'cust_tier': 'str'},
-        'params': {},
+        'params': {'OPCO': OPCO},
         'cache_name': 'cust_tier'
     },
     'dlvr_window': {
@@ -211,7 +213,7 @@ QUERIES = {
                        'arvl_tm_src': 'str',
                        'dprtr_tm': 'str',
                        'key_drop_flag': 'str'},
-        'params': {},
+        'params': {'OPCO': OPCO}, #,'start_date':start_date, 'end_date': end_date
         'cache_name': 'dlvr_window'
     },
 }
