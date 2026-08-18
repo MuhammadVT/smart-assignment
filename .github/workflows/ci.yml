@@ -198,6 +198,35 @@ jobs:
           pip install -e ".[sage]"
           echo "installed=true" >> "$GITHUB_OUTPUT"
 
+      # ---- 0. the curated-case path, on a committed placeholder ----
+      - name: Smoke-test the curated-case path
+        if: steps.sage_sdk.outputs.installed == 'true'
+        # Curated cases are the only ones carrying a decision_id, which is the key
+        # a judge verdict joins to a human label on the same decision
+        # (eval/judge_calibration.py). Nothing exercised that path, so it rotted
+        # unnoticed: every curated case scored 0.0 on tool trajectory because the
+        # replay demanded the agent extract the unnamed-prospect placeholder as a
+        # customer NAME. One committed placeholder case now runs the whole chain --
+        # candidates load -> cases reconstruct -> agent replays -> harvest written
+        # -> judge tags a verdict with the decision_id -- on every build.
+        #
+        # It proves the plumbing, not judge quality: the placeholder's decision_id
+        # is fabricated and joins to no human label. See the _README block inside
+        # eval/data/curated_cases.placeholder.json for how to grow it once real
+        # feedback exists.
+        #
+        # FIRST, deliberately: this overwrites feedback_data/latest_run_responses.json,
+        # so running it before the golden steps leaves the golden harvest as the one
+        # the artifact at the end publishes -- which is what a reviewer expects to
+        # find there. Judge verdicts are append-only, so the curated verdict
+        # survives in judge_verdicts.jsonl either way.
+        continue-on-error: true
+        env:
+          SMART_ASSIGNMENT_EVAL_CASES: eval/data/curated_cases.placeholder.json
+        run: |
+          python3 -m pytest eval/test_eval.py -q
+          python3 -m pytest eval/test_quality.py -q
+
       # ---- 1. trajectory -- and the harvest every judge below reads ----
       - name: Run agent trajectory eval (harvests the agent's responses)
         if: steps.sage_sdk.outputs.installed == 'true'

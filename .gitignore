@@ -52,6 +52,13 @@ data/prod/
 # Runtime human-feedback log (durable annotation store; not source)
 feedback_data/
 
+# Curated candidates distilled FROM that log (scripts/curate_feedback.py --out).
+# Same provenance, same reason: they carry whatever address a real prospect
+# entered. Curate locally, review, and promote only reviewed cases by hand into
+# eval/data/curated_cases.placeholder.json -- committing this working file would
+# put unreviewed production context in git permanently.
+eval/data/feedback_candidates.json
+
 # Prospect execution traces (.github/skills/prospect-trace). Generated, and they
 # carry a real customer address -- regenerate rather than commit.
 .trace/
