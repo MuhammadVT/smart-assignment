@@ -21,7 +21,6 @@ loud warning rather than crash -- UNLESS strict mode is on
 silently substituting mock. The eval harness turns strict on so an eval never
 scores against silently-swapped data (see `eval/dataset.py`).
 
-#  TODO memorized? Best practice to scale out, should it it batch intake for each site / cluster?
 Results for the two deterministic sources ("mock" and "cache") are memoized
 per-process, so a long-running surface (the web app, adk web) parses the
 parquet snapshot once instead of on every agent tool call. "live_sql" is never

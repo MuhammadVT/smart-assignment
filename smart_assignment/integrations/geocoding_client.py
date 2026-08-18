@@ -83,7 +83,6 @@ class MockGeocoder:
 
 
 class SnapshotGeocoder:
-    # TODO snapshot?
     """Replays the geocode results committed in a snapshot dataset's
     ``geocode.json`` (see integrations/snapshot_data.py), so a self-contained eval
     resolves addresses to the *same* coordinates the dataset was frozen with -- no

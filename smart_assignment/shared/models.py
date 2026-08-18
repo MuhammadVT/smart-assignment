@@ -228,7 +228,6 @@ class CandidateEvaluation:
     route: Route
     distance_miles: float
     chosen_window: Optional[Window]
-    # TODO how remaining_capacity_after & utilization_after are different
     remaining_capacity_after: int
     utilization_after: float
     constraint_outcomes: list[ConstraintOutcome] = field(default_factory=list)
@@ -279,7 +278,6 @@ class SlotRecommendation:
     total_score: float
     reasoning: str
     customer_number: Optional[str] = None
-    # TODO should address be required?
     customer_address: Optional[str] = None
     recommended_route_id: Optional[str] = None
     recommended_route_name: Optional[str] = None

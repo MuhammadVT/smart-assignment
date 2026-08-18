@@ -240,7 +240,6 @@ def run_slot_recommendation(
     run first and remain the only thing that can eliminate a candidate, so the
     decision only ever ranks and gates the *feasible* survivors.
 
-    #  TODO:help me understand
     Whether an LLM reasons over those options is internal to that layer
     (`use_grounded_route_slot_pick` / `use_grounded_route_slot_escalation`); it
     falls back to the deterministic threshold decision on any failure, so this
