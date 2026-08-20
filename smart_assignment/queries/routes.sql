@@ -4,10 +4,10 @@ WITH date_range AS (
         , MIN(datekey) AS start_date
     FROM dw.dim_timebase AS timebase
     WHERE 1 = 1
-        -- AND dateid between {start_date} AND {end_date}
+        AND dateid between {start_date} AND {end_date}
         -- AND dateid between '20260701' AND '20260707'
-        AND dateid BETWEEN
-            TO_CHAR(CURRENT_DATE - INTERVAL '28 days', 'YYYYMMDD')::INT AND TO_CHAR(CURRENT_DATE, 'YYYYMMDD')::INT  -- TODO: make this a parameter
+        -- AND dateid BETWEEN
+            -- TO_CHAR(CURRENT_DATE - INTERVAL '28 days', 'YYYYMMDD')::INT AND TO_CHAR(CURRENT_DATE, 'YYYYMMDD')::INT
 )
 
    , fiscal_cal AS (
@@ -26,7 +26,7 @@ WITH date_range AS (
     SELECT co.*
     FROM dw.dim_operatingcompany AS co
     WHERE co.operatingcompanynumber
-    IN ('067') -- {OPCO}  -- TODO: make this a parameter
+    IN {OPCO}
     )
 
 SELECT
@@ -36,10 +36,13 @@ SELECT
     , ploc.deliverydays AS cust_dlvry_day_
     , co.operatingcompanynumber || '-' || dd1.srcstopid as co_cust_nbr
 --     , cust.acct_typ_cd
+--     , cust.dist_id AS district -- Added -- TODO: maybe use district & territory to pull routes near prospect, if site is too big
+--     , cust.terr_cd AS territory --Added
     , route.srcrouteid AS route_id
     , route.description as route_nm
     , routes.weightcapacity as route_weight_capacity
     , routes.cubecapacity as route_cube_capacity
+    , routes.casescapacity as route_case_capacity
     , plnd_dlvry_stp.routestartdateid AS route_start_date
     -- , TO_CHAR(TO_DATE(plnd_dlvry_stp.deliverydaysdateid, 'YYYYMMDD', FALSE),'Day') AS dlvry_day_nm
 --     , fiscal_cal.daynameshort as route_start_day
@@ -48,17 +51,19 @@ SELECT
     , plnd_dlvry_stp.cube as cubes
     , plnd_dlvry_stp.cases as cases
     , plnd_dlvry_stp.sequencenumber AS planned_stop_seq
+    , plnd_dlvry_stp.deliverystopid AS dlvry_stp_id
     , plnd_dlvry_stp.traveltime/60 planned_trvl_tm
     , plnd_dlvry_stp.servicetime/60 planned_srvc_tm
-    , trips.planlocationminutes
+    , trips.planlocationminutes -- TODO: use this as primary service time, use planned_srvc_tm as fallback
     , plnd_dlvry_stp.arrivaldatetime as planned_arrive_time
     , plnd_dlvry_stp.arrivaldatetime + ((plnd_dlvry_stp.servicetime / 60.0) * interval '1 minute') as planned_depart_time
     , plnd_dlvry_stp.stoptype
-    , CASE WHEN plnd_dlvry_stp.stoptype = 'L' THEN plnd_dlvry_stp.servicetime/60 end as fix_service_time
+    -- , CASE WHEN plnd_dlvry_stp.stoptype = 'L' THEN plnd_dlvry_stp.servicetime/60 end as fix_service_time 
     , dd1.type
     , LOWER(ploc.region1) as city
     , ploc.longitude  -- customer long
     , ploc.latitude -- customer lat
+    , substring(ploc.postalcode,0,6) as postalcode
 
     , dpt.latitude as dpt_lat
     , dpt.longitude as dpt_long
@@ -77,7 +82,7 @@ FROM dm.fact_dailyplanneddeliverystops AS plnd_dlvry_stp
 
     LEFT JOIN dm.fact_dailydeliverytrips AS trips
         ON plnd_dlvry_stp.operatingcompanyid = trips.operatingcompanyid
-            AND plnd_dlvry_stp.deliverystopid = trips.deliverystopid
+            AND plnd_dlvry_stp.deliverystopid = trips.deliverystopid -- -1 represent depots. differenciate between depot and 
             AND plnd_dlvry_stp.routestartdateid = trips.tripstartdateid
             AND plnd_dlvry_stp.deliveryrouteid=trips.deliveryrouteid
 
@@ -90,6 +95,7 @@ FROM dm.fact_dailyplanneddeliverystops AS plnd_dlvry_stp
             AND plnd_dlvry_stp.routestartdateid = routes.startdateid
             AND plnd_dlvry_stp.deliveryrouteid = routes.deliveryrouteid
             AND routes.stopcount is not null
+
     LEFT JOIN dw.dim_custmuanationalid AS cust
         ON plnd_dlvry_stp.operatingcompanyid = cust.operatingcompanyid
             AND plnd_dlvry_stp.deliverystopid = cust.deliverystopid
@@ -109,8 +115,8 @@ FROM dm.fact_dailyplanneddeliverystops AS plnd_dlvry_stp
         AND dpt.type = 'DPT'
 
 WHERE 1 = 1
-    AND plnd_dlvry_stp.stoptype IN ('STP')
+    AND plnd_dlvry_stp.stoptype IN ('STP') -- TODO: 'L'denotes planned layover. first phase -- remove such case, final case, discuss how to handle with exception
     AND plnd_dlvry_stp.cases is not null
     AND dd1.type = 'SIT'
-    -- AND plnd_dlvry_stp.offdaydelivery = 0  -- TODO: confirm whether we need this for calculating truck avg load
+    AND plnd_dlvry_stp.offdaydelivery = 0  -- confirmed with Kevin, exclude offday from calculating truck avg load
 ORDER BY route_id, plnd_dlvry_stp.routestartdateid, planned_stop_seq
